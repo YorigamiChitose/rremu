@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rremu_bus::{AccessSize, Bus, BusError, BusRouter, EmuEvent, EventSink};
 use rremu_cpu::{Cpu, StepOutcome};
 use rremu_devices::{Ram, Uart};
+use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::{csr, Address, Instruction, Priv, Word};
 use rremu_loader::Image;
 use thiserror::Error;
@@ -377,6 +378,12 @@ impl Machine {
         self.bus.peek(addr, AccessSize::Word)
     }
 
+    /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek，D12）。
+    pub fn eval(&mut self, expr: &Expr) -> Result<u32, EvalError> {
+        let mut ctx = MachineCtx(self);
+        expr.eval(&mut ctx)
+    }
+
     /// 注入 UART 输入字节。
     pub fn uart_push_input(&mut self, byte: u8) {
         let Some(ub) = self.uart_base else { return };
@@ -414,6 +421,23 @@ impl Machine {
 
     pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
         self.collector.mem_ring()
+    }
+}
+
+/// EvalContext 适配：寄存器读 CPU 视图，内存读走 peek（无副作用，D12）。
+struct MachineCtx<'a>(&'a mut Machine);
+
+impl EvalContext for MachineCtx<'_> {
+    fn reg(&self, id: RegId) -> u32 {
+        self.0.cpu.reg(id)
+    }
+    fn pc(&self) -> u32 {
+        self.0.cpu.pc()
+    }
+    fn peek_word(&mut self, addr: u32) -> Result<u32, EvalError> {
+        self.0
+            .peek(addr)
+            .map_err(|e| EvalError::Peek { addr, msg: e.to_string() })
     }
 }
 
@@ -510,5 +534,28 @@ mod tests {
         let rdr = 0x1000_0000;
         assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
         assert_eq!(m.snapshot().uart_in_len, 1);
+    }
+
+    #[test]
+    fn expr_alias_table_matches_isa() {
+        // PLAN §5.7：expr 与 isa 的双别名表由本测试锁定同步
+        for (i, name) in rremu_isa::ABI_NAMES.iter().enumerate() {
+            assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
+        }
+        assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
+    }
+
+    #[test]
+    fn eval_reads_regs_pc_and_memory() {
+        let mut m = hello_machine();
+        assert_eq!(m.eval(&rremu_expr::parse("pc").unwrap()).unwrap(), 0x8000_0000);
+        assert_eq!(m.eval(&rremu_expr::parse("x0+1").unwrap()).unwrap(), 1);
+        // 跑前 tohost == 0，跑后 == 1；eval 的 peek 不影响运行（D12）
+        let tohost = m.tohost_addr().unwrap();
+        let expr = rremu_expr::parse(&format!("*{tohost:#x}")).unwrap();
+        assert_eq!(m.eval(&expr).unwrap(), 0);
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+        assert_eq!(m.eval(&expr).unwrap(), 1);
     }
 }

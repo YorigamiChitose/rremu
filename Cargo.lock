@@ -197,6 +197,9 @@ dependencies = [
 [[package]]
 name = "rremu-expr"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "rremu-isa"
@@ -217,6 +220,7 @@ dependencies = [
  "rremu-bus",
  "rremu-cpu",
  "rremu-devices",
+ "rremu-expr",
  "rremu-isa",
  "rremu-loader",
  "thiserror",
