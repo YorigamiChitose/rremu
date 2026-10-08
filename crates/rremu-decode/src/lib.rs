@@ -28,7 +28,6 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
     let rs2 = ((word >> 20) & 0x1f) as u8;
     let funct7 = word >> 25;
     let illegal = DecodeError::Illegal { bits: word, pc };
-    let unimplemented = DecodeError::Unimplemented { bits: word, pc };
 
     match opcode {
         0b0110111 => Ok(Instruction::Lui { rd, imm: word & 0xffff_f000 }),
@@ -120,15 +119,22 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
             }
         }
         0b1110011 => {
-            // RV32I 中仅 ecall/ebreak；Zicsr 变体在 M2 扩展
-            if funct3 == 0b000 && rs1 == 0 && rd == 0 {
-                match (word >> 20) & 0xfff {
+            // SYSTEM：ecall/ebreak/mret + Zicsr CSR 读写
+            let csr_addr = ((word >> 20) & 0xfff) as u16;
+            match funct3 {
+                0b000 if rs1 == 0 && rd == 0 => match (word >> 20) & 0xfff {
                     0x000 => Ok(Instruction::Ecall),
                     0x001 => Ok(Instruction::Ebreak),
+                    0x302 => Ok(Instruction::Mret),
                     _ => Err(illegal),
-                }
-            } else {
-                Err(unimplemented)
+                },
+                0b001 => Ok(Instruction::Csrrw { rd, csr: csr_addr, rs1 }),
+                0b010 => Ok(Instruction::Csrrs { rd, csr: csr_addr, rs1 }),
+                0b011 => Ok(Instruction::Csrrc { rd, csr: csr_addr, rs1 }),
+                0b101 => Ok(Instruction::Csrrwi { rd, csr: csr_addr, zimm: rs1 }),
+                0b110 => Ok(Instruction::Csrrsi { rd, csr: csr_addr, zimm: rs1 }),
+                0b111 => Ok(Instruction::Csrrci { rd, csr: csr_addr, zimm: rs1 }),
+                _ => Err(illegal),
             }
         }
         _ => Err(illegal),
@@ -294,9 +300,15 @@ mod tests {
         // ebreak: imm=1
         let ebreak = i_enc(0b1110011, 0, 0b000, 0, 1);
         assert_eq!(decode32(ebreak, PC), Ok(Instruction::Ebreak));
-        // CSR 空间在 M1 未实现 → Unimplemented
+        // CSR 指令解码
         let csrrw = i_enc(0b1110011, 5, 0b001, 6, 0x300);
-        assert_eq!(decode32(csrrw, PC), Err(DecodeError::Unimplemented { bits: csrrw, pc: PC }));
+        assert_eq!(decode32(csrrw, PC), Ok(Instruction::Csrrw { rd: 5, csr: 0x300, rs1: 6 }));
+        let csrrs = i_enc(0b1110011, 7, 0b010, 8, 0x305);
+        assert_eq!(decode32(csrrs, PC), Ok(Instruction::Csrrs { rd: 7, csr: 0x305, rs1: 8 }));
+        let csrwi = i_enc(0b1110011, 0, 0b101, 3, 0x304);
+        assert_eq!(decode32(csrwi, PC), Ok(Instruction::Csrrwi { rd: 0, csr: 0x304, zimm: 3 }));
+        // mret = 0x30200073
+        assert_eq!(decode32(0x3020_0073, PC), Ok(Instruction::Mret));
     }
 
     #[test]

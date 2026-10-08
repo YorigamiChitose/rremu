@@ -89,7 +89,7 @@ impl Cpu {
         &self.csr
     }
 
-    /// CSR 视图读取（M1 无 CSR 指令执行，仅供快照显示）。
+    /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
     pub fn csr_read(&self, addr: u16) -> u32 {
         match addr {
             csr::MSTATUS => self.csr.mstatus,
@@ -105,6 +105,23 @@ impl Cpu {
             csr::MINSTRET => self.instret as u32,
             csr::MHARTID => self.csr.mhartid,
             _ => 0,
+        }
+    }
+
+    /// CSR 写入（CSR 指令执行用）。只读 CSR（mhartid/mcycle/minstret）与
+    /// 未知 CSR（satp/pmpaddr/medeleg 等）写入被忽略。
+    fn csr_write(&mut self, addr: u16, val: u32) {
+        match addr {
+            csr::MSTATUS => self.csr.mstatus = val,
+            csr::MISA => self.csr.misa = val,
+            csr::MIE => self.csr.mie = val,
+            csr::MTVEC => self.csr.mtvec = val,
+            csr::MSCRATCH => self.csr.mscratch = val,
+            csr::MEPC => self.csr.mepc = val,
+            csr::MCAUSE => self.csr.mcause = val,
+            csr::MTVAL => self.csr.mtval = val,
+            csr::MIP => self.csr.mip = val,
+            _ => {}
         }
     }
 
@@ -282,6 +299,53 @@ impl Cpu {
                 return Err(TrapErr { cause: c });
             }
             Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT }),
+            Instruction::Csrrw { rd, csr, rs1 } => {
+                let old = self.csr_read(csr);
+                self.csr_write(csr, x(self, rs1));
+                set!(rd, old);
+            }
+            Instruction::Csrrs { rd, csr, rs1 } => {
+                let old = self.csr_read(csr);
+                let mask = x(self, rs1);
+                if mask != 0 {
+                    self.csr_write(csr, old | mask);
+                }
+                set!(rd, old);
+            }
+            Instruction::Csrrc { rd, csr, rs1 } => {
+                let old = self.csr_read(csr);
+                let mask = x(self, rs1);
+                if mask != 0 {
+                    self.csr_write(csr, old & !mask);
+                }
+                set!(rd, old);
+            }
+            Instruction::Csrrwi { rd, csr, zimm } => {
+                let old = self.csr_read(csr);
+                self.csr_write(csr, u32::from(zimm));
+                set!(rd, old);
+            }
+            Instruction::Csrrsi { rd, csr, zimm } => {
+                let old = self.csr_read(csr);
+                let mask = u32::from(zimm);
+                if mask != 0 {
+                    self.csr_write(csr, old | mask);
+                }
+                set!(rd, old);
+            }
+            Instruction::Csrrci { rd, csr, zimm } => {
+                let old = self.csr_read(csr);
+                let mask = u32::from(zimm);
+                if mask != 0 {
+                    self.csr_write(csr, old & !mask);
+                }
+                set!(rd, old);
+            }
+            Instruction::Mret => {
+                let mpp = (self.csr.mstatus >> csr::MSTATUS_MPP_SHIFT) & 0b11;
+                self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
+                next_pc = self.csr.mepc;
+            }
         }
         Ok(next_pc)
     }

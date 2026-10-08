@@ -275,6 +275,8 @@ impl Machine {
     }
 
     /// 全速运行；pause 置位后停止（Ctrl+C 由前端控制）。
+    /// 非致命陷入（ecall/ebreak 等）已被 CPU 重定向至 mtvec，run 不停止；
+    /// 仅 Halt（tohost）或 pause 置位时返回。
     pub fn run(&mut self, pause: &AtomicBool) -> RunResult {
         self.state = RunState::Running;
         loop {
@@ -282,13 +284,21 @@ impl Machine {
                 self.state = RunState::Paused;
                 return RunResult::Paused;
             }
-            if let Some(rr) = self.step_once() {
-                return rr;
+            match self.step_once() {
+                // 仅 Halt 终止 run；Trapped 已重定向 pc=mtvec，继续执行陷入向量
+                Some(RunResult::Exited { code }) => {
+                    self.state = RunState::Exited(code);
+                    return RunResult::Exited { code };
+                }
+                Some(RunResult::Trapped { .. }) | Some(RunResult::Paused) | None => {}
             }
         }
     }
 
     /// 执行一条指令；需要停止时返回 Some(RunResult)。
+    /// 注意：陷入（ecall/ebreak/misaligned）是非致命的 —— CPU 已将 pc 重定向
+    /// 至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持 Running，
+    /// 以便前端可继续 c/si；RunResult::Trapped 仅供 si 单步时报告。
     fn step_once(&mut self) -> Option<RunResult> {
         self.bus.set_cycle(self.cpu.cycle());
         let pc_before = self.cpu.pc();
@@ -302,15 +312,11 @@ impl Machine {
                 }
                 None
             }
-            Ok(StepOutcome::Trapped { cause }) => {
-                self.state = RunState::Trapped(cause);
-                Some(RunResult::Trapped { cause })
-            }
+            Ok(StepOutcome::Trapped { cause }) => Some(RunResult::Trapped { cause }),
             Err(e) => {
                 // 唯一错误路径：vectored mtvec 未实现；按陷入处理
                 let cause = self.cpu.csr_state().mcause;
                 tracing::error!("cpu error: {e}");
-                self.state = RunState::Trapped(cause);
                 Some(RunResult::Trapped { cause })
             }
         }

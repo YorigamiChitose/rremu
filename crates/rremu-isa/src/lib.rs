@@ -75,6 +75,15 @@ pub enum Instruction {
     Fence,
     Ecall,
     Ebreak,
+    // ---- Zicsr ----
+    Csrrw { rd: u8, csr: u16, rs1: u8 },
+    Csrrs { rd: u8, csr: u16, rs1: u8 },
+    Csrrc { rd: u8, csr: u16, rs1: u8 },
+    Csrrwi { rd: u8, csr: u16, zimm: u8 },
+    Csrrsi { rd: u8, csr: u16, zimm: u8 },
+    Csrrci { rd: u8, csr: u16, zimm: u8 },
+    // ---- privileged ----
+    Mret,
 }
 
 impl core::fmt::Display for Instruction {
@@ -188,6 +197,13 @@ impl core::fmt::Display for Instruction {
             Instruction::Fence => write!(f, "fence"),
             Instruction::Ecall => write!(f, "ecall"),
             Instruction::Ebreak => write!(f, "ebreak"),
+            Instruction::Csrrw { rd, csr, rs1 } => write!(f, "csrrw {}, 0x{csr:03x}, {}", reg_name(rd), reg_name(rs1)),
+            Instruction::Csrrs { rd, csr, rs1 } => write!(f, "csrrs {}, 0x{csr:03x}, {}", reg_name(rd), reg_name(rs1)),
+            Instruction::Csrrc { rd, csr, rs1 } => write!(f, "csrrc {}, 0x{csr:03x}, {}", reg_name(rd), reg_name(rs1)),
+            Instruction::Csrrwi { rd, csr, zimm } => write!(f, "csrrwi {}, 0x{csr:03x}, {zimm}", reg_name(rd)),
+            Instruction::Csrrsi { rd, csr, zimm } => write!(f, "csrrsi {}, 0x{csr:03x}, {zimm}", reg_name(rd)),
+            Instruction::Csrrci { rd, csr, zimm } => write!(f, "csrrci {}, 0x{csr:03x}, {zimm}", reg_name(rd)),
+            Instruction::Mret => write!(f, "mret"),
         }
     }
 }
