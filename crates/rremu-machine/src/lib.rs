@@ -7,9 +7,13 @@ use rremu_bus::{AccessSize, Bus, BusError, BusRouter, EmuEvent, EventSink};
 use rremu_cpu::{Cpu, StepOutcome};
 use rremu_devices::{Ram, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
-use rremu_isa::{csr, Address, Instruction, Priv, Word};
+use rremu_isa::{csr, Address, Word};
 use rremu_loader::Image;
 use thiserror::Error;
+
+// 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa）。
+// pub use 同时将名称引入本模块，供内部代码直接使用。
+pub use rremu_isa::{reg_name, Instruction, Priv};
 
 /// 运行状态（快照展示用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

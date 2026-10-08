@@ -8,7 +8,15 @@ rust-version.workspace = true
 name = "rremu"
 path = "src/main.rs"
 
-# clap/anyhow/ctrlc/tracing-subscriber 于 M1.11 接入，当前为最小骨架
+[dependencies]
+rremu-cli.workspace = true
+rremu-machine.workspace = true
+rremu-loader.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+ctrlc.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
