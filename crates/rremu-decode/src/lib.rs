@@ -333,13 +333,15 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             Ok(Instruction::CLi { rd, imm })
         }
         (0b01, 0b011) => {
-            let rd = ((half >> 7) & 0x1f) as u8;
-            if rd == 2 {
+            // c.addi16sp 时 rd 隐含为 x2，bits[9:7] 必须为 010，
+            // bits[11:10] 分别存放 imm[3]、imm[5]
+            if (half >> 7) & 0x7 == 0b010 {
                 // c.addi16sp
                 let imm = c_imm_addi16sp(half);
                 Ok(Instruction::CAddi16sp { imm })
             } else {
                 // c.lui
+                let rd = ((half >> 7) & 0x1f) as u8;
                 let imm = c_imm_lui(half);
                 if imm == 0 {
                     return Err(illegal); // 保留编码
@@ -454,6 +456,152 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
         // op=4..=255 不可能出现（op 只有 2 位），但需穷尽 u8
         _ => Err(illegal),
     }
+}
+
+// ---------------------------------------------------------------------------
+// C extension encoder (与 decode16 互为逆运算，供测试 round-trip 使用)
+// ---------------------------------------------------------------------------
+
+fn creg_inv(r: u8) -> u16 { (r - 8) as u16 }
+
+pub fn encode_c(instr: &Instruction) -> u16 {
+    match *instr {
+        Instruction::CAddi4spn { rd, imm } => {
+            let rd_p = creg_inv(rd);
+            let b12_11 = ((imm >> 4) & 0x3) as u16;
+            let b10_7 = ((imm >> 6) & 0xf) as u16;
+            let b6 = ((imm >> 2) & 0x1) as u16;
+            let b5 = ((imm >> 3) & 0x1) as u16;
+            (0b000u16 << 13) | (b12_11 << 11) | (b10_7 << 7) | (b6 << 6) | (b5 << 5) | (rd_p << 2)
+        }
+        Instruction::CLw { rd, rs1, imm } => {
+            let rd_p = creg_inv(rd);
+            let rs1_p = creg_inv(rs1);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b6 = ((uimm >> 2) & 0x1) as u16;
+            let b5 = ((uimm >> 6) & 0x1) as u16;
+            (0b010u16 << 13) | (b12_10 << 10) | (rs1_p << 7) | (b6 << 6) | (b5 << 5) | (rd_p << 2)
+        }
+        Instruction::CSw { rs1, rs2, imm } => {
+            let rs1_p = creg_inv(rs1);
+            let rs2_p = creg_inv(rs2);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b6 = ((uimm >> 2) & 0x1) as u16;
+            let b5 = ((uimm >> 6) & 0x1) as u16;
+            (0b110u16 << 13) | (b12_10 << 10) | (rs2_p << 7) | (b6 << 6) | (b5 << 5) | (rs1_p << 2)
+        }
+        Instruction::CAddi { rd, imm } => {
+            let i = imm as u32 & 0x3f;
+            let b12 = ((i >> 5) & 1) as u16;
+            let lo = (i & 0x1f) as u16;
+            (0b000u16 << 13) | (b12 << 12) | ((rd as u16) << 7) | (lo << 2) | 0b01
+        }
+        Instruction::CJal { imm } => encode_cj(imm, 0b001),
+        Instruction::CLi { rd, imm } => {
+            let i = imm as u32 & 0x3f;
+            let b12 = ((i >> 5) & 1) as u16;
+            let lo = (i & 0x1f) as u16;
+            (0b010u16 << 13) | (b12 << 12) | ((rd as u16) << 7) | (lo << 2) | 0b01
+        }
+        Instruction::CAddi16sp { imm } => {
+                let raw = imm as u32;
+                let b9 = ((raw >> 9) & 1) as u16;
+                let b4 = ((raw >> 4) & 1) as u16;
+                let b6 = ((raw >> 6) & 1) as u16;
+                let b8_7 = ((raw >> 7) & 0x3) as u16;
+                let b2 = ((raw >> 2) & 1) as u16;
+                let b3 = ((raw >> 3) & 1) as u16;
+                let b5 = ((raw >> 5) & 1) as u16;
+                (0b011u16 << 13) | (b9 << 12) | (2u16 << 7) | (b4 << 6) | (b6 << 5) | (b8_7 << 3) | (b2 << 2) | (b3 << 11) | (b5 << 10) | 0b01
+            }
+        Instruction::CLui { rd, imm } => {
+            let v = (imm >> 12) as u32;
+            let b12 = ((v >> 5) & 1) as u16;
+            let lo = (v & 0x1f) as u16;
+            (0b011u16 << 13) | (b12 << 12) | ((rd as u16) << 7) | (lo << 2) | 0b01
+        }
+        Instruction::CSrli { rd, shamt } => encode_cb_shift(rd, shamt, 0b00),
+        Instruction::CSrai { rd, shamt } => encode_cb_shift(rd, shamt, 0b01),
+        Instruction::CAndi { rd, imm } => {
+            let rd_p = creg_inv(rd);
+            let i = imm as u32 & 0x3f;
+            let b12 = ((i >> 5) & 1) as u16;
+            let lo = (i & 0x1f) as u16;
+            (0b100u16 << 13) | (0b10u16 << 10) | (b12 << 12) | (rd_p << 7) | (lo << 2) | 0b01
+        }
+        Instruction::CSub { rd, rs2 } => encode_ca(rd, rs2, 0b00),
+        Instruction::CXor { rd, rs2 } => encode_ca(rd, rs2, 0b01),
+        Instruction::COr { rd, rs2 } => encode_ca(rd, rs2, 0b10),
+        Instruction::CAnd { rd, rs2 } => encode_ca(rd, rs2, 0b11),
+        Instruction::CJ { imm } => encode_cj(imm, 0b101),
+        Instruction::CBeqz { rs1, imm } => encode_cb_branch(rs1, imm, 0b110),
+        Instruction::CBnez { rs1, imm } => encode_cb_branch(rs1, imm, 0b111),
+        Instruction::CSlli { rd, shamt } => {
+            let s = shamt as u32 & 0x3f;
+            let b12 = ((s >> 5) & 1) as u16;
+            let lo = (s & 0x1f) as u16;
+            (0b000u16 << 13) | (b12 << 12) | ((rd as u16) << 7) | (lo << 2) | 0b10
+        }
+        Instruction::CLwsp { rd, imm } => {
+            let uimm = imm as u32;
+            let b5 = ((uimm >> 5) & 1) as u16;
+            let b4_2 = ((uimm >> 2) & 0x7) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b010u16 << 13) | (b5 << 12) | ((rd as u16) << 7) | (b4_2 << 4) | (b7_6 << 2) | 0b10
+        }
+        Instruction::CJr { rs1 } => (0b100u16 << 13) | ((rs1 as u16) << 7) | 0b10,
+        Instruction::CMv { rd, rs2 } => (0b100u16 << 13) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10,
+        Instruction::CEbreak => (0b100u16 << 13) | (1 << 12) | 0b10,
+        Instruction::CJalr { rs1 } => (0b100u16 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10,
+        Instruction::CAdd { rd, rs2 } => (0b100u16 << 13) | (1 << 12) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10,
+        Instruction::CSwsp { rs2, imm } => {
+            let uimm = imm as u32;
+            let b5_2 = ((uimm >> 2) & 0xf) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b110u16 << 13) | (b5_2 << 9) | (b7_6 << 7) | ((rs2 as u16) << 2) | 0b10
+        }
+        _ => panic!("not a C instruction"),
+    }
+}
+
+fn encode_cj(imm: i32, funct3: u16) -> u16 {
+    let raw = imm as u32 & 0xffe;
+    let b11 = ((raw >> 11) & 1) as u16;
+    let b4 = ((raw >> 4) & 1) as u16;
+    let b9_8 = ((raw >> 8) & 0x3) as u16;
+    let b10 = ((raw >> 10) & 1) as u16;
+    let b6 = ((raw >> 6) & 1) as u16;
+    let b7 = ((raw >> 7) & 1) as u16;
+    let b3_1 = ((raw >> 1) & 0x7) as u16;
+    let b5 = ((raw >> 5) & 1) as u16;
+    (funct3 << 13) | (b11 << 12) | (b4 << 11) | (b9_8 << 9) | (b10 << 8) | (b6 << 7) | (b7 << 6) | (b3_1 << 3) | (b5 << 2) | 0b01
+}
+
+fn encode_cb_shift(rd: u8, shamt: u8, funct2: u16) -> u16 {
+    let rd_p = creg_inv(rd);
+    let s = shamt as u32 & 0x3f;
+    let b12 = ((s >> 5) & 1) as u16;
+    let lo = (s & 0x1f) as u16;
+    (0b100u16 << 13) | (funct2 << 10) | (b12 << 12) | (rd_p << 7) | (lo << 2) | 0b01
+}
+
+fn encode_ca(rd: u8, rs2: u8, funct2_sub: u16) -> u16 {
+    let rd_p = creg_inv(rd);
+    let rs2_p = creg_inv(rs2);
+    (0b100u16 << 13) | (0b11u16 << 10) | (rd_p << 7) | (funct2_sub << 5) | (rs2_p << 2) | 0b01
+}
+
+fn encode_cb_branch(rs1: u8, imm: i32, funct3: u16) -> u16 {
+    let rs1_p = creg_inv(rs1);
+    let raw = imm as u32 & 0x1fe;
+    let b8 = ((raw >> 8) & 1) as u16;
+    let b4_3 = ((raw >> 3) & 0x3) as u16;
+    let b7_6 = ((raw >> 6) & 0x3) as u16;
+    let b2_1 = ((raw >> 1) & 0x3) as u16;
+    let b5 = ((raw >> 5) & 1) as u16;
+    (funct3 << 13) | (b8 << 12) | (b4_3 << 10) | (rs1_p << 7) | (b7_6 << 5) | (b2_1 << 3) | (b5 << 2) | 0b01
 }
 
 #[cfg(test)]
@@ -731,5 +879,47 @@ mod tests {
         // c.xor x8, x9: funct2_sub=01
         let xor = (0b100u16 << 13) | (0b11 << 10) | (0b01 << 5) | (1 << 2) | 0b01;
         assert_eq!(decode16(xor, PC), Ok(Instruction::CXor { rd: 8, rs2: 9 }));
+    }
+
+    #[test]
+    fn c_extension_roundtrip_all() {
+        // 对每条 C 指令编码后解码，验证与原始指令一致
+        let cases: Vec<Instruction> = vec![
+            Instruction::CAddi4spn { rd: 8, imm: 4 },
+            Instruction::CLw { rd: 8, rs1: 9, imm: 4 },
+            Instruction::CSw { rs1: 8, rs2: 9, imm: 8 },
+            Instruction::CAddi { rd: 1, imm: 5 },
+            Instruction::CAddi { rd: 3, imm: -7 },
+            Instruction::CJal { imm: 42 },
+            Instruction::CJal { imm: -8 },
+            Instruction::CLi { rd: 5, imm: -1 },
+            Instruction::CLi { rd: 2, imm: 31 },
+            Instruction::CAddi16sp { imm: -16 },
+            Instruction::CLui { rd: 6, imm: 0x1f000 },
+            Instruction::CSrli { rd: 8, shamt: 5 },
+            Instruction::CSrai { rd: 9, shamt: 31 },
+            Instruction::CAndi { rd: 10, imm: -16 },
+            Instruction::CSub { rd: 8, rs2: 9 },
+            Instruction::CXor { rd: 10, rs2: 11 },
+            Instruction::COr { rd: 12, rs2: 13 },
+            Instruction::CAnd { rd: 14, rs2: 15 },
+            Instruction::CJ { imm: 100 },
+            Instruction::CJ { imm: -50 },
+            Instruction::CBeqz { rs1: 8, imm: 16 },
+            Instruction::CBnez { rs1: 9, imm: -8 },
+            Instruction::CSlli { rd: 3, shamt: 12 },
+            Instruction::CLwsp { rd: 4, imm: 32 },
+            Instruction::CJr { rs1: 5 },
+            Instruction::CMv { rd: 6, rs2: 7 },
+            Instruction::CEbreak,
+            Instruction::CJalr { rs1: 8 },
+            Instruction::CAdd { rd: 9, rs2: 10 },
+            Instruction::CSwsp { rs2: 11, imm: 64 },
+        ];
+        for instr in &cases {
+            let h = encode_c(instr);
+            let decoded = decode16(h, PC).unwrap_or_else(|e| panic!("decode failed for {instr:?}: {e}"));
+            assert_eq!(decoded, *instr, "round-trip failed for {instr:?}: encoded={h:#06x}, decoded={decoded:?}");
+        }
     }
 }

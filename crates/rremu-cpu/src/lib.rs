@@ -1,7 +1,7 @@
 //! rremu-cpu：CPU 状态与单周期执行内核。只依赖 bus trait，不感知具体设备。
 
 use rremu_bus::{AccessSize, Bus, EmuEvent, EventSink};
-use rremu_decode::{decode32, instr_len, DecodeError};
+use rremu_decode::{decode16, decode32, instr_len, DecodeError};
 use rremu_isa::{cause, csr, Instruction, Priv};
 use thiserror::Error;
 
@@ -140,12 +140,14 @@ impl Cpu {
         bus.set_cycle(self.cycle);
         let pc = self.pc;
 
-        // M1：无 C 扩展，pc 必须 4 字节对齐（C/2 字节对齐在 M2 开放）
-        if pc & 0x3 != 0 {
+        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）
+        if pc & 0x1 != 0 {
             return self.trap(sink, cause::INSTR_MISALIGNED);
         }
-        let word = match bus.fetch(pc, sink) {
-            Ok(w) => w,
+
+        // 读取首个半字判定指令长度
+        let lo = match bus.read(pc, AccessSize::Half, sink) {
+            Ok(v) => v as u16,
             Err(e) => {
                 let c = if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
                     cause::INSTR_MISALIGNED
@@ -155,23 +157,43 @@ impl Cpu {
                 return self.trap(sink, c);
             }
         };
-        // 压缩指令（低 2 位 != 11）在 M1 视为非法
-        if instr_len((word & 0xffff) as u16) != 4 {
-            return self.trap(sink, cause::ILLEGAL_INSTR);
-        }
-        let instr = match decode32(word, pc) {
-            Ok(i) => i,
-            Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                return self.trap(sink, cause::ILLEGAL_INSTR)
+
+        let (instr, len) = if instr_len(lo) == 2 {
+            // 16 位压缩指令
+            match decode16(lo, pc) {
+                Ok(i) => (i, 2u8),
+                Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
+                    return self.trap(sink, cause::ILLEGAL_INSTR)
+                }
+            }
+        } else {
+            // 32 位指令：读取高半字（可能跨边界），拼接成完整 word
+            let hi = match bus.read(pc.wrapping_add(2), AccessSize::Half, sink) {
+                Ok(v) => v as u16,
+                Err(e) => {
+                    let c = if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
+                        cause::INSTR_MISALIGNED
+                    } else {
+                        cause::INSTR_ACCESS_FAULT
+                    };
+                    return self.trap(sink, c);
+                }
+            };
+            let word = lo as u32 | ((hi as u32) << 16);
+            match decode32(word, pc) {
+                Ok(i) => (i, 4u8),
+                Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
+                    return self.trap(sink, cause::ILLEGAL_INSTR)
+                }
             }
         };
 
-        match self.exec(bus, sink, pc, instr) {
+        match self.exec(bus, sink, pc, instr, len) {
             Ok(next_pc) => {
                 self.pc = next_pc;
                 self.cycle += 1;
                 self.instret += 1;
-                Ok(StepOutcome::Executed { instr, len: 4 })
+                Ok(StepOutcome::Executed { instr, len })
             }
             Err(TrapErr { cause }) => self.trap(sink, cause),
         }
@@ -184,9 +206,10 @@ impl Cpu {
         sink: &mut E,
         pc: u32,
         instr: Instruction,
+        len: u8,
     ) -> Result<u32, TrapErr> {
         let x = |c: &Self, i: u8| c.x[usize::from(i)];
-        let mut next_pc = pc.wrapping_add(4);
+        let mut next_pc = pc.wrapping_add(len as u32);
         macro_rules! set {
             ($rd:expr, $v:expr) => {{
                 let v: u32 = $v;
@@ -392,8 +415,57 @@ impl Cpu {
                 self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
                 next_pc = self.csr.mepc;
             }
-            // C 扩展指令在 M2.3 实现；当前若到达此处视为非法（实际 step 会先拦截）。
-            _ => return Err(TrapErr { cause: cause::ILLEGAL_INSTR }),
+            // ---- C extension (RV32C) ----
+            Instruction::CAddi4spn { rd, imm } => set!(rd, x(self, 2u8).wrapping_add(imm)),
+            Instruction::CLw { rd, rs1, imm } => {
+                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Word)?;
+                set!(rd, v)
+            }
+            Instruction::CSw { rs1, rs2, imm } => {
+                self.store(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Word, x(self, rs2))?
+            }
+            Instruction::CAddi { rd, imm } => set!(rd, x(self, rd).wrapping_add(imm as u32)),
+            Instruction::CJal { imm } => {
+                set!(1u8, pc.wrapping_add(2u32));
+                next_pc = pc.wrapping_add(imm as u32);
+            }
+            Instruction::CLi { rd, imm } => set!(rd, imm as u32),
+            Instruction::CAddi16sp { imm } => set!(2u8, x(self, 2u8).wrapping_add(imm as u32)),
+            Instruction::CLui { rd, imm } => set!(rd, imm),
+            Instruction::CSrli { rd, shamt } => set!(rd, x(self, rd) >> (shamt & 0x1f)),
+            Instruction::CSrai { rd, shamt } => set!(rd, ((x(self, rd) as i32) >> (shamt & 0x1f)) as u32),
+            Instruction::CAndi { rd, imm } => set!(rd, x(self, rd) & imm as u32),
+            Instruction::CSub { rd, rs2 } => set!(rd, x(self, rd).wrapping_sub(x(self, rs2))),
+            Instruction::CXor { rd, rs2 } => set!(rd, x(self, rd) ^ x(self, rs2)),
+            Instruction::COr { rd, rs2 } => set!(rd, x(self, rd) | x(self, rs2)),
+            Instruction::CAnd { rd, rs2 } => set!(rd, x(self, rd) & x(self, rs2)),
+            Instruction::CJ { imm } => next_pc = pc.wrapping_add(imm as u32),
+            Instruction::CBeqz { rs1, imm } => {
+                if x(self, rs1) == 0 {
+                    next_pc = pc.wrapping_add(imm as u32);
+                }
+            }
+            Instruction::CBnez { rs1, imm } => {
+                if x(self, rs1) != 0 {
+                    next_pc = pc.wrapping_add(imm as u32);
+                }
+            }
+            Instruction::CSlli { rd, shamt } => set!(rd, x(self, rd) << (shamt & 0x1f)),
+            Instruction::CLwsp { rd, imm } => {
+                let v = self.load(bus, sink, x(self, 2u8).wrapping_add(imm as u32), AccessSize::Word)?;
+                set!(rd, v)
+            }
+            Instruction::CJr { rs1 } => next_pc = x(self, rs1) & !1,
+            Instruction::CMv { rd, rs2 } => set!(rd, x(self, rs2)),
+            Instruction::CEbreak => return Err(TrapErr { cause: cause::BREAKPOINT }),
+            Instruction::CJalr { rs1 } => {
+                set!(1u8, pc.wrapping_add(2u32));
+                next_pc = x(self, rs1) & !1;
+            }
+            Instruction::CAdd { rd, rs2 } => set!(rd, x(self, rd).wrapping_add(x(self, rs2))),
+            Instruction::CSwsp { rs2, imm } => {
+                self.store(bus, sink, x(self, 2u8).wrapping_add(imm as u32), AccessSize::Word, x(self, rs2))?
+            }
         }
         Ok(next_pc)
     }
@@ -462,6 +534,7 @@ mod tests {
     use super::*;
     use core::any::Any;
     use rremu_bus::{BusDevice, BusRouter};
+    use rremu_decode::encode_c;
     use rremu_isa::Word;
 
     /// 测试 RAM（带 tohost 地址返回，供断言用）。
@@ -581,6 +654,7 @@ mod tests {
     }
 
     const OP_IMM: u32 = 0b0010011;
+    const OP_LUI: u32 = 0b0110111;
     const LOAD: u32 = 0b0000011;
 
     #[test]
@@ -815,5 +889,206 @@ mod tests {
         h.run(4);
         assert_eq!(h.cpu.reg(3), 0xffff_ffffu32);
         assert_eq!(h.cpu.reg(4), 42);
+    }
+
+    // ---- C extension tests ----
+
+    fn c_load(h: &mut Harness, addr: u32, instrs: &[Instruction]) {
+        let mut bytes = Vec::new();
+        for i in instrs {
+            bytes.extend_from_slice(&encode_c(i).to_le_bytes());
+        }
+        h.bus.write_bytes(addr, &bytes).unwrap();
+    }
+
+    #[test]
+    fn exec_c_addi_li_mv_add() {
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CAddi { rd: 1, imm: 5 },
+            Instruction::CLi { rd: 2, imm: -1 },
+            Instruction::CMv { rd: 3, rs2: 1 },
+            Instruction::CAdd { rd: 3, rs2: 2 },
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(1), 5);
+        assert_eq!(h.cpu.reg(2) as i32, -1);
+        assert_eq!(h.cpu.reg(3), 4); // 5 + (-1)
+        assert_eq!(h.cpu.pc(), BASE + 8);
+    }
+
+    #[test]
+    fn exec_c_sub_xor_or_and() {
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CAddi { rd: 8, imm: 12 },
+            Instruction::CAddi { rd: 9, imm: 10 },
+            Instruction::CSub { rd: 8, rs2: 9 },
+            Instruction::CXor { rd: 8, rs2: 9 },
+            Instruction::COr { rd: 8, rs2: 9 },
+            Instruction::CAnd { rd: 8, rs2: 9 },
+        ]);
+        h.run(2);
+        h.step(); assert_eq!(h.cpu.reg(8), 2);   // 12 - 10
+        h.step(); assert_eq!(h.cpu.reg(8), 8);   // 2 ^ 10
+        h.step(); assert_eq!(h.cpu.reg(8), 10);  // 8 | 10
+        h.step(); assert_eq!(h.cpu.reg(8), 10);  // 10 & 10
+    }
+
+    #[test]
+    fn exec_c_slli_srli_srai_andi() {
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CLi { rd: 8, imm: -1 },
+            Instruction::CSlli { rd: 8, shamt: 4 },
+            Instruction::CSrli { rd: 8, shamt: 4 },
+            Instruction::CSrai { rd: 8, shamt: 4 },
+            Instruction::CAndi { rd: 8, imm: -16 },
+        ]);
+        h.step(); assert_eq!(h.cpu.reg(8), 0xffff_ffffu32);
+        h.step(); assert_eq!(h.cpu.reg(8), 0xffff_fff0u32);   // << 4
+        h.step(); assert_eq!(h.cpu.reg(8), 0x0fff_ffffu32);   // >> 4 (logical)
+        h.step(); assert_eq!(h.cpu.reg(8), 0x00ff_ffffu32);   // >> 4 (arithmetic, sign bit 0)
+        h.step(); assert_eq!(h.cpu.reg(8), 0x00ff_fff0u32);   // & 0xffff_fff0
+    }
+
+    #[test]
+    fn exec_c_jump_and_link() {
+        // c.jal +4 跳到第三条指令，x1 保存返回地址 BASE+2
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CJal { imm: 4 },
+            Instruction::CAddi { rd: 1, imm: 99 }, // 跳过
+            Instruction::CAddi { rd: 2, imm: 1 },
+        ]);
+        h.run(2); // c.jal → c.addi x2,1
+        assert_eq!(h.cpu.reg(1), BASE + 2); // 返回地址
+        assert_eq!(h.cpu.reg(2), 1);
+    }
+
+    #[test]
+    fn exec_c_j_beqz_bnez() {
+        // c.j +4 跳过一条; c.beqz x8, +4 (x8=0 则跳); c.bnez x9, +4 (x9!=0 则跳)
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CAddi { rd: 8, imm: 0 },   // x8 = 0
+            Instruction::CAddi { rd: 9, imm: 5 },   // x9 = 5
+            Instruction::CJ { imm: 4 },             // 跳到 BASE+10
+            Instruction::CAddi { rd: 10, imm: 99 }, // 跳过
+            Instruction::CBeqz { rs1: 8, imm: 4 },  // x8==0 → 跳
+            Instruction::CAddi { rd: 11, imm: 99 }, // 跳过
+            Instruction::CBnez { rs1: 9, imm: 4 },  // x9!=0 → 跳
+            Instruction::CAddi { rd: 12, imm: 99 }, // 跳过
+            Instruction::CAddi { rd: 13, imm: 1 },  // 到达
+        ]);
+        h.run(6); // x8=0, x9=5, c.j, c.beqz, c.bnez, c.addi x13,1
+        assert_eq!(h.cpu.reg(10), 0);
+        assert_eq!(h.cpu.reg(11), 0);
+        assert_eq!(h.cpu.reg(12), 0);
+        assert_eq!(h.cpu.reg(13), 1);
+    }
+
+    #[test]
+    fn exec_c_lw_sw_sp_stack() {
+        // 设置 sp，然后 c.addi16sp / c.swsp / c.lwsp 往返
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            u_enc(OP_LUI, 2, 0x80000),                 // sp = 0x8000_0000
+            i_enc(OP_IMM, 2, 0b000, 2, 0x200),         // sp += 0x200 → 0x8000_0200
+            i_enc(OP_IMM, 1, 0b000, 0, 0x123),         // x1 = 0x123
+        ]);
+        h.run(3);
+        c_load(&mut h, BASE + 12, &[
+            Instruction::CAddi16sp { imm: -16 },        // sp = 0x8000_01f0
+            Instruction::CSwsp { rs2: 1, imm: 4 },      // mem[0x8000_01f4] = x1
+            Instruction::CLwsp { rd: 3, imm: 4 },       // x3 = mem[0x8000_01f4]
+        ]);
+        h.run(3);
+        assert_eq!(h.cpu.reg(2), BASE + 0x200 - 16);
+        assert_eq!(h.cpu.reg(3), 0x123);
+    }
+
+    #[test]
+    fn exec_c_lw_sw() {
+        // c.lw / c.sw 使用压缩寄存器 x8..x15
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            u_enc(OP_LUI, 8, 0x80000),                 // x8 = 0x8000_0000 (基址)
+            i_enc(OP_IMM, 8, 0b000, 8, 0x100),         // x8 += 0x100
+            i_enc(OP_IMM, 9, 0b000, 0, 0x7ab),         // x9 = 0x7ab
+        ]);
+        h.run(3);
+        c_load(&mut h, BASE + 12, &[
+            Instruction::CSw { rs1: 8, rs2: 9, imm: 4 },  // mem[BASE+0x104] = 0x7ab
+            Instruction::CLw { rd: 10, rs1: 8, imm: 4 },  // x10 = mem[BASE+0x104]
+        ]);
+        h.run(2);
+        assert_eq!(h.cpu.reg(10), 0x7ab);
+    }
+
+    #[test]
+    fn exec_c_jr_mv_jalr() {
+        // c.mv x5, x6; c.jr x5 (跳转到 x5 的值)
+        let mut h = Harness::new();
+        // x6 = BASE + 0x100 (用 lui + addi，因为超出 12 位立即数)
+        h.load(BASE, &[
+            u_enc(OP_LUI, 6, 0x80000),               // lui x6, 0x80000 → x6 = 0x8000_0000
+            i_enc(OP_IMM, 6, 0b000, 6, 0x100),       // addi x6, x6, 0x100 → x6 = BASE+0x100
+        ]);
+        h.run(2);
+        c_load(&mut h, BASE + 8, &[
+            Instruction::CMv { rd: 5, rs2: 6 },   // x5 = x6
+            Instruction::CJr { rs1: 5 },          // pc = x5
+            Instruction::CAddi { rd: 7, imm: 99 },// 跳过
+        ]);
+        // 在 BASE+0x100 放一条 c.addi
+        c_load(&mut h, BASE + 0x100, &[
+            Instruction::CAddi { rd: 7, imm: 1 },
+        ]);
+        h.run(3); // c.mv, c.jr, c.addi x7,1
+        assert_eq!(h.cpu.reg(7), 1);
+        assert_eq!(h.cpu.pc(), BASE + 0x100 + 2);
+    }
+
+    #[test]
+    fn exec_c_addi4spn() {
+        // c.addi4spn x8, x2, 16 → x8 = sp + 16
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 2, 0b000, 0, 0x700), // sp = 0x700
+        ]);
+        h.step();
+        c_load(&mut h, BASE + 4, &[
+            Instruction::CAddi4spn { rd: 8, imm: 16 },
+        ]);
+        h.step();
+        assert_eq!(h.cpu.reg(8), 0x700 + 16);
+    }
+
+    #[test]
+    fn exec_c_ebreak() {
+        // c.ebreak 触发断点 trap，验证 step 返回且不崩溃
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CAddi { rd: 1, imm: 1 },
+            Instruction::CEbreak,
+        ]);
+        h.step(); // c.addi x1, 1
+        let outcome = h.step(); // c.ebreak → trap
+        assert!(matches!(outcome, StepOutcome::Trapped { .. }));
+    }
+
+    #[test]
+    fn exec_cross_boundary_32bit_instr() {
+        // 32 位指令放在 2 字节对齐但非 4 字节对齐的地址，测试跨边界取指
+        let mut h = Harness::new();
+        let nop = encode_c(&Instruction::CAddi { rd: 0, imm: 0 }); // c.nop
+        let addi = i_enc(OP_IMM, 1, 0b000, 0, 42);
+        let mut bytes = nop.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&addi.to_le_bytes());
+        h.bus.write_bytes(BASE, &bytes).unwrap();
+        h.run(2);
+        assert_eq!(h.cpu.reg(1), 42);
+        assert_eq!(h.cpu.pc(), BASE + 6);
     }
 }
