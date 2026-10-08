@@ -161,15 +161,29 @@ pub fn decode16(hw: u16, pc: Address) -> Result<isa::Instruction, DecodeError>;
 
 ```rust
 pub enum AccessSize { Byte, Half, Word }
-pub enum BusError { Unmapped { addr: u32 }, Misaligned { addr: u32, size: AccessSize }, Device { addr: u32, msg: String }, PeekUnsupported { addr: u32 } }
+pub enum BusError { Unmapped { addr: u32 }, Misaligned { addr: u32, size: AccessSize }, Device { addr: u32, msg: String }, PeekUnsupported { addr: u32 }, Overlap { start, end } }
 
+// 事件经 read/write 的 sink 参数贯穿：cpu 把自己的 sink 传给 bus，设备直接上报 UartOutput 等
+// （单一事件流，避免设备持有 sink 引发的共享所有权）
 pub trait BusDevice {
-    fn read(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;   // 可有副作用
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32) -> Result<(), BusError>;
+    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 可有副作用
+    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
     fn peek_read(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>; // 必须无副作用，设备各自实现，无默认实现
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;     // 镜像加载，无事件
     fn device_name(&self) -> &str;
+    fn as_any_mut(&mut self) -> &mut dyn Any;                                       // machine 层安全下取具体设备
 }
-pub struct Bus { /* Vec<(Range, Box<dyn BusDevice>)>，注册时检查重叠 */ }
+pub trait Bus { // 依赖倒置：cpu 只依赖此 trait
+    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+    fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;      // 无副作用无事件
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
+    fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice>;
+    fn set_watch(&mut self, addr: Option<u32>);                                     // tohost 监视
+    fn set_cycle(&mut self, cycle: u64);
+}
+pub struct BusRouter { /* Vec<Region{Range, Box<dyn BusDevice>}>，map() 检查重叠；watch 命中且 data&1==1 → 发 Halt{code: data>>1} */ }
 pub struct IrqLine { /* raise()/clear()/is_pending() */ }
 
 pub enum EmuEvent {
@@ -179,7 +193,7 @@ pub enum EmuEvent {
 }
 pub trait EventSink { fn emit(&mut self, ev: EmuEvent); }
 ```
-- 小端；`read/write` 返回值低位对齐
+- 小端；`read/write` 返回值低位对齐；对齐检查在总线层（Word/4、Half/2）
 - `peek_read` 无默认实现：强制每个设备显式声明无副作用读语义（D12 的落地）
 - 验收：路由/未映射/未对齐/注册重叠单测；EventSink 组合实现（Vec 收集器）单测
 

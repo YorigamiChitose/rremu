@@ -1,1 +1,481 @@
 //! rremu-bus：总线抽象 —— BusDevice/Bus trait、地址路由、IrqLine、模拟事件。
+
+use core::any::Any;
+use core::fmt;
+use core::ops::Range;
+use thiserror::Error;
+
+/// 访问宽度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessSize {
+    Byte,
+    Half,
+    Word,
+}
+
+impl AccessSize {
+    /// 字节数。
+    #[inline]
+    pub fn bytes(self) -> u32 {
+        match self {
+            AccessSize::Byte => 1,
+            AccessSize::Half => 2,
+            AccessSize::Word => 4,
+        }
+    }
+    /// 对齐检查所需掩码。
+    #[inline]
+    pub fn align_mask(self) -> u32 {
+        self.bytes() - 1
+    }
+}
+
+impl fmt::Display for AccessSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AccessSize::Byte => write!(f, "b"),
+            AccessSize::Half => write!(f, "h"),
+            AccessSize::Word => write!(f, "w"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BusError {
+    #[error("unmapped address {addr:#x}")]
+    Unmapped { addr: u32 },
+    #[error("misaligned {size} access at {addr:#x}")]
+    Misaligned { addr: u32, size: AccessSize },
+    #[error("device error at {addr:#x}: {msg}")]
+    Device { addr: u32, msg: String },
+    #[error("peek unsupported at {addr:#x}")]
+    PeekUnsupported { addr: u32 },
+    /// 注册地址区间与既有设备重叠（builder 阶段）。
+    #[error("device range {start:#x}..{end:#x} overlaps existing mapping")]
+    Overlap { start: u32, end: u32 },
+}
+
+/// 设备侧事件类型（存储访问的类别）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemKind {
+    Read,
+    Write,
+    Fetch,
+}
+
+impl fmt::Display for MemKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MemKind::Read => write!(f, "R"),
+            MemKind::Write => write!(f, "W"),
+            MemKind::Fetch => write!(f, "X"),
+        }
+    }
+}
+
+/// 模拟器事件：设备行为与系统状态变化统一经由事件流上报。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmuEvent {
+    MemAccess { cycle: u64, kind: MemKind, size: AccessSize, addr: u32, value: u32, device: String },
+    UartOutput { byte: u8 },
+    UartInput { byte: u8 },
+    Trap { cause: u32, pc: u32 },
+    Halt { code: i32 },
+}
+
+/// 事件接收器。machine 层提供收集实现（环形缓冲），设备/总线只管发出。
+pub trait EventSink {
+    fn emit(&mut self, ev: EmuEvent);
+}
+
+/// 空实现（测试/无事件场景兜底）。
+pub struct NullSink;
+impl EventSink for NullSink {
+    fn emit(&mut self, _ev: EmuEvent) {}
+}
+
+/// 总线设备 trait。地址为**绝对地址**，设备内部自行换算偏移。
+pub trait BusDevice {
+    /// 有副作用读（如弹 UART FIFO）。
+    ///
+    /// # Arguments
+    /// * `sink` - 设备可在此发出自身事件（如 UartOutput）
+    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 写（可有副作用）。
+    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+    /// 无副作用读（peek_read，D12）。**强制每个设备显式实现**，不得有默认实现。
+    /// 对监视点/表达式求值/x 命令开放，不得消耗设备状态。
+    fn peek_read(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
+    /// 批量写入（镜像加载用，无事件上报）。不支持时返回 `Device` 错误。
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
+    fn device_name(&self) -> &str;
+    /// 供 machine 层安全下取具体设备（如 uart 注入输入、ram 复位）。
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+/// CPU/前端编程面对的总线接口（依赖倒置：cpu 只认此 trait）。
+pub trait Bus {
+    /// 取指读（事件 kind = Fetch）。
+    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 数据读（事件 kind = Read）。
+    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 数据写（事件 kind = Write；命中 watch 且 bit0==1 时发 `EmuEvent::Halt`）。
+    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+    /// 无副作用、无事件读（调试 peek）。
+    fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
+    /// 批量写入（镜像加载，无事件）。
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
+    /// 定位地址所在设备（machine 层用）。
+    fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice>;
+    /// 设置 tohost 监视地址（None 取消）。
+    fn set_watch(&mut self, addr: Option<u32>);
+    /// CPU 每步开始前同步当前 cycle，供 MemAccess 事件携带。
+    fn set_cycle(&mut self, cycle: u64);
+}
+
+struct Region {
+    range: Range<u32>,
+    device: Box<dyn BusDevice>,
+}
+
+impl Region {
+    fn contains(&self, addr: u32) -> bool {
+        self.range.contains(&addr)
+    }
+}
+
+/// 路由实现：按注册顺序线性查找（设备数量少，单周期模型足够）。
+pub struct BusRouter {
+    regions: Vec<Region>,
+    watch: Option<u32>,
+    cycle: u64,
+}
+
+impl BusRouter {
+    pub fn new() -> Self {
+        Self { regions: Vec::new(), watch: None, cycle: 0 }
+    }
+
+    /// 注册设备区间（start..end，end 独占）。重叠返回 `BusError::Overlap`。
+    pub fn map(&mut self, range: Range<u32>, device: Box<dyn BusDevice>) -> Result<(), BusError> {
+        if range.start >= range.end {
+            return Err(BusError::Overlap { start: range.start, end: range.end });
+        }
+        if self.regions.iter().any(|r| range.start < r.range.end && r.range.start < range.end) {
+            return Err(BusError::Overlap { start: range.start, end: range.end });
+        }
+        self.regions.push(Region { range, device });
+        Ok(())
+    }
+
+    fn check_align(addr: u32, size: AccessSize) -> Result<(), BusError> {
+        if addr & size.align_mask() != 0 {
+            return Err(BusError::Misaligned { addr, size });
+        }
+        Ok(())
+    }
+}
+
+impl Default for BusRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Bus for BusRouter {
+    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        Self::check_align(addr, AccessSize::Word)?;
+        let cycle = self.cycle;
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })?;
+        // 取指恒按 Word 宽度读
+        let region = &mut self.regions[idx];
+        let value = region.device.read(addr, AccessSize::Word, sink)?;
+        sink.emit(EmuEvent::MemAccess {
+            cycle,
+            kind: MemKind::Fetch,
+            size: AccessSize::Word,
+            addr,
+            value,
+            device: region.device.device_name().to_owned(),
+        });
+        Ok(value)
+    }
+
+    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        Self::check_align(addr, size)?;
+        let cycle = self.cycle;
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })?;
+        let region = &mut self.regions[idx];
+        let value = region.device.read(addr, size, sink)?;
+        sink.emit(EmuEvent::MemAccess {
+            cycle,
+            kind: MemKind::Read,
+            size,
+            addr,
+            value,
+            device: region.device.device_name().to_owned(),
+        });
+        Ok(value)
+    }
+
+    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+        Self::check_align(addr, size)?;
+        let cycle = self.cycle;
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })?;
+        let region = &mut self.regions[idx];
+        region.device.write(addr, size, data, sink)?;
+        sink.emit(EmuEvent::MemAccess {
+            cycle,
+            kind: MemKind::Write,
+            size,
+            addr,
+            value: data,
+            device: region.device.device_name().to_owned(),
+        });
+        // tohost 监视：写入值 bit0==1 表示进程退出（riscv-tests htif 约定）
+        if self.watch == Some(addr) && data & 1 == 1 {
+            sink.emit(EmuEvent::Halt { code: (data >> 1) as i32 });
+        }
+        Ok(())
+    }
+
+    fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError> {
+        Self::check_align(addr, size)?;
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::PeekUnsupported { addr })?;
+        self.regions[idx].device.peek_read(addr, size)
+    }
+
+    fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError> {
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })?;
+        let region = &mut self.regions[idx];
+        // 区间截断检查：不允许跨越设备边界写入
+        let off = addr - region.range.start;
+        let avail = region.range.end - region.range.start - off;
+        if u64::from(data.len() as u32) > u64::from(avail) {
+            return Err(BusError::Unmapped { addr: region.range.end });
+        }
+        region.device.write_bytes(addr, data)
+    }
+
+    fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice> {
+        let idx = self.regions.iter().position(|r| r.contains(addr))?;
+        Some(self.regions[idx].device.as_mut())
+    }
+
+    fn set_watch(&mut self, addr: Option<u32>) {
+        self.watch = addr;
+    }
+
+    fn set_cycle(&mut self, cycle: u64) {
+        self.cycle = cycle;
+    }
+}
+
+/// 中断线（M3 CLINT 使用；M1 先提供基础设施）。
+#[derive(Debug, Default)]
+pub struct IrqLine {
+    pending: bool,
+}
+
+impl IrqLine {
+    pub fn new() -> Self {
+        Self { pending: false }
+    }
+    pub fn raise(&mut self) {
+        self.pending = true;
+    }
+    pub fn clear(&mut self) {
+        self.pending = false;
+    }
+    pub fn is_pending(&self) -> bool {
+        self.pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试设备：回显自身存储。
+    struct MockRam {
+        base: u32,
+        mem: Vec<u8>,
+        name: String,
+    }
+
+    impl MockRam {
+        fn new(base: u32, size: usize, name: &str) -> Self {
+            Self { base, mem: vec![0; size], name: name.to_owned() }
+        }
+        fn offset(&self, addr: u32) -> usize {
+            (addr - self.base) as usize
+        }
+    }
+
+    impl BusDevice for MockRam {
+        fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+            let o = self.offset(addr);
+            let mut v: u32 = 0;
+            for i in 0..size.bytes() {
+                v |= u32::from(self.mem[o + i as usize]) << (8 * i);
+            }
+            Ok(v)
+        }
+        fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+            let o = self.offset(addr);
+            for i in 0..size.bytes() {
+                self.mem[o + i as usize] = (data >> (8 * i)) as u8;
+            }
+            Ok(())
+        }
+        fn peek_read(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError> {
+            // 与 read 等价（RAM 无副作用）
+            let mut sink = NullSink;
+            self.read(addr, size, &mut sink)
+        }
+        fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError> {
+            let o = self.offset(addr);
+            self.mem[o..o + data.len()].copy_from_slice(data);
+            Ok(())
+        }
+        fn device_name(&self) -> &str {
+            &self.name
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+    }
+
+    #[derive(Default)]
+    struct Collector(Vec<EmuEvent>);
+    impl EventSink for Collector {
+        fn emit(&mut self, ev: EmuEvent) {
+            self.0.push(ev);
+        }
+    }
+
+    #[test]
+    fn route_read_write() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        let mut sink = Collector::default();
+        bus.write(0x8000_0100, AccessSize::Word, 0xdead_beef, &mut sink).unwrap();
+        let v = bus.read(0x8000_0100, AccessSize::Word, &mut sink).unwrap();
+        assert_eq!(v, 0xdead_beef);
+        // 子宽度写入低位
+        bus.write(0x8000_0100, AccessSize::Byte, 0x12, &mut sink).unwrap();
+        assert_eq!(bus.peek(0x8000_0100, AccessSize::Word).unwrap(), 0xdead_bef2 & 0xffff_ff00 | 0x12);
+    }
+
+    #[test]
+    fn unmapped() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        let mut sink = Collector::default();
+        assert_eq!(bus.read(0x9000_0000, AccessSize::Word, &mut sink), Err(BusError::Unmapped { addr: 0x9000_0000 }));
+        assert_eq!(bus.write(0x1000_0000, AccessSize::Byte, 1, &mut sink), Err(BusError::Unmapped { addr: 0x1000_0000 }));
+        assert!(bus.peek(0x0, AccessSize::Word).is_err());
+    }
+
+    #[test]
+    fn misaligned() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        let mut sink = Collector::default();
+        assert_eq!(
+            bus.read(0x8000_0002, AccessSize::Word, &mut sink),
+            Err(BusError::Misaligned { addr: 0x8000_0002, size: AccessSize::Word })
+        );
+        assert_eq!(
+            bus.write(0x8000_0001, AccessSize::Half, 0, &mut sink),
+            Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
+        );
+        // 字节访问任意对齐皆可
+        bus.write(0x8000_0003, AccessSize::Byte, 0x55, &mut sink).unwrap();
+    }
+
+    #[test]
+    fn overlap_rejected() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        // 完全重叠
+        assert!(bus.map(0x8000_0000..0x8000_0100, Box::new(MockRam::new(0x8000_0000, 0x100, "a"))).is_err());
+        // 尾部相交
+        assert!(bus.map(0x8000_0f00..0x8000_1100, Box::new(MockRam::new(0x8000_0f00, 0x200, "b"))).is_err());
+        // 相邻不重叠（合法）
+        bus.map(0x8000_1000..0x8000_2000, Box::new(MockRam::new(0x8000_1000, 0x1000, "c"))).unwrap();
+    }
+
+    #[test]
+    fn event_sink_collects_mem_access() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.set_cycle(42);
+        let mut sink = Collector::default();
+        bus.write(0x8000_0000, AccessSize::Word, 7, &mut sink).unwrap();
+        bus.read(0x8000_0000, AccessSize::Half, &mut sink).unwrap();
+        bus.fetch(0x8000_0000, &mut sink).unwrap();
+        assert_eq!(sink.0.len(), 3);
+        match sink.0[0] {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
+                assert_eq!((cycle, kind, size, addr, value), (42, MemKind::Write, AccessSize::Word, 0x8000_0000, 7));
+                assert_eq!(device, "ram");
+            }
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+        match sink.0[2] {
+            EmuEvent::MemAccess { kind, .. } => assert_eq!(kind, MemKind::Fetch),
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+        // peek 不产生事件
+        bus.peek(0x8000_0000, AccessSize::Word).unwrap();
+        assert_eq!(sink.0.len(), 3);
+    }
+
+    #[test]
+    fn watch_halt_on_tohost_write() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.set_watch(Some(0x8000_0100));
+        let mut sink = Collector::default();
+        // bit0=0：非退出写
+        bus.write(0x8000_0100, AccessSize::Word, 2, &mut sink).unwrap();
+        assert!(!sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { .. })));
+        // bit0=1：退出，code = 3 >> 1 = 1
+        bus.write(0x8000_0100, AccessSize::Word, 3, &mut sink).unwrap();
+        assert!(sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { code: 1 })));
+        // watch 地址外的写不触发
+        bus.write(0x8000_0200, AccessSize::Word, 1, &mut sink).unwrap();
+        assert_eq!(sink.0.iter().filter(|e| matches!(e, EmuEvent::Halt { .. })).count(), 1);
+    }
+
+    #[test]
+    fn irq_line() {
+        let mut irq = IrqLine::new();
+        assert!(!irq.is_pending());
+        irq.raise();
+        assert!(irq.is_pending());
+        irq.clear();
+        assert!(!irq.is_pending());
+    }
+}
