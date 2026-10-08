@@ -385,7 +385,7 @@ fn parse_command(line: &str) -> Result<Command, String> {
         "d" | "delete" => {
             let n = rest
                 .parse::<usize>()
-                .map_err(|_| format!("usage: d N (watchpoint id)"))?;
+                .map_err(|_| "usage: d N (watchpoint id)".to_string())?;
             Ok(Command::Delete(n))
         }
         "q" | "quit" | "exit" => Ok(Command::Quit),

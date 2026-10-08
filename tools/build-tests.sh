@@ -60,8 +60,15 @@ for test in $TESTS; do
     out="$DATA_DIR/$test.elf"
     echo "==> Building $test ($src → $out)"
 
+    # 根据测试 ISA 扩展选择 march：含 c 的测试需要 rv32imc_zicsr
+    if [[ "$ext" == *c* ]]; then
+        march="rv32imc_zicsr"
+    else
+        march="rv32im_zicsr"
+    fi
+
     riscv64-unknown-elf-gcc \
-        -march=rv32im_zicsr -mabi=ilp32 \
+        -march=$march -mabi=ilp32 \
         -nostdlib -nostartfiles -static -mcmodel=medany \
         -I "$ENV_P" -I "$MACROS" \
         -T "$ENV_P/link.ld" \
