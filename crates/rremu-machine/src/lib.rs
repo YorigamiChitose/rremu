@@ -32,10 +32,10 @@ pub enum RunResult {
     Trapped { cause: u32 },
     Paused,
     HitBreakpoint { addr: u32 },
-    HitWatchpoint { id: usize, addr: u32, old: u32, new: u32 },
+    HitWatchpoint { id: usize, pc: u32, old: u32, new: u32 },
 }
 
-/// 监视点：跟踪某地址表达式的值变化。
+/// 监视点：跟踪某表达式的值变化（值语义，EXPR 与 p 命令同模型）。
 #[derive(Debug, Clone)]
 pub struct Watchpoint {
     pub id: usize,
@@ -342,8 +342,8 @@ impl Machine {
                     self.state = RunState::Exited(code);
                     return Some(RunResult::Exited { code });
                 }
-                // 监视点：检查每个被跟踪地址的值是否变化
-                self.check_watchpoints()
+                // 监视点：检查每个被跟踪表达式的值是否变化
+                self.check_watchpoints(pc_before)
             }
             Ok(StepOutcome::Trapped { cause }) => Some(RunResult::Trapped { cause }),
             Err(e) => {
@@ -355,24 +355,20 @@ impl Machine {
         }
     }
 
-    /// 检查所有监视点：求值表达式得到地址，peek 当前值，与上次比较。
-    /// 命中则返回 HitWatchpoint 并更新 last_value；否则返回 None。
-    fn check_watchpoints(&mut self) -> Option<RunResult> {
+    /// 检查所有监视点：求值表达式得到当前值，与上次值比较。
+    /// 变化则返回 HitWatchpoint（pc 为引起变化的指令）并更新 last_value。
+    fn check_watchpoints(&mut self, pc: u32) -> Option<RunResult> {
         for i in 0..self.watchpoints.len() {
-            let expr = self.watchpoints[i].expr.clone();
-            let last_value = self.watchpoints[i].last_value;
-            let id = self.watchpoints[i].id;
-            let addr = match self.eval(&expr) {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-            let cur = match self.bus.peek(addr, AccessSize::Word) {
+            // 值语义：EXPR 求值结果就是被监视的值（如 *ADDR 解引用、x5 寄存器）。
+            // 求值失败（如解引用未映射地址）则跳过，下一步重试。
+            let new = match self.eval(&self.watchpoints[i].expr.clone()) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if cur != last_value {
-                self.watchpoints[i].last_value = cur;
-                return Some(RunResult::HitWatchpoint { id, addr, old: last_value, new: cur });
+            if new != self.watchpoints[i].last_value {
+                let (id, old) = (self.watchpoints[i].id, self.watchpoints[i].last_value);
+                self.watchpoints[i].last_value = new;
+                return Some(RunResult::HitWatchpoint { id, pc, old, new });
             }
         }
         None
@@ -396,12 +392,8 @@ impl Machine {
     pub fn add_watchpoint(&mut self, expr: Expr) -> usize {
         let id = self.next_wp_id;
         self.next_wp_id += 1;
-        // 求值得到初始地址与值
-        let last_value = self
-            .eval(&expr)
-            .ok()
-            .and_then(|a| self.bus.peek(a, AccessSize::Word).ok())
-            .unwrap_or(0);
+        // 值语义：EXPR 求值即初值；求值失败（如地址未映射）先记 0，随步进重试
+        let last_value = self.eval(&expr).unwrap_or(0);
         self.watchpoints.push(Watchpoint { id, expr, last_value });
         id
     }
@@ -642,6 +634,38 @@ mod tests {
         let pause = AtomicBool::new(false);
         assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0008 });
         // 不移除断点，直接继续：应放行一次并跑完（而非原地重复命中）
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn watchpoint_value_semantics_reports_pc_and_old_new() {
+        let mut m = hello_machine();
+        // 值语义：EXPR 求值即被监视的值。监视 x2（sp）：
+        // 第 1 条 auipc sp 改变它；第 2 条是 mv sp,sp（lo=0 优化），
+        // 值不变 → 不误报 —— 这正是值语义的意义
+        let expr = rremu_expr::parse("x2").unwrap();
+        m.add_watchpoint(expr);
+        let pause = AtomicBool::new(false);
+        match m.run(&pause) {
+            RunResult::HitWatchpoint { pc, old, new, .. } => {
+                assert_eq!(pc, 0x8000_0000); // auipc sp 所在指令
+                assert_eq!(old, 0);
+                assert_ne!(new, 0); // sp 已获得栈顶高 20 位
+            }
+            rr => panic!("expected HitWatchpoint, got {rr:?}"),
+        }
+        // mv sp,sp 未改变值；x2 此后稳定 → 一路跑完
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn watchpoint_deref_expr_watches_memory_value() {
+        let mut m = hello_machine();
+        // 值语义下 *ADDR 直接监视该地址的字；hello 运行中无人写 RAM，
+        // 初始 0 → 无变化 → 直接跑完退出（不命中）
+        let expr = rremu_expr::parse("*0x8000_0100").unwrap();
+        m.add_watchpoint(expr);
+        let pause = AtomicBool::new(false);
         assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
     }
 

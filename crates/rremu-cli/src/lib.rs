@@ -120,7 +120,7 @@ impl Repl {
         println!("  x N ADDR      Examine N words at ADDR (peek, no side effects)");
         println!("  p EXPR        Evaluate and print expression");
         println!("  b EXPR        Set breakpoint at address EXPR");
-        println!("  w EXPR        Watch the word at address EXPR (stops on value change)");
+        println!("  w EXPR        Watch value of EXPR, stops on change (*ADDR for memory, x5 for reg)");
         println!("  d N           Delete watchpoint N, or breakpoint N (index from 'info w')");
         println!("  info r        Show registers and CSRs");
         println!("  info w        List breakpoints and watchpoints");
@@ -148,8 +148,8 @@ impl Repl {
                 println!("Breakpoint hit at 0x{addr:08x}.");
                 Outcome::Continue
             }
-            RunResult::HitWatchpoint { id, addr, old, new } => {
-                println!("Watchpoint {id} hit at 0x{addr:08x}: 0x{old:08x} -> 0x{new:08x}.");
+            RunResult::HitWatchpoint { id, pc, old, new } => {
+                println!("Watchpoint {id} hit at pc 0x{pc:08x}: 0x{old:08x} -> 0x{new:08x}.");
                 Outcome::Continue
             }
             RunResult::Paused => {
@@ -183,8 +183,8 @@ impl Repl {
                     println!("Breakpoint hit at 0x{addr:08x}.");
                     return Outcome::Continue;
                 }
-                RunResult::HitWatchpoint { id, addr, old, new } => {
-                    println!("Watchpoint {id} hit at 0x{addr:08x}: 0x{old:08x} -> 0x{new:08x}.");
+                RunResult::HitWatchpoint { id, pc, old, new } => {
+                    println!("Watchpoint {id} hit at pc 0x{pc:08x}: 0x{old:08x} -> 0x{new:08x}.");
                     return Outcome::Continue;
                 }
                 RunResult::Paused => {}
@@ -298,10 +298,14 @@ impl Repl {
         }
         for wp in wps {
             let desc = match &wp.expr {
+                Expr::Deref(inner) => match **inner {
+                    Expr::Num(v) => format!("*0x{v:08x}"),
+                    ref e => format!("*{e:?}"),
+                },
                 Expr::Num(v) => format!("0x{v:08x}"),
                 e => format!("{e:?}"),
             };
-            println!("watchpoint {}: addr={desc}", wp.id);
+            println!("watchpoint {}: expr={desc}", wp.id);
         }
     }
 
