@@ -16,18 +16,29 @@ DATA_DIR="$ROOT_DIR/tests/data"
 TMP_DIR="${TMPDIR:-/tmp}/riscv-tests"
 TESTS="${*:-rv32ui-p-add}"
 
-mkdir -p "$DATA_DIR"
-
-# ---- 1. 拉取 riscv-tests（含 env 子模块）----
-if [ ! -d "$TMP_DIR/isa" ]; then
-    echo "==> Cloning riscv-tests to $TMP_DIR"
-    git clone --depth 1 https://github.com/riscv/riscv-tests.git "$TMP_DIR"
-    git -C "$TMP_DIR" submodule update --init env
+# 支持外部 riscv-tests 路径：RISCV_TESTS=/path/to/riscv-tests ./build-tests.sh
+# 若未设置，则使用 $TMPDIR/riscv-tests（首次自动克隆 + 初始化 env 子模块）
+if [ -n "${RISCV_TESTS:-}" ]; then
+    RT_DIR="$RISCV_TESTS"
+    if [ ! -d "$RT_DIR/env/p" ]; then
+        echo "ERROR: RISCV_TESTS=$RT_DIR 但 env/p 不存在；请先初始化子模块："
+        echo "  cd $RT_DIR && git submodule update --init env"
+        exit 1
+    fi
+else
+    if [ ! -d "$TMP_DIR/isa" ]; then
+        echo "==> Cloning riscv-tests to $TMP_DIR"
+        git clone --depth 1 https://github.com/riscv/riscv-tests.git "$TMP_DIR"
+        git -C "$TMP_DIR" submodule update --init env
+    fi
+    RT_DIR="$TMP_DIR"
 fi
 
+mkdir -p "$DATA_DIR"
+
 # ---- 2. 编译每个测试 ----
-ISA_DIR="$TMP_DIR/isa"
-ENV_P="$TMP_DIR/env/p"
+ISA_DIR="$RT_DIR/isa"
+ENV_P="$RT_DIR/env/p"
 MACROS="$ISA_DIR/macros/scalar"
 
 for test in $TESTS; do
