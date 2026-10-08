@@ -293,6 +293,52 @@ impl Cpu {
             Instruction::Or { rd, rs1, rs2 } => set!(rd, x(self, rs1) | x(self, rs2)),
             Instruction::And { rd, rs1, rs2 } => set!(rd, x(self, rs1) & x(self, rs2)),
 
+            // ---- M extension (RV32M) ----
+            Instruction::Mul { rd, rs1, rs2 } => set!(rd, x(self, rs1).wrapping_mul(x(self, rs2))),
+            Instruction::Mulh { rd, rs1, rs2 } => {
+                let a = (x(self, rs1) as i32) as i64;
+                let b = (x(self, rs2) as i32) as i64;
+                set!(rd, ((a * b) >> 32) as u32);
+            }
+            Instruction::Mulhsu { rd, rs1, rs2 } => {
+                let a = (x(self, rs1) as i32) as i64;
+                let b = x(self, rs2) as i64; // rs2 无符号，零扩展
+                set!(rd, ((a * b) >> 32) as u32);
+            }
+            Instruction::Mulhu { rd, rs1, rs2 } => {
+                let a = x(self, rs1) as u64;
+                let b = x(self, rs2) as u64;
+                set!(rd, ((a * b) >> 32) as u32);
+            }
+            Instruction::Div { rd, rs1, rs2 } => {
+                let a = x(self, rs1) as i32;
+                let b = x(self, rs2) as i32;
+                let result = a.checked_div(b).map(|v| v as u32).unwrap_or_else(|| {
+                    // 除零返回 -1；INT_MIN / -1 溢出返回 INT_MIN
+                    if a == i32::MIN && b == -1 { i32::MIN as u32 } else { u32::MAX }
+                });
+                set!(rd, result);
+            }
+            Instruction::Divu { rd, rs1, rs2 } => {
+                let divisor = x(self, rs2);
+                let result = x(self, rs1).checked_div(divisor).unwrap_or(u32::MAX);
+                set!(rd, result);
+            }
+            Instruction::Rem { rd, rs1, rs2 } => {
+                let a = x(self, rs1) as i32;
+                let b = x(self, rs2) as i32;
+                let result = a.checked_rem(b).map(|v| v as u32).unwrap_or_else(|| {
+                    // 除零返回 rs1；INT_MIN % -1 溢出返回 0
+                    if a == i32::MIN && b == -1 { 0 } else { x(self, rs1) }
+                });
+                set!(rd, result);
+            }
+            Instruction::Remu { rd, rs1, rs2 } => {
+                let divisor = x(self, rs2);
+                let result = x(self, rs1).checked_rem(divisor).unwrap_or_else(|| x(self, rs1));
+                set!(rd, result);
+            }
+
             Instruction::Fence => {}
             Instruction::Ecall => {
                 let c = if self.priv_ == Priv::Machine { cause::ECALL_FROM_M } else { cause::ECALL_FROM_U };
@@ -346,6 +392,8 @@ impl Cpu {
                 self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
                 next_pc = self.csr.mepc;
             }
+            // C 扩展指令在 M2.3 实现；当前若到达此处视为非法（实际 step 会先拦截）。
+            _ => return Err(TrapErr { cause: cause::ILLEGAL_INSTR }),
         }
         Ok(next_pc)
     }
@@ -690,5 +738,82 @@ mod tests {
         assert_eq!(h.cpu.cycle(), 0);
         assert_eq!(h.cpu.priv_(), Priv::Machine);
         assert_eq!(h.cpu.csr_state().mstatus, csr::MSTATUS_MPP_M);
+    }
+
+    // ---- M extension tests ----
+
+    #[test]
+    fn exec_mul_and_high() {
+        let mut h = Harness::new();
+        // li x1, -5; li x2, 3; mul x3,x1,x2; mulh x4,x1,x2
+        h.load(BASE, &[
+            i_enc(OP_IMM, 1, 0b000, 0, -5),
+            i_enc(OP_IMM, 2, 0b000, 0, 3),
+            r_enc(3, 0b000, 1, 2, 0b0000001), // mul
+            r_enc(4, 0b001, 1, 2, 0b0000001), // mulh
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), (-15i32) as u32);
+        assert_eq!(h.cpu.reg(4) as i32, -1); // (-5*3=-15) high32 = -1
+    }
+
+    #[test]
+    fn exec_mulhu_and_mulhsu() {
+        let mut h = Harness::new();
+        // x1 = 0x8000_0000 (as signed: -2147483648), x2 = 2
+        h.load(BASE, &[
+            u_enc(0b0110111, 1, 0x80000), // lui x1, 0x80000 → 0x8000_0000
+            i_enc(OP_IMM, 2, 0b000, 0, 2),
+            r_enc(3, 0b011, 1, 2, 0b0000001), // mulhu: high(0x8000_0000 * 2) = 1
+            r_enc(4, 0b010, 1, 2, 0b0000001), // mulhsu: high(signed(-2^31) * 2) = -1
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), 1);
+        assert_eq!(h.cpu.reg(4) as i32, -1);
+    }
+
+    #[test]
+    fn exec_div_basic() {
+        let mut h = Harness::new();
+        // x1 = 13, x2 = 5; div x3,x1,x2; rem x4,x1,x2
+        h.load(BASE, &[
+            i_enc(OP_IMM, 1, 0b000, 0, 13),
+            i_enc(OP_IMM, 2, 0b000, 0, 5),
+            r_enc(3, 0b100, 1, 2, 0b0000001), // div
+            r_enc(4, 0b110, 1, 2, 0b0000001), // rem
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), 2);
+        assert_eq!(h.cpu.reg(4), 3);
+    }
+
+    #[test]
+    fn exec_div_by_zero_and_overflow() {
+        let mut h = Harness::new();
+        // x1 = INT_MIN, x2 = -1
+        h.load(BASE, &[
+            u_enc(0b0110111, 1, 0x80000), // x1 = 0x8000_0000 = INT_MIN
+            i_enc(OP_IMM, 2, 0b000, 0, -1),
+            r_enc(3, 0b100, 1, 2, 0b0000001), // div → overflow → INT_MIN
+            r_enc(4, 0b110, 1, 2, 0b0000001), // rem → overflow → 0
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), 0x8000_0000u32);
+        assert_eq!(h.cpu.reg(4), 0);
+    }
+
+    #[test]
+    fn exec_divu_remu_by_zero() {
+        let mut h = Harness::new();
+        // x1 = 42, x2 = 0
+        h.load(BASE, &[
+            i_enc(OP_IMM, 1, 0b000, 0, 42),
+            i_enc(OP_IMM, 2, 0b000, 0, 0),
+            r_enc(3, 0b101, 1, 2, 0b0000001), // divu by zero → 0xffff_ffff
+            r_enc(4, 0b111, 1, 2, 0b0000001), // remu by zero → rs1 = 42
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), 0xffff_ffffu32);
+        assert_eq!(h.cpu.reg(4), 42);
     }
 }
