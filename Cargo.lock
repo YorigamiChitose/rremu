@@ -217,6 +217,7 @@ dependencies = [
  "rremu-bus",
  "rremu-cpu",
  "rremu-devices",
+ "rremu-isa",
  "rremu-loader",
  "thiserror",
  "tracing",

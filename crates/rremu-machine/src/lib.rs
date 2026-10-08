@@ -1,1 +1,514 @@
 //! rremu-machine：Machine/Builder/快照/控制 —— 前端（cli/tui/window）唯一入口。
+
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use rremu_bus::{AccessSize, Bus, BusError, BusRouter, EmuEvent, EventSink};
+use rremu_cpu::{Cpu, StepOutcome};
+use rremu_devices::{Ram, Uart};
+use rremu_isa::{csr, Address, Instruction, Priv, Word};
+use rremu_loader::Image;
+use thiserror::Error;
+
+/// 运行状态（快照展示用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Idle,
+    Running,
+    Paused,
+    Exited(i32),
+    Trapped(u32),
+}
+
+/// 运行控制结果（断点/监视点变体在 M2 扩展）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunResult {
+    Exited { code: i32 },
+    Trapped { cause: u32 },
+    Paused,
+}
+
+#[derive(Debug, Error)]
+pub enum MachineError {
+    #[error("segment {addr:#x}+{len} out of RAM range {ram_base:#x}..{ram_end:#x}")]
+    SegmentOutOfRange { addr: u32, len: usize, ram_base: u32, ram_end: u32 },
+    #[error("no entry point (neither override nor ELF entry)")]
+    NoEntry,
+    #[error(transparent)]
+    Bus(#[from] BusError),
+    #[error("invalid configuration: {0}")]
+    InvalidConfig(String),
+}
+
+/// 事件环形收集器：machine 持有，前端经快照读取。
+/// mem 环默认 16 条 MemAccess，uart 环默认 1024 字节。
+pub struct RingCollector {
+    mem: VecDeque<EmuEvent>,
+    uart: VecDeque<EmuEvent>,
+    halt: Option<i32>,
+    mem_cap: usize,
+    uart_cap: usize,
+}
+
+impl RingCollector {
+    pub fn new() -> Self {
+        Self { mem: VecDeque::new(), uart: VecDeque::new(), halt: None, mem_cap: 16, uart_cap: 1024 }
+    }
+
+    pub fn set_capacity(&mut self, mem: usize, uart: usize) {
+        self.mem_cap = mem;
+        self.uart_cap = uart;
+        self.mem.truncate(mem);
+        self.uart.truncate(uart);
+    }
+
+    pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
+        &self.mem
+    }
+
+    pub fn uart_ring(&self) -> &VecDeque<EmuEvent> {
+        &self.uart
+    }
+
+    pub fn take_halt(&mut self) -> Option<i32> {
+        self.halt.take()
+    }
+
+    /// 取走全部 UART 输出字节（CLI 打印用）。
+    pub fn drain_uart(&mut self) -> Vec<u8> {
+        self.uart
+            .drain(..)
+            .filter_map(|ev| match ev {
+                EmuEvent::UartOutput { byte } => Some(byte),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.mem.clear();
+        self.uart.clear();
+        self.halt = None;
+    }
+}
+
+impl Default for RingCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventSink for RingCollector {
+    fn emit(&mut self, ev: EmuEvent) {
+        match ev {
+            EmuEvent::MemAccess { .. } => {
+                if self.mem.len() == self.mem_cap {
+                    self.mem.pop_front();
+                }
+                self.mem.push_back(ev);
+            }
+            EmuEvent::UartOutput { .. } | EmuEvent::UartInput { .. } => {
+                if self.uart.len() == self.uart_cap {
+                    self.uart.pop_front();
+                }
+                self.uart.push_back(ev);
+            }
+            EmuEvent::Halt { code } => self.halt = Some(code),
+            EmuEvent::Trap { .. } => {}
+        }
+    }
+}
+
+/// CSR 快照（TUI/CLI 显示所需的最简 M-mode 集合）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CsrSnapshot {
+    pub mstatus: u32,
+    pub mtvec: u32,
+    pub mepc: u32,
+    pub mcause: u32,
+    pub mie: u32,
+    pub mip: u32,
+    pub mcycle: u64,
+    pub minstret: u64,
+}
+
+/// 机器快照：前端的唯一状态视图。
+#[derive(Debug, Clone)]
+pub struct MachineSnapshot {
+    pub cycle: u64,
+    pub pc: Address,
+    pub priv_: Priv,
+    pub gprs: [Word; 32],
+    pub csrs: CsrSnapshot,
+    pub state: RunState,
+    pub mem_ring: VecDeque<EmuEvent>,
+    pub uart_out: Vec<u8>,
+    pub uart_in_len: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct MachineBuilder {
+    ram_base: u32,
+    ram_size: u32,
+    uart_base: Option<u32>,
+    entry: Option<u32>,
+    image: Option<Image>,
+}
+
+impl MachineBuilder {
+    pub fn new() -> Self {
+        Self { ram_base: 0x8000_0000, ram_size: 16 * 1024 * 1024, ..Default::default() }
+    }
+
+    pub fn ram(mut self, base: u32, size: u32) -> Self {
+        self.ram_base = base;
+        self.ram_size = size;
+        self
+    }
+
+    pub fn uart(mut self, base: u32) -> Self {
+        self.uart_base = Some(base);
+        self
+    }
+
+    pub fn entry(mut self, addr: u32) -> Self {
+        self.entry = Some(addr);
+        self
+    }
+
+    pub fn load(mut self, image: Image) -> Self {
+        self.image = Some(image);
+        self
+    }
+
+    pub fn build(self) -> Result<Machine, MachineError> {
+        if self.ram_size == 0 {
+            return Err(MachineError::InvalidConfig("ram size must be non-zero".into()));
+        }
+        let ram_end = self
+            .ram_base
+            .checked_add(self.ram_size)
+            .ok_or_else(|| MachineError::InvalidConfig("ram range overflows address space".into()))?;
+
+        let mut bus = BusRouter::new();
+        bus.map(self.ram_base..ram_end, Box::new(Ram::new(self.ram_base, self.ram_size)))?;
+        if let Some(ub) = self.uart_base {
+            bus.map(ub..ub + 8, Box::new(Uart::new(ub)))?;
+        }
+
+        let image = self.image;
+        if let Some(img) = &image {
+            for seg in &img.segments {
+                let end = seg.addr.checked_add(seg.data.len() as u32).ok_or(
+                    MachineError::SegmentOutOfRange {
+                        addr: seg.addr,
+                        len: seg.data.len(),
+                        ram_base: self.ram_base,
+                        ram_end,
+                    },
+                )?;
+                if seg.addr < self.ram_base || end > ram_end {
+                    return Err(MachineError::SegmentOutOfRange {
+                        addr: seg.addr,
+                        len: seg.data.len(),
+                        ram_base: self.ram_base,
+                        ram_end,
+                    });
+                }
+            }
+            for seg in &img.segments {
+                bus.write_bytes(seg.addr, &seg.data)?;
+            }
+            // tohost 监视：写入值 bit0==1 → 进程退出（riscv-tests 约定）
+            bus.set_watch(img.tohost);
+        }
+
+        let entry =
+            self.entry.or_else(|| image.as_ref().map(|i| i.entry)).ok_or(MachineError::NoEntry)?;
+
+        Ok(Machine {
+            cpu: Cpu::new(entry),
+            bus,
+            collector: RingCollector::new(),
+            image,
+            ram_base: self.ram_base,
+            uart_base: self.uart_base,
+            entry,
+            state: RunState::Idle,
+            last_instr: None,
+            uart_in_len: 0,
+        })
+    }
+}
+
+/// 机器实例：CPU + 总线 + 设备 + 事件收集。
+pub struct Machine {
+    cpu: Cpu,
+    bus: BusRouter,
+    collector: RingCollector,
+    image: Option<Image>,
+    ram_base: u32,
+    uart_base: Option<u32>,
+    entry: u32,
+    state: RunState,
+    last_instr: Option<(u32, Instruction)>,
+    /// UART 输入 FIFO 待读字节数（push 时 +1；每步后经 LSR peek 校正）
+    uart_in_len: usize,
+}
+
+impl Machine {
+    /// 单步执行 n 条；中途退出（Halt/Trap）即返回。
+    pub fn step_n(&mut self, n: u64) -> RunResult {
+        self.state = RunState::Running;
+        for _ in 0..n {
+            if let Some(rr) = self.step_once() {
+                return rr;
+            }
+        }
+        self.state = RunState::Paused;
+        RunResult::Paused
+    }
+
+    /// 全速运行；pause 置位后停止（Ctrl+C 由前端控制）。
+    pub fn run(&mut self, pause: &AtomicBool) -> RunResult {
+        self.state = RunState::Running;
+        loop {
+            if pause.load(Ordering::Relaxed) {
+                self.state = RunState::Paused;
+                return RunResult::Paused;
+            }
+            if let Some(rr) = self.step_once() {
+                return rr;
+            }
+        }
+    }
+
+    /// 执行一条指令；需要停止时返回 Some(RunResult)。
+    fn step_once(&mut self) -> Option<RunResult> {
+        self.bus.set_cycle(self.cpu.cycle());
+        let pc_before = self.cpu.pc();
+        match self.cpu.step(&mut self.bus, &mut self.collector) {
+            Ok(StepOutcome::Executed { instr, .. }) => {
+                self.last_instr = Some((pc_before, instr));
+                self.sync_uart_in_len();
+                if let Some(code) = self.collector.take_halt() {
+                    self.state = RunState::Exited(code);
+                    return Some(RunResult::Exited { code });
+                }
+                None
+            }
+            Ok(StepOutcome::Trapped { cause }) => {
+                self.state = RunState::Trapped(cause);
+                Some(RunResult::Trapped { cause })
+            }
+            Err(e) => {
+                // 唯一错误路径：vectored mtvec 未实现；按陷入处理
+                let cause = self.cpu.csr_state().mcause;
+                tracing::error!("cpu error: {e}");
+                self.state = RunState::Trapped(cause);
+                Some(RunResult::Trapped { cause })
+            }
+        }
+    }
+
+    /// 经无副作用 LSR 读校正输入 FIFO 计数（0 或 1）。
+    fn sync_uart_in_len(&mut self) {
+        if let Some(ub) = self.uart_base {
+            if let Ok(lsr) = self.bus.peek(ub + 5, AccessSize::Byte) {
+                self.uart_in_len = usize::from(lsr & 0x01 != 0);
+            }
+        }
+    }
+
+    /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
+    pub fn reset(&mut self) -> Result<(), MachineError> {
+        self.cpu.reset(self.entry);
+        if let Some(dev) = self.bus.device_mut(self.ram_base) {
+            if let Some(ram) = dev.as_any_mut().downcast_mut::<Ram>() {
+                ram.reset();
+            }
+        }
+        if let Some(img) = &self.image {
+            for seg in &img.segments {
+                self.bus.write_bytes(seg.addr, &seg.data)?;
+            }
+        }
+        self.collector.clear();
+        self.state = RunState::Idle;
+        self.last_instr = None;
+        self.uart_in_len = 0;
+        Ok(())
+    }
+
+    /// 机器快照（前端唯一状态视图）。
+    pub fn snapshot(&self) -> MachineSnapshot {
+        MachineSnapshot {
+            cycle: self.cpu.cycle(),
+            pc: self.cpu.pc(),
+            priv_: self.cpu.priv_(),
+            gprs: *self.cpu.regs(),
+            csrs: CsrSnapshot {
+                mstatus: self.cpu.csr_read(csr::MSTATUS),
+                mtvec: self.cpu.csr_read(csr::MTVEC),
+                mepc: self.cpu.csr_read(csr::MEPC),
+                mcause: self.cpu.csr_read(csr::MCAUSE),
+                mie: self.cpu.csr_read(csr::MIE),
+                mip: self.cpu.csr_read(csr::MIP),
+                mcycle: self.cpu.cycle(),
+                minstret: self.cpu.instret(),
+            },
+            state: self.state,
+            mem_ring: self.collector.mem_ring().clone(),
+            uart_out: self
+                .collector
+                .uart_ring()
+                .iter()
+                .filter_map(|e| match e {
+                    EmuEvent::UartOutput { byte } => Some(*byte),
+                    _ => None,
+                })
+                .collect(),
+            uart_in_len: self.uart_in_len,
+        }
+    }
+
+    /// 调试 peek：无副作用读一个 Word（表达式/x 命令用，D12）。
+    pub fn peek(&mut self, addr: u32) -> Result<u32, BusError> {
+        self.bus.peek(addr, AccessSize::Word)
+    }
+
+    /// 注入 UART 输入字节。
+    pub fn uart_push_input(&mut self, byte: u8) {
+        let Some(ub) = self.uart_base else { return };
+        if let Some(dev) = self.bus.device_mut(ub) {
+            if let Some(uart) = dev.as_any_mut().downcast_mut::<Uart>() {
+                uart.push_input(byte);
+                self.uart_in_len += 1;
+                self.collector.emit(EmuEvent::UartInput { byte });
+            }
+        }
+    }
+
+    /// 设置事件环容量（mem 条数 / uart 字节数）。
+    pub fn set_event_ring_capacity(&mut self, mem: usize, uart: usize) {
+        self.collector.set_capacity(mem, uart);
+    }
+
+    /// 取走全部 UART 输出字节（CLI 打印）。
+    pub fn drain_uart(&mut self) -> Vec<u8> {
+        self.collector.drain_uart()
+    }
+
+    /// 最近一条已执行指令（si 回显用）：pc 与指令。
+    pub fn last_instruction(&self) -> Option<(u32, Instruction)> {
+        self.last_instr
+    }
+
+    pub fn tohost_addr(&self) -> Option<u32> {
+        self.image.as_ref().and_then(|i| i.tohost)
+    }
+
+    pub fn entry(&self) -> u32 {
+        self.entry
+    }
+
+    pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
+        self.collector.mem_ring()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
+mod tests {
+    use super::*;
+
+    const HELLO_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/hello.elf");
+
+    fn hello_machine() -> Machine {
+        let bytes = std::fs::read(HELLO_ELF)
+            .unwrap_or_else(|e| panic!("缺少 {HELLO_ELF}（先运行 tools/build-firmware.sh）：{e}"));
+        let image = rremu_loader::load_elf(&bytes).unwrap();
+        MachineBuilder::new().ram(0x8000_0000, 16 * 1024 * 1024).uart(0x1000_0000).load(image).build().unwrap()
+    }
+
+    #[test]
+    fn hello_run_exits_zero_with_uart_output() {
+        let mut m = hello_machine();
+        let pause = AtomicBool::new(false);
+        let rr = m.run(&pause);
+        assert_eq!(rr, RunResult::Exited { code: 0 });
+        assert_eq!(m.snapshot().state, RunState::Exited(0));
+        // 事件流包含 "hello world\n"
+        let out = m.drain_uart();
+        assert_eq!(String::from_utf8_lossy(&out), "hello world\n");
+        // mem ring 有访问记录
+        assert!(!m.mem_ring().is_empty());
+    }
+
+    #[test]
+    fn hello_step_n_pauses_and_tracks_last_instr() {
+        let mut m = hello_machine();
+        let rr = m.step_n(3);
+        assert_eq!(rr, RunResult::Paused);
+        assert_eq!(m.snapshot().state, RunState::Paused);
+        // hello.S 的 `la` 伪指令展开为 auipc+addi：3 步后最后执行的是 0x80000008 的 auipc
+        let (pc, instr) = m.last_instruction().expect("last instruction recorded");
+        assert_eq!(pc, 0x8000_0008);
+        assert_eq!(instr.to_string(), "auipc t0, 0x0");
+        // 继续跑完
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn reset_restores_initial_state() {
+        let mut m = hello_machine();
+        let pause = AtomicBool::new(false);
+        m.run(&pause);
+        assert_eq!(m.snapshot().state, RunState::Exited(0));
+        m.reset().unwrap();
+        let snap = m.snapshot();
+        assert_eq!(snap.state, RunState::Idle);
+        assert_eq!(snap.pc, 0x8000_0000);
+        assert_eq!(snap.cycle, 0);
+        assert!(m.mem_ring().is_empty());
+        // 复位后可再次运行到退出
+        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn peek_reads_ram_without_side_effects() {
+        let mut m = hello_machine();
+        // tohost 在 0x80000080，初始为 0
+        let tohost = m.tohost_addr().unwrap();
+        assert_eq!(m.peek(tohost).unwrap(), 0);
+        m.step_n(1);
+        // peek 不影响执行流
+        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
+        assert_eq!(m.peek(tohost).unwrap(), 1);
+    }
+
+    #[test]
+    fn builder_rejects_out_of_range_segment() {
+        let image = Image {
+            segments: vec![rremu_loader::Segment { addr: 0x9000_0000, data: vec![0; 16] }],
+            entry: 0x9000_0000,
+            tohost: None,
+        };
+        let Err(err) = MachineBuilder::new().ram(0x8000_0000, 0x1000).load(image).build() else {
+            panic!("builder should reject out-of-range segment")
+        };
+        assert!(matches!(err, MachineError::SegmentOutOfRange { .. }));
+    }
+
+    #[test]
+    fn uart_input_reaches_fifo() {
+        let mut m = hello_machine();
+        m.uart_push_input(b'Z');
+        assert_eq!(m.snapshot().uart_in_len, 1);
+        // peek RDR 不消耗（D12 一致性）
+        let rdr = 0x1000_0000;
+        assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
+        assert_eq!(m.snapshot().uart_in_len, 1);
+    }
+}
