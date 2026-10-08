@@ -255,6 +255,7 @@ impl MachineBuilder {
             breakpoints: BTreeSet::new(),
             watchpoints: Vec::new(),
             next_wp_id: 1,
+            bp_suppress: None,
         })
     }
 }
@@ -275,6 +276,9 @@ pub struct Machine {
     breakpoints: BTreeSet<u32>,
     watchpoints: Vec<Watchpoint>,
     next_wp_id: usize,
+    /// 刚命中过的断点地址：下一次 step_once 对该地址放行一次，
+    /// 使 `c`/`si` 能越过当前断点（经典调试器语义），后续命中照常。
+    bp_suppress: Option<u32>,
 }
 
 impl Machine {
@@ -323,10 +327,12 @@ impl Machine {
         self.bus.set_cycle(self.cpu.cycle());
         let pc_before = self.cpu.pc();
 
-        // 断点：命中则不执行，直接返回
-        if self.breakpoints.contains(&pc_before) {
+        // 断点：命中则不执行，直接返回；刚命中过的地址放行一次（越过断点）
+        if self.breakpoints.contains(&pc_before) && self.bp_suppress != Some(pc_before) {
+            self.bp_suppress = Some(pc_before);
             return Some(RunResult::HitBreakpoint { addr: pc_before });
         }
+        self.bp_suppress = None;
 
         match self.cpu.step(&mut self.bus, &mut self.collector) {
             Ok(StepOutcome::Executed { instr, .. }) => {
@@ -438,6 +444,7 @@ impl Machine {
         self.state = RunState::Idle;
         self.last_instr = None;
         self.uart_in_len = 0;
+        self.bp_suppress = None;
         Ok(())
     }
 
@@ -625,6 +632,30 @@ mod tests {
         // 移除断点后可继续跑完
         m.remove_breakpoint(0x8000_0008);
         assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn continue_past_breakpoint_then_hits_next_time() {
+        let mut m = hello_machine();
+        // hello.S 第 3 条指令在 0x80000008（auipc）；hello 只经过它一次
+        m.add_breakpoint(0x8000_0008);
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0008 });
+        // 不移除断点，直接继续：应放行一次并跑完（而非原地重复命中）
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+    }
+
+    #[test]
+    fn breakpoint_rehits_on_second_pass() {
+        let mut m = hello_machine();
+        // 0x80000000 是入口第一条指令：run 停在它，继续放行执行；
+        // reset 后重跑应再次命中（suppress 已被第一步清除/复位）
+        m.add_breakpoint(0x8000_0000);
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0000 });
+        m.step_n(1); // 放行一条
+        m.reset().unwrap();
+        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0000 });
     }
 
     #[test]

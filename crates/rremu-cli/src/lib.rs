@@ -120,8 +120,8 @@ impl Repl {
         println!("  x N ADDR      Examine N words at ADDR (peek, no side effects)");
         println!("  p EXPR        Evaluate and print expression");
         println!("  b EXPR        Set breakpoint at address EXPR");
-        println!("  w EXPR        Set watchpoint on address EXPR (reports value changes)");
-        println!("  d N           Delete watchpoint N");
+        println!("  w EXPR        Watch the word at address EXPR (stops on value change)");
+        println!("  d N           Delete watchpoint N, or breakpoint N (index from 'info w')");
         println!("  info r        Show registers and CSRs");
         println!("  info w        List breakpoints and watchpoints");
         println!("  q             Quit");
@@ -277,8 +277,11 @@ impl Repl {
     fn cmd_delete(&mut self, n: usize) -> Outcome {
         if self.machine.remove_watchpoint(n) {
             println!("Watchpoint {n} deleted.");
+        } else if let Some(addr) = self.machine.breakpoints().iter().nth(n).copied() {
+            self.machine.remove_breakpoint(addr);
+            println!("Breakpoint at 0x{addr:08x} deleted.");
         } else {
-            eprintln!("rremu: no watchpoint {n}");
+            eprintln!("rremu: no watchpoint or breakpoint {n}");
         }
         Outcome::Continue
     }
@@ -294,7 +297,11 @@ impl Repl {
             println!("breakpoint {i}: 0x{addr:08x}");
         }
         for wp in wps {
-            println!("watchpoint {}: expr={:?}", wp.id, wp.expr);
+            let desc = match &wp.expr {
+                Expr::Num(v) => format!("0x{v:08x}"),
+                e => format!("{e:?}"),
+            };
+            println!("watchpoint {}: addr={desc}", wp.id);
         }
     }
 
