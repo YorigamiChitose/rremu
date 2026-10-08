@@ -108,6 +108,15 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 (0b101, 0b0100000) => Ok(Instruction::Sra { rd, rs1, rs2 }),
                 (0b110, 0b0000000) => Ok(Instruction::Or { rd, rs1, rs2 }),
                 (0b111, 0b0000000) => Ok(Instruction::And { rd, rs1, rs2 }),
+                // ---- M extension (funct7 = 0000001) ----
+                (0b000, 0b0000001) => Ok(Instruction::Mul { rd, rs1, rs2 }),
+                (0b001, 0b0000001) => Ok(Instruction::Mulh { rd, rs1, rs2 }),
+                (0b010, 0b0000001) => Ok(Instruction::Mulhsu { rd, rs1, rs2 }),
+                (0b011, 0b0000001) => Ok(Instruction::Mulhu { rd, rs1, rs2 }),
+                (0b100, 0b0000001) => Ok(Instruction::Div { rd, rs1, rs2 }),
+                (0b101, 0b0000001) => Ok(Instruction::Divu { rd, rs1, rs2 }),
+                (0b110, 0b0000001) => Ok(Instruction::Rem { rd, rs1, rs2 }),
+                (0b111, 0b0000001) => Ok(Instruction::Remu { rd, rs1, rs2 }),
                 _ => Err(illegal),
             }
         }
@@ -169,6 +178,282 @@ fn imm_j(word: Word) -> i32 {
         | (((word >> 12) as i32 & 0xff) << 12)  // bits19:12
         | (((word >> 20) as i32 & 1) << 11)     // bit11
         | (((word >> 21) as i32 & 0x3ff) << 1)  // bits10:1
+}
+
+// =====================================================================
+// RV32C (compressed) decoding
+// =====================================================================
+
+/// 压缩寄存器号：3 位编码映射到 x8..x15。
+#[inline]
+fn creg(n: u8) -> u8 {
+    n + 8
+}
+
+/// c.addi4spn 的 nzuimm（10 位无符号，bits[1:0]=0）。
+#[inline]
+fn c_imm_addi4spn(h: u16) -> u32 {
+    ((h as u32 >> 11) & 0x3) << 4
+        | ((h as u32 >> 7) & 0xf) << 6
+        | ((h as u32 >> 6) & 0x1) << 2
+        | ((h as u32 >> 5) & 0x1) << 3
+}
+
+/// c.lw/c.sw 的 uimm（7 位无符号，bits[1:0]=0）。
+#[inline]
+fn c_imm_lw(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 10) & 0x7) << 3
+        | ((h as u32 >> 6) & 0x1) << 2
+        | ((h as u32 >> 5) & 0x1) << 6;
+    uimm as i32
+}
+
+/// CI 格式 6 位符号扩展立即数（c.addi / c.li / c.slli/srli/srai shamt / c.andi）。
+#[inline]
+fn c_imm_ci(h: u16) -> i32 {
+    let raw = ((h >> 2) & 0x1f) as i32 | (((h >> 12) & 1) as i32) << 5;
+    (raw << 26) >> 26 // 从 bit5 符号扩展
+}
+
+/// c.addi16sp 的符号扩展立即数（10 位，bits[1:0]=0）。
+#[inline]
+fn c_imm_addi16sp(h: u16) -> i32 {
+    let raw = ((h as u32 >> 12) & 0x1) << 9
+        | ((h as u32 >> 6) & 0x1) << 4
+        | ((h as u32 >> 5) & 0x1) << 6
+        | ((h as u32 >> 3) & 0x3) << 7
+        | ((h as u32 >> 2) & 0x1) << 2
+        | ((h as u32 >> 11) & 0x1) << 3
+        | ((h as u32 >> 10) & 0x1) << 5;
+    // 符号扩展从 bit9
+    ((raw as i32) << 22) >> 22
+}
+
+/// c.lui 的立即数（20 位 upper，sign-extended）。
+#[inline]
+fn c_imm_lui(h: u16) -> u32 {
+    let imm20 = (((h as u32 >> 12) & 0x1) << 19) | (((h as u32 >> 2) & 0x1f) << 12);
+    ((imm20 as i32) << 12 >> 12) as u32
+}
+
+/// CJ 格式跳转偏移（c.j / c.jal，12 位符号扩展，bit0=0）。
+#[inline]
+fn c_imm_j(h: u16) -> i32 {
+    let raw = ((h as u32 >> 12) & 0x1) << 11
+        | ((h as u32 >> 11) & 0x1) << 4
+        | ((h as u32 >> 9) & 0x3) << 8
+        | ((h as u32 >> 8) & 0x1) << 10
+        | ((h as u32 >> 7) & 0x1) << 6
+        | ((h as u32 >> 6) & 0x1) << 7
+        | ((h as u32 >> 3) & 0x7) << 1
+        | ((h as u32 >> 2) & 0x1) << 5;
+    ((raw as i32) << 20) >> 20
+}
+
+/// CB 格式分支偏移（c.beqz/c.bnez，9 位符号扩展，bit0=0）。
+#[inline]
+fn c_imm_b(h: u16) -> i32 {
+    let raw = ((h as u32 >> 12) & 0x1) << 8
+        | ((h as u32 >> 10) & 0x3) << 3
+        | ((h as u32 >> 5) & 0x3) << 6
+        | ((h as u32 >> 3) & 0x3) << 1
+        | ((h as u32 >> 2) & 0x1) << 5;
+    ((raw as i32) << 23) >> 23
+}
+
+/// c.lwsp 的 uimm（8 位无符号，bits[1:0]=0）。
+#[inline]
+fn c_imm_lwsp(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 12) & 0x1) << 5
+        | ((h as u32 >> 4) & 0x7) << 2
+        | ((h as u32 >> 2) & 0x3) << 6;
+    uimm as i32
+}
+
+/// c.swsp 的 uimm（8 位无符号，bits[1:0]=0）。
+#[inline]
+fn c_imm_swsp(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 9) & 0xf) << 2
+        | ((h as u32 >> 7) & 0x3) << 6;
+    uimm as i32
+}
+
+/// 解码 16 位压缩指令（RV32C）。
+///
+/// 调用方需保证 `instr_len(half) == 2`（即 bits[1:0] != 11）。
+pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
+    let illegal = DecodeError::Illegal { bits: half as Word, pc };
+    let op = (half & 0b11) as u8;
+    let funct3 = ((half >> 13) & 0b111) as u8;
+
+    match (op, funct3) {
+        // ---- Quadrant 00 (CIW/CL/CSS) ----
+        (0b00, 0b000) => {
+            // c.addi4spn: rd' = bits[4:2], nzuimm from bits[12:5]
+            let rd = creg(((half >> 2) & 0x7) as u8);
+            let imm = c_imm_addi4spn(half);
+            // nzuimm 不能为 0（保留编码）
+            if imm == 0 {
+                return Err(illegal);
+            }
+            Ok(Instruction::CAddi4spn { rd, imm })
+        }
+        (0b00, 0b010) => {
+            // c.lw: rd'=bits[4:2], rs1'=bits[9:7], uimm from bits[12:10|6|5]
+            let rd = creg(((half >> 2) & 0x7) as u8);
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            let imm = c_imm_lw(half);
+            Ok(Instruction::CLw { rd, rs1, imm })
+        }
+        (0b00, 0b110) => {
+            // c.sw: rs1'=bits[4:2], rs2'=bits[9:7], uimm same as c.lw
+            let rs1 = creg(((half >> 2) & 0x7) as u8);
+            let rs2 = creg(((half >> 7) & 0x7) as u8);
+            let imm = c_imm_lw(half);
+            Ok(Instruction::CSw { rs1, rs2, imm })
+        }
+        (0b00, _) => Err(illegal), // 001(flw)/011/101/111 reserved
+
+        // ---- Quadrant 01 ----
+        (0b01, 0b000) => {
+            // c.addi (also c.nop when rd=0, imm=0)
+            let rd = ((half >> 7) & 0x1f) as u8;
+            let imm = c_imm_ci(half);
+            Ok(Instruction::CAddi { rd, imm })
+        }
+        (0b01, 0b001) => {
+            // c.jal
+            let imm = c_imm_j(half);
+            Ok(Instruction::CJal { imm })
+        }
+        (0b01, 0b010) => {
+            // c.li
+            let rd = ((half >> 7) & 0x1f) as u8;
+            let imm = c_imm_ci(half);
+            Ok(Instruction::CLi { rd, imm })
+        }
+        (0b01, 0b011) => {
+            let rd = ((half >> 7) & 0x1f) as u8;
+            if rd == 2 {
+                // c.addi16sp
+                let imm = c_imm_addi16sp(half);
+                Ok(Instruction::CAddi16sp { imm })
+            } else {
+                // c.lui
+                let imm = c_imm_lui(half);
+                if imm == 0 {
+                    return Err(illegal); // 保留编码
+                }
+                Ok(Instruction::CLui { rd, imm })
+            }
+        }
+        (0b01, 0b100) => {
+            // CB / CA 格式
+            let funct2 = (half >> 10) & 0b11;
+            let rd = creg(((half >> 7) & 0x7) as u8);
+            match funct2 {
+                0b00 => {
+                    // c.srli: shamt[5]=bit12, shamt[4:0]=bits[6:2]
+                    let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
+                    Ok(Instruction::CSrli { rd, shamt })
+                }
+                0b01 => {
+                    // c.srai
+                    let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
+                    Ok(Instruction::CSrai { rd, shamt })
+                }
+                0b10 => {
+                    // c.andi
+                    let imm = c_imm_ci(half);
+                    Ok(Instruction::CAndi { rd, imm })
+                }
+                0b11 => {
+                    // CA: c.sub / c.xor / c.or / c.and
+                    let funct2_sub = (half >> 5) & 0b11;
+                    let rs2 = creg(((half >> 2) & 0x7) as u8);
+                    match funct2_sub {
+                        0b00 => Ok(Instruction::CSub { rd, rs2 }),
+                        0b01 => Ok(Instruction::CXor { rd, rs2 }),
+                        0b10 => Ok(Instruction::COr { rd, rs2 }),
+                        0b11 => Ok(Instruction::CAnd { rd, rs2 }),
+                        _ => unreachable!(),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        (0b01, 0b101) => {
+            // c.j
+            let imm = c_imm_j(half);
+            Ok(Instruction::CJ { imm })
+        }
+        (0b01, 0b110) => {
+            // c.beqz
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            let imm = c_imm_b(half);
+            Ok(Instruction::CBeqz { rs1, imm })
+        }
+        (0b01, 0b111) => {
+            // c.bnez
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            let imm = c_imm_b(half);
+            Ok(Instruction::CBnez { rs1, imm })
+        }
+
+        // ---- Quadrant 10 ----
+        (0b10, 0b000) => {
+            // c.slli: rd=bits[11:7], shamt[5]=bit12, shamt[4:0]=bits[6:2]
+            let rd = ((half >> 7) & 0x1f) as u8;
+            let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
+            Ok(Instruction::CSlli { rd, shamt })
+        }
+        (0b10, 0b010) => {
+            // c.lwsp: rd=bits[11:7], uimm from bits[12|6:4|3:2]
+            let rd = ((half >> 7) & 0x1f) as u8;
+            let imm = c_imm_lwsp(half);
+            Ok(Instruction::CLwsp { rd, imm })
+        }
+        (0b10, 0b100) => {
+            // CR 格式
+            let rs1 = ((half >> 7) & 0x1f) as u8;
+            let rs2 = ((half >> 2) & 0x1f) as u8;
+            let bit12 = (half >> 12) & 0x1;
+            if bit12 == 0 {
+                if rs2 == 0 {
+                    // c.jr
+                    Ok(Instruction::CJr { rs1 })
+                } else {
+                    // c.mv
+                    Ok(Instruction::CMv { rd: rs1, rs2 })
+                }
+            } else {
+                if rs2 == 0 {
+                    if rs1 == 0 {
+                        // c.ebreak
+                        Ok(Instruction::CEbreak)
+                    } else {
+                        // c.jalr
+                        Ok(Instruction::CJalr { rs1 })
+                    }
+                } else {
+                    // c.add
+                    Ok(Instruction::CAdd { rd: rs1, rs2 })
+                }
+            }
+        }
+        (0b10, 0b110) => {
+            // c.swsp: rs2=bits[6:2], uimm from bits[12:9|8:7]
+            let rs2 = ((half >> 2) & 0x1f) as u8;
+            let imm = c_imm_swsp(half);
+            Ok(Instruction::CSwsp { rs2, imm })
+        }
+        (0b10, _) => Err(illegal), // 001(flwsp)/011/101/111 reserved
+
+        // op=11 是 32 位指令，不应进入 decode16
+        (0b11, _) => Err(illegal),
+        // op=4..=255 不可能出现（op 只有 2 位），但需穷尽 u8
+        _ => Err(illegal),
+    }
 }
 
 #[cfg(test)]
@@ -322,7 +607,129 @@ mod tests {
         assert!(decode32(b_enc(0b010, 1, 2, 0), PC).is_err());
         // store funct3=011 非法
         assert!(decode32(s_enc(0b011, 1, 2, 0), PC).is_err());
-        // OP funct7=1 非法（M 扩展在 M2）
-        assert!(decode32(r_enc(1, 0b000, 2, 3, 0b0000001), PC).is_err());
+        // OP funct7=0000010 非法
+        assert!(decode32(r_enc(1, 0b000, 2, 3, 0b0000010), PC).is_err());
+    }
+
+    #[test]
+    fn decode_m_extension() {
+        let m = |f3: u32| r_enc(3, f3, 1, 2, 0b0000001);
+        assert_eq!(decode32(m(0b000), PC), Ok(Instruction::Mul { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b001), PC), Ok(Instruction::Mulh { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b010), PC), Ok(Instruction::Mulhsu { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b011), PC), Ok(Instruction::Mulhu { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b100), PC), Ok(Instruction::Div { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b101), PC), Ok(Instruction::Divu { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b110), PC), Ok(Instruction::Rem { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(m(0b111), PC), Ok(Instruction::Remu { rd: 3, rs1: 1, rs2: 2 }));
+    }
+
+    // ---- C extension tests ----
+
+    fn ciw_enc(rd_prime: u8, nzuimm: u32) -> u16 {
+        // c.addi4spn: funct3=000, op=00
+        // nzuimm[5:4]=bits[12:11], nzuimm[9:6]=bits[10:7], nzuimm[2]=bit6, nzuimm[3]=bit5
+        let b12_11 = (nzuimm >> 4) & 0x3;
+        let b10_7 = (nzuimm >> 6) & 0xf;
+        let b6 = (nzuimm >> 2) & 0x1;
+        let b5 = (nzuimm >> 3) & 0x1;
+        (b12_11 << 11) as u16 | (b10_7 << 7) as u16 | (b6 << 6) as u16 | (b5 << 5) as u16 | (u16::from(rd_prime) << 2)
+    }
+
+    #[test]
+    fn decode_c_addi4spn() {
+        // c.addi4spn x8(x0'), 4  → rd'=0 → x8, nzuimm=4
+        let h = ciw_enc(0, 4);
+        assert_eq!(decode16(h, PC), Ok(Instruction::CAddi4spn { rd: 8, imm: 4 }));
+        // nzuimm=0 非法
+        assert!(decode16(ciw_enc(0, 0), PC).is_err());
+    }
+
+    #[test]
+    fn decode_c_lw_sw() {
+        // c.lw x8, 0(x8): rd'=0, rs1'=0, uimm=0
+        let lw = 0b010u16 << 13; // funct3=010, op=00
+        assert_eq!(decode16(lw, PC), Ok(Instruction::CLw { rd: 8, rs1: 8, imm: 0 }));
+        // c.sw x9, 4(x8): rs1'=0, rs2'=1, uimm=4
+        // uimm[5:3]=bits[12:10]=0, uimm[2]=bit6=1, uimm[6]=bit5=0 → uimm=4
+        let sw = (0b110u16 << 13) | (1 << 7) | (1 << 6); // funct3=110, rs2'=1 (bits[9:7]), bit6=1
+        assert_eq!(decode16(sw, PC), Ok(Instruction::CSw { rs1: 8, rs2: 9, imm: 4 }));
+    }
+
+    #[test]
+    fn decode_c_addi() {
+        // c.addi x1, 5: rd=1, imm=5
+        // CI: imm[5]=bit12, imm[4:0]=bits[6:2]
+        let h = (0b000u16 << 13) | (1 << 7) | (5 << 2) | 0b01; // funct3=000, op=01
+        assert_eq!(decode16(h, PC), Ok(Instruction::CAddi { rd: 1, imm: 5 }));
+        // c.nop: rd=0, imm=0
+        let nop = (0b000u16 << 13) | 0b01;
+        assert_eq!(decode16(nop, PC), Ok(Instruction::CAddi { rd: 0, imm: 0 }));
+    }
+
+    #[test]
+    fn decode_c_li() {
+        // c.li x5, -1: rd=5, imm=-1 → imm[5]=1, imm[4:0]=0x1f
+        let h = (0b010u16 << 13) | (1 << 12) | (5 << 7) | (0x1f << 2) | 0b01;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLi { rd: 5, imm: -1 }));
+    }
+
+    #[test]
+    fn decode_c_j_jal() {
+        // c.jal 0: imm=0
+        let jal = (0b001u16 << 13) | 0b01;
+        assert_eq!(decode16(jal, PC), Ok(Instruction::CJal { imm: 0 }));
+        // c.j 0
+        let j = (0b101u16 << 13) | 0b01;
+        assert_eq!(decode16(j, PC), Ok(Instruction::CJ { imm: 0 }));
+    }
+
+    #[test]
+    fn decode_c_slli() {
+        // c.slli x1, 3: rd=1, shamt=3
+        let h = (0b000u16 << 13) | (1 << 7) | (3 << 2) | 0b10;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CSlli { rd: 1, shamt: 3 }));
+    }
+
+    #[test]
+    fn decode_c_mv_add_jr_jalr_ebreak() {
+        // c.mv x1, x2: rs1=1, rs2=2, bit12=0, op=10, funct3=100
+        let mv = (0b100u16 << 13) | (1 << 7) | (2 << 2) | 0b10;
+        assert_eq!(decode16(mv, PC), Ok(Instruction::CMv { rd: 1, rs2: 2 }));
+        // c.add x1, x2: bit12=1
+        let add = (0b100u16 << 13) | (1 << 12) | (1 << 7) | (2 << 2) | 0b10;
+        assert_eq!(decode16(add, PC), Ok(Instruction::CAdd { rd: 1, rs2: 2 }));
+        // c.jr x1: rs2=0
+        let jr = (0b100u16 << 13) | (1 << 7) | 0b10;
+        assert_eq!(decode16(jr, PC), Ok(Instruction::CJr { rs1: 1 }));
+        // c.jalr x1: bit12=1, rs2=0
+        let jalr = (0b100u16 << 13) | (1 << 12) | (1 << 7) | 0b10;
+        assert_eq!(decode16(jalr, PC), Ok(Instruction::CJalr { rs1: 1 }));
+        // c.ebreak: rs1=0, rs2=0, bit12=1
+        let ebreak = (0b100u16 << 13) | (1 << 12) | 0b10;
+        assert_eq!(decode16(ebreak, PC), Ok(Instruction::CEbreak));
+    }
+
+    #[test]
+    fn decode_c_lwsp_swsp() {
+        // c.lwsp x1, 0: rd=1, uimm=0, funct3=010, op=10
+        let lwsp = (0b010u16 << 13) | (1 << 7) | 0b10;
+        assert_eq!(decode16(lwsp, PC), Ok(Instruction::CLwsp { rd: 1, imm: 0 }));
+        // c.swsp x1, 0: rs2=1, funct3=110, op=10
+        let swsp = (0b110u16 << 13) | (1 << 2) | 0b10;
+        assert_eq!(decode16(swsp, PC), Ok(Instruction::CSwsp { rs2: 1, imm: 0 }));
+    }
+
+    #[test]
+    fn decode_c_alu() {
+        // c.srli x8, 1: rd'=0(x8), shamt=1, funct3=100, funct2=00, op=01
+        let srli = (0b100u16 << 13) | (1 << 2) | 0b01;
+        assert_eq!(decode16(srli, PC), Ok(Instruction::CSrli { rd: 8, shamt: 1 }));
+        // c.sub x8, x9: rd'=0, rs2'=1, funct2=11, funct2_sub=00
+        let sub = (0b100u16 << 13) | (0b11 << 10) | (1 << 2) | 0b01;
+        assert_eq!(decode16(sub, PC), Ok(Instruction::CSub { rd: 8, rs2: 9 }));
+        // c.xor x8, x9: funct2_sub=01
+        let xor = (0b100u16 << 13) | (0b11 << 10) | (0b01 << 5) | (1 << 2) | 0b01;
+        assert_eq!(decode16(xor, PC), Ok(Instruction::CXor { rd: 8, rs2: 9 }));
     }
 }

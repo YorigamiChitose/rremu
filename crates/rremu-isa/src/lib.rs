@@ -268,13 +268,13 @@ impl core::fmt::Display for Instruction {
             Instruction::CBeqz { rs1, imm } => write!(f, "c.beqz {}, {imm}", reg_name(rs1)),
             Instruction::CBnez { rs1, imm } => write!(f, "c.bnez {}, {imm}", reg_name(rs1)),
             Instruction::CSlli { rd, shamt } => write!(f, "c.slli {}, {shamt}", reg_name(rd)),
-            Instruction::CLwsp { rd, imm } => write!(f, "c.lwsp {}, {}({})", reg_name(rd), imm, "sp"),
+            Instruction::CLwsp { rd, imm } => write!(f, "c.lwsp {}, {}(sp)", reg_name(rd), imm),
             Instruction::CJr { rs1 } => write!(f, "c.jr {}", reg_name(rs1)),
             Instruction::CMv { rd, rs2 } => write!(f, "c.mv {}, {}", reg_name(rd), reg_name(rs2)),
             Instruction::CEbreak => write!(f, "c.ebreak"),
             Instruction::CJalr { rs1 } => write!(f, "c.jalr {}", reg_name(rs1)),
             Instruction::CAdd { rd, rs2 } => write!(f, "c.add {}, {}", reg_name(rd), reg_name(rs2)),
-            Instruction::CSwsp { rs2, imm } => write!(f, "c.swsp {}, {}({})", reg_name(rs2), imm, "sp"),
+            Instruction::CSwsp { rs2, imm } => write!(f, "c.swsp {}, {}(sp)", reg_name(rs2), imm),
         }
     }
 }
