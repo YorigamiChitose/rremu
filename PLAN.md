@@ -379,7 +379,7 @@ pub struct Args {
 | M1 | thiserror | 2.0 | 默认 | bus/decode/cpu/loader/machine |
 | M1 | tracing | 0.1 | 默认 | 全部库 crate |
 | M1 | tracing-subscriber | 0.3 | env-filter, fmt | bin |
-| M1 | goblin | 0.10 | default-features=false; elf32, endian_fd | loader |
+| M1 | goblin | 0.10 | default-features=false; elf32, elf64*, endian_fd | loader |
 | M1 | anyhow | 1.0 | 默认 | bin |
 | M1 | clap | 4.6 | derive | bin 独占 |
 | M1 | rustyline | 18 | 默认 | cli |
@@ -387,6 +387,8 @@ pub struct Args {
 | M4 | ratatui | 0.30 | 默认 | tui |
 | M4 | crossterm | 0.29 | 默认 | tui |
 | M5 | minifb | 0.29 | 默认 | window |
+
+\* goblin 0.10.x 上游缺陷：仅开 elf32 无法编译（0.10.7 实测），故同时启用 elf64；解析路径仍只走 elf32。
 
 **显式排除**：object（goblin 足够）、libc（ctrlc 封装）、env_logger/log（统一 tracing）、第三方反汇编库。测试零外部依赖。
 

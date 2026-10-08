@@ -1,0 +1,16 @@
+[package]
+name = "rremu-machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rremu-cpu.workspace = true
+rremu-bus.workspace = true
+rremu-devices.workspace = true
+rremu-loader.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

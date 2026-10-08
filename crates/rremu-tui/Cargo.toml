@@ -1,0 +1,10 @@
+[package]
+name = "rremu-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# ratatui/crossterm 按 PLAN §9 于 M4 引入，M1 保持零依赖占位
+
+[lints]
+workspace = true

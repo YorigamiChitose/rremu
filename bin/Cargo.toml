@@ -1,0 +1,14 @@
+[package]
+name = "rremu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "rremu"
+path = "src/main.rs"
+
+# clap/anyhow/ctrlc/tracing-subscriber 于 M1.11 接入，当前为最小骨架
+
+[lints]
+workspace = true

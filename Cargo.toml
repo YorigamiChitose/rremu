@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rremu-isa",
+    "crates/rremu-decode",
+    "crates/rremu-bus",
+    "crates/rremu-cpu",
+    "crates/rremu-devices",
+    "crates/rremu-loader",
+    "crates/rremu-expr",
+    "crates/rremu-machine",
+    "crates/rremu-cli",
+    "crates/rremu-tui",
+    "crates/rremu-window",
+    "bin",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+# 内部 crate 统一走 path 依赖，成员一律 workspace = true 引用
+[workspace.dependencies]
+rremu-isa = { path = "crates/rremu-isa" }
+rremu-decode = { path = "crates/rremu-decode" }
+rremu-bus = { path = "crates/rremu-bus" }
+rremu-cpu = { path = "crates/rremu-cpu" }
+rremu-devices = { path = "crates/rremu-devices" }
+rremu-loader = { path = "crates/rremu-loader" }
+rremu-expr = { path = "crates/rremu-expr" }
+rremu-machine = { path = "crates/rremu-machine" }
+rremu-cli = { path = "crates/rremu-cli" }
+rremu-tui = { path = "crates/rremu-tui" }
+rremu-window = { path = "crates/rremu-window" }
+
+# 外部依赖（PLAN §9，M1 阶段）
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# 注：goblin 0.10.x 仅开 elf32 会编译失败（上游缺陷），需同时启用 elf64（解析仍只走 elf32 路径）
+goblin = { version = "0.10", default-features = false, features = ["elf32", "elf64", "endian_fd"] }
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+rustyline = "18"
+ctrlc = "3.5"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
