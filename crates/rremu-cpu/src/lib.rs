@@ -411,7 +411,14 @@ impl Cpu {
                 set!(rd, old);
             }
             Instruction::Mret => {
-                let mpp = (self.csr.mstatus >> csr::MSTATUS_MPP_SHIFT) & 0b11;
+                let mstatus = self.csr.mstatus;
+                let mpp = (mstatus >> csr::MSTATUS_MPP_SHIFT) & 0b11;
+                let mpie = (mstatus >> csr::MSTATUS_MPIE.trailing_zeros()) & 1;
+                // MIE = MPIE, MPIE = 1, MPP = 0 (U-mode)
+                let mut new_mstatus =
+                    mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
+                new_mstatus |= (mpie << csr::MSTATUS_MIE.trailing_zeros()) | csr::MSTATUS_MPIE;
+                self.csr.mstatus = new_mstatus;
                 self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
                 next_pc = self.csr.mepc;
             }
@@ -513,6 +520,19 @@ impl Cpu {
         sink.emit(EmuEvent::Trap { cause, pc: self.pc });
         self.csr.mepc = self.pc;
         self.csr.mcause = cause;
+
+        // 更新 mstatus: MPP = 当前特权级, MPIE = 旧 MIE, MIE = 0
+        let mpp = match self.priv_ {
+            Priv::Machine => 0b11,
+            Priv::User => 0b00,
+        };
+        let old_mie = (self.csr.mstatus >> csr::MSTATUS_MIE.trailing_zeros()) & 1;
+        let mut mstatus =
+            self.csr.mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
+        mstatus |= (mpp << csr::MSTATUS_MPP_SHIFT)
+            | (old_mie << csr::MSTATUS_MPIE.trailing_zeros());
+        self.csr.mstatus = mstatus;
+
         self.priv_ = Priv::Machine;
         self.cycle += 1;
         if self.csr.mtvec & 1 == 1 {
@@ -799,6 +819,43 @@ mod tests {
         h.load(BASE, &[i_enc(LOAD, 5, 0b010, 0, 0)]);
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::LOAD_ACCESS_FAULT });
+    }
+
+    #[test]
+    fn trap_updates_mstatus_mpp_mpie_mie() {
+        // 预置 mstatus.MIE=1，trap 后 MPP=M、MPIE=旧MIE、MIE=0
+        let mut h = Harness::new();
+        let pre = (csr::MSTATUS_MPP_M | csr::MSTATUS_MIE) as i32;
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, pre),                    // x5 = mstatus
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSTATUS as i32), // csrrw x0, mstatus, x5
+            i_enc(0b1110011, 0, 0b000, 0, 0),                   // ecall
+        ]);
+        h.run(2);
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_M }));
+        let ms = h.cpu.csr_state().mstatus;
+        assert_eq!((ms >> csr::MSTATUS_MPP_SHIFT) & 0b11, 0b11);
+        assert_eq!((ms >> csr::MSTATUS_MPIE.trailing_zeros()) & 1, 1);
+        assert_eq!((ms >> csr::MSTATUS_MIE.trailing_zeros()) & 1, 0);
+    }
+
+    #[test]
+    fn mret_restores_mstatus_mie_mpie_mpp() {
+        // 预置 mstatus: MPP=M, MPIE=1, MIE=0；mret 后 MIE=MPIE, MPIE=1, MPP=0
+        let mut h = Harness::new();
+        let pre = (csr::MSTATUS_MPP_M | csr::MSTATUS_MPIE) as i32;
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, pre),                    // x5 = mstatus
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSTATUS as i32), // csrrw x0, mstatus, x5
+            i_enc(0b1110011, 0, 0, 0, 0x302),                   // mret
+        ]);
+        h.run(2);
+        h.step();
+        let ms = h.cpu.csr_state().mstatus;
+        assert_eq!((ms >> csr::MSTATUS_MIE.trailing_zeros()) & 1, 1);
+        assert_eq!((ms >> csr::MSTATUS_MPIE.trailing_zeros()) & 1, 1);
+        assert_eq!((ms >> csr::MSTATUS_MPP_SHIFT) & 0b11, 0b00);
     }
 
     #[test]
