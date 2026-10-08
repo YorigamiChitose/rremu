@@ -71,6 +71,15 @@ pub enum Instruction {
     Sra { rd: u8, rs1: u8, rs2: u8 },
     Or { rd: u8, rs1: u8, rs2: u8 },
     And { rd: u8, rs1: u8, rs2: u8 },
+    // ---- M extension (RV32M) ----
+    Mul { rd: u8, rs1: u8, rs2: u8 },
+    Mulh { rd: u8, rs1: u8, rs2: u8 },
+    Mulhsu { rd: u8, rs1: u8, rs2: u8 },
+    Mulhu { rd: u8, rs1: u8, rs2: u8 },
+    Div { rd: u8, rs1: u8, rs2: u8 },
+    Divu { rd: u8, rs1: u8, rs2: u8 },
+    Rem { rd: u8, rs1: u8, rs2: u8 },
+    Remu { rd: u8, rs1: u8, rs2: u8 },
     // ---- misc / system ----
     Fence,
     Ecall,
@@ -194,6 +203,14 @@ impl core::fmt::Display for Instruction {
             Instruction::And { rd, rs1, rs2 } => {
                 write!(f, "and {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2))
             }
+            Instruction::Mul { rd, rs1, rs2 } => write!(f, "mul {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Mulh { rd, rs1, rs2 } => write!(f, "mulh {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Mulhsu { rd, rs1, rs2 } => write!(f, "mulhsu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Mulhu { rd, rs1, rs2 } => write!(f, "mulhu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Div { rd, rs1, rs2 } => write!(f, "div {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Divu { rd, rs1, rs2 } => write!(f, "divu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Rem { rd, rs1, rs2 } => write!(f, "rem {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::Remu { rd, rs1, rs2 } => write!(f, "remu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
             Instruction::Fence => write!(f, "fence"),
             Instruction::Ecall => write!(f, "ecall"),
             Instruction::Ebreak => write!(f, "ebreak"),
@@ -318,6 +335,18 @@ mod tests {
         assert_eq!(Instruction::Ecall.to_string(), "ecall");
         assert_eq!(Instruction::Ebreak.to_string(), "ebreak");
         assert_eq!(Instruction::Fence.to_string(), "fence");
+    }
+
+    #[test]
+    fn display_m_extension() {
+        assert_eq!(Instruction::Mul { rd: 10, rs1: 11, rs2: 12 }.to_string(), "mul a0, a1, a2");
+        assert_eq!(Instruction::Mulh { rd: 10, rs1: 11, rs2: 12 }.to_string(), "mulh a0, a1, a2");
+        assert_eq!(Instruction::Mulhsu { rd: 10, rs1: 11, rs2: 12 }.to_string(), "mulhsu a0, a1, a2");
+        assert_eq!(Instruction::Mulhu { rd: 10, rs1: 11, rs2: 12 }.to_string(), "mulhu a0, a1, a2");
+        assert_eq!(Instruction::Div { rd: 10, rs1: 11, rs2: 12 }.to_string(), "div a0, a1, a2");
+        assert_eq!(Instruction::Divu { rd: 10, rs1: 11, rs2: 12 }.to_string(), "divu a0, a1, a2");
+        assert_eq!(Instruction::Rem { rd: 10, rs1: 11, rs2: 12 }.to_string(), "rem a0, a1, a2");
+        assert_eq!(Instruction::Remu { rd: 10, rs1: 11, rs2: 12 }.to_string(), "remu a0, a1, a2");
     }
 
     #[test]
