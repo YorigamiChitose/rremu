@@ -63,6 +63,7 @@ impl BusDevice for Ram {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
 

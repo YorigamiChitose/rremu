@@ -166,6 +166,7 @@ fn imm_j(word: Word) -> i32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
 
@@ -212,8 +213,8 @@ mod tests {
 
     #[test]
     fn decode_u_type() {
-        assert_eq!(decode32(u_enc(0b0110111, 10, 0x12345), PC), Ok(Instruction::Lui { rd: 10, imm: 0x12345_000 }));
-        assert_eq!(decode32(u_enc(0b0010111, 2, 0xfffff), PC), Ok(Instruction::Auipc { rd: 2, imm: 0xfffff_000 }));
+        assert_eq!(decode32(u_enc(0b0110111, 10, 0x12345), PC), Ok(Instruction::Lui { rd: 10, imm: 0x1234_5000 }));
+        assert_eq!(decode32(u_enc(0b0010111, 2, 0xfffff), PC), Ok(Instruction::Auipc { rd: 2, imm: 0xffff_f000 }));
     }
 
     #[test]

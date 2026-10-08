@@ -345,10 +345,12 @@ struct TrapErr {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
     use core::any::Any;
     use rremu_bus::{BusDevice, BusRouter};
+    use rremu_isa::Word;
 
     /// 测试 RAM（带 tohost 地址返回，供断言用）。
     struct MockRam {
@@ -427,9 +429,6 @@ mod tests {
             }
             self.bus.write_bytes(addr, &bytes).unwrap();
         }
-        fn load_bytes(&mut self, addr: u32, bytes: &[u8]) {
-            self.bus.write_bytes(addr, bytes).unwrap();
-        }
         fn step(&mut self) -> StepOutcome {
             self.cpu.step(&mut self.bus, &mut self.sink).unwrap()
         }
@@ -470,7 +469,6 @@ mod tests {
     }
 
     const OP_IMM: u32 = 0b0010011;
-    const OP: u32 = 0b0110011;
     const LOAD: u32 = 0b0000011;
 
     #[test]
@@ -488,8 +486,8 @@ mod tests {
         let mut h = Harness::new();
         h.load(BASE, &[u_enc(0b0110111, 10, 0x12345), i_enc(OP_IMM, 11, 0b000, 10, -4)]);
         h.run(2);
-        assert_eq!(h.cpu.reg(10), 0x12345_000);
-        assert_eq!(h.cpu.reg(11), 0x12344_ffc);
+        assert_eq!(h.cpu.reg(10), 0x1234_5000);
+        assert_eq!(h.cpu.reg(11), 0x1234_4ffc);
         assert_eq!(h.cpu.cycle(), 2);
         assert_eq!(h.cpu.instret(), 2);
     }

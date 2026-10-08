@@ -69,6 +69,7 @@ pub fn load_elf(bytes: &[u8]) -> Result<Image, LoaderError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
 

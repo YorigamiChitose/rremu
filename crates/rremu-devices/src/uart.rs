@@ -96,6 +96,7 @@ impl BusDevice for Uart {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
 
@@ -113,8 +114,8 @@ mod tests {
     fn thr_write_emits_uart_output() {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
-        uart.write(BASE + 0, AccessSize::Byte, b'h' as u32, &mut sink).unwrap();
-        uart.write(BASE + 0, AccessSize::Word, b'i' as u32, &mut sink).unwrap();
+        uart.write(BASE, AccessSize::Byte, b'h' as u32, &mut sink).unwrap();
+        uart.write(BASE, AccessSize::Word, b'i' as u32, &mut sink).unwrap();
         assert_eq!(sink.0.len(), 2);
         assert!(matches!(sink.0[0], EmuEvent::UartOutput { byte: b'h' }));
         assert!(matches!(sink.0[1], EmuEvent::UartOutput { byte: b'i' }));
@@ -127,15 +128,15 @@ mod tests {
         // 空闲：LSR = 0x60
         assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
         // 空读 RDR 返回 0，且无事件
-        assert_eq!(uart.read(BASE + 0, AccessSize::Byte, &mut sink).unwrap(), 0);
+        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), 0);
         assert!(sink.0.is_empty());
         // 注入输入：LSR bit0 置位
         uart.push_input(b'A');
         uart.push_input(b'B');
         assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x61);
         // 读 RDR 按序弹出
-        assert_eq!(uart.read(BASE + 0, AccessSize::Byte, &mut sink).unwrap(), b'A' as u32);
-        assert_eq!(uart.read(BASE + 0, AccessSize::Byte, &mut sink).unwrap(), b'B' as u32);
+        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'A' as u32);
+        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'B' as u32);
         // 弹空后 LSR 回 0x60
         assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
     }
@@ -146,11 +147,11 @@ mod tests {
         let mut sink = Collector::default();
         uart.push_input(b'X');
         // peek 不消耗
-        assert_eq!(uart.peek_read(BASE + 0, AccessSize::Byte).unwrap(), b'X' as u32);
-        assert_eq!(uart.peek_read(BASE + 0, AccessSize::Byte).unwrap(), b'X' as u32);
+        assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), b'X' as u32);
+        assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), b'X' as u32);
         // 真读弹出一个
-        assert_eq!(uart.read(BASE + 0, AccessSize::Byte, &mut sink).unwrap(), b'X' as u32);
-        assert_eq!(uart.peek_read(BASE + 0, AccessSize::Byte).unwrap(), 0);
+        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'X' as u32);
+        assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), 0);
     }
 
     #[test]
