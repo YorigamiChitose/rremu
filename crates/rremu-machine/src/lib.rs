@@ -1,6 +1,6 @@
 //! rremu-machine：Machine/Builder/快照/控制 —— 前端（cli/tui/window）唯一入口。
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rremu_bus::{AccessSize, Bus, BusError, BusRouter, EmuEvent, EventSink};
@@ -25,12 +25,22 @@ pub enum RunState {
     Trapped(u32),
 }
 
-/// 运行控制结果（断点/监视点变体在 M2 扩展）。
+/// 运行控制结果（含断点/监视点命中）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunResult {
     Exited { code: i32 },
     Trapped { cause: u32 },
     Paused,
+    HitBreakpoint { addr: u32 },
+    HitWatchpoint { id: usize, addr: u32, old: u32, new: u32 },
+}
+
+/// 监视点：跟踪某地址表达式的值变化。
+#[derive(Debug, Clone)]
+pub struct Watchpoint {
+    pub id: usize,
+    pub expr: Expr,
+    pub last_value: u32,
 }
 
 #[derive(Debug, Error)]
@@ -242,6 +252,9 @@ impl MachineBuilder {
             state: RunState::Idle,
             last_instr: None,
             uart_in_len: 0,
+            breakpoints: BTreeSet::new(),
+            watchpoints: Vec::new(),
+            next_wp_id: 1,
         })
     }
 }
@@ -259,6 +272,9 @@ pub struct Machine {
     last_instr: Option<(u32, Instruction)>,
     /// UART 输入 FIFO 待读字节数（push 时 +1；每步后经 LSR peek 校正）
     uart_in_len: usize,
+    breakpoints: BTreeSet<u32>,
+    watchpoints: Vec<Watchpoint>,
+    next_wp_id: usize,
 }
 
 impl Machine {
@@ -276,7 +292,7 @@ impl Machine {
 
     /// 全速运行；pause 置位后停止（Ctrl+C 由前端控制）。
     /// 非致命陷入（ecall/ebreak 等）已被 CPU 重定向至 mtvec，run 不停止；
-    /// 仅 Halt（tohost）或 pause 置位时返回。
+    /// 仅 Halt、断点/监视点命中或 pause 置位时返回。
     pub fn run(&mut self, pause: &AtomicBool) -> RunResult {
         self.state = RunState::Running;
         loop {
@@ -285,10 +301,13 @@ impl Machine {
                 return RunResult::Paused;
             }
             match self.step_once() {
-                // 仅 Halt 终止 run；Trapped 已重定向 pc=mtvec，继续执行陷入向量
                 Some(RunResult::Exited { code }) => {
                     self.state = RunState::Exited(code);
                     return RunResult::Exited { code };
+                }
+                Some(rr @ (RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. })) => {
+                    self.state = RunState::Paused;
+                    return rr;
                 }
                 Some(RunResult::Trapped { .. }) | Some(RunResult::Paused) | None => {}
             }
@@ -296,12 +315,19 @@ impl Machine {
     }
 
     /// 执行一条指令；需要停止时返回 Some(RunResult)。
+    /// 断点在取指前检查（命中则不执行该指令）；监视点在执行后检查。
     /// 注意：陷入（ecall/ebreak/misaligned）是非致命的 —— CPU 已将 pc 重定向
     /// 至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持 Running，
     /// 以便前端可继续 c/si；RunResult::Trapped 仅供 si 单步时报告。
     fn step_once(&mut self) -> Option<RunResult> {
         self.bus.set_cycle(self.cpu.cycle());
         let pc_before = self.cpu.pc();
+
+        // 断点：命中则不执行，直接返回
+        if self.breakpoints.contains(&pc_before) {
+            return Some(RunResult::HitBreakpoint { addr: pc_before });
+        }
+
         match self.cpu.step(&mut self.bus, &mut self.collector) {
             Ok(StepOutcome::Executed { instr, .. }) => {
                 self.last_instr = Some((pc_before, instr));
@@ -310,7 +336,8 @@ impl Machine {
                     self.state = RunState::Exited(code);
                     return Some(RunResult::Exited { code });
                 }
-                None
+                // 监视点：检查每个被跟踪地址的值是否变化
+                self.check_watchpoints()
             }
             Ok(StepOutcome::Trapped { cause }) => Some(RunResult::Trapped { cause }),
             Err(e) => {
@@ -321,6 +348,69 @@ impl Machine {
             }
         }
     }
+
+    /// 检查所有监视点：求值表达式得到地址，peek 当前值，与上次比较。
+    /// 命中则返回 HitWatchpoint 并更新 last_value；否则返回 None。
+    fn check_watchpoints(&mut self) -> Option<RunResult> {
+        for i in 0..self.watchpoints.len() {
+            let expr = self.watchpoints[i].expr.clone();
+            let last_value = self.watchpoints[i].last_value;
+            let id = self.watchpoints[i].id;
+            let addr = match self.eval(&expr) {
+                Ok(a) => a,
+                Err(_) => continue,
+            };
+            let cur = match self.bus.peek(addr, AccessSize::Word) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if cur != last_value {
+                self.watchpoints[i].last_value = cur;
+                return Some(RunResult::HitWatchpoint { id, addr, old: last_value, new: cur });
+            }
+        }
+        None
+    }
+
+    /// 添加断点；返回是否为新增。
+    pub fn add_breakpoint(&mut self, addr: u32) -> bool {
+        self.breakpoints.insert(addr)
+    }
+
+    /// 移除断点；返回是否存在。
+    pub fn remove_breakpoint(&mut self, addr: u32) -> bool {
+        self.breakpoints.remove(&addr)
+    }
+
+    pub fn breakpoints(&self) -> &BTreeSet<u32> {
+        &self.breakpoints
+    }
+
+    /// 添加监视点，返回分配的 id（从 1 开始）。
+    pub fn add_watchpoint(&mut self, expr: Expr) -> usize {
+        let id = self.next_wp_id;
+        self.next_wp_id += 1;
+        // 求值得到初始地址与值
+        let last_value = self
+            .eval(&expr)
+            .ok()
+            .and_then(|a| self.bus.peek(a, AccessSize::Word).ok())
+            .unwrap_or(0);
+        self.watchpoints.push(Watchpoint { id, expr, last_value });
+        id
+    }
+
+    /// 按 id 移除监视点；返回是否存在。
+    pub fn remove_watchpoint(&mut self, id: usize) -> bool {
+        let before = self.watchpoints.len();
+        self.watchpoints.retain(|w| w.id != id);
+        self.watchpoints.len() != before
+    }
+
+    pub fn watchpoints(&self) -> &[Watchpoint] {
+        &self.watchpoints
+    }
+
 
     /// 经无副作用 LSR 读校正输入 FIFO 计数（0 或 1）。
     fn sync_uart_in_len(&mut self) {
@@ -520,6 +610,21 @@ mod tests {
         // peek 不影响执行流
         assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
         assert_eq!(m.peek(tohost).unwrap(), 1);
+    }
+
+    #[test]
+    fn breakpoint_stops_run_before_instruction() {
+        let mut m = hello_machine();
+        // hello.S 第 3 条指令在 0x80000008（auipc）
+        m.add_breakpoint(0x8000_0008);
+        let pause = AtomicBool::new(false);
+        let rr = m.run(&pause);
+        assert_eq!(rr, RunResult::HitBreakpoint { addr: 0x8000_0008 });
+        // 断点命中时该指令尚未执行，pc 仍为断点地址
+        assert_eq!(m.snapshot().pc, 0x8000_0008);
+        // 移除断点后可继续跑完
+        m.remove_breakpoint(0x8000_0008);
+        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
     }
 
     #[test]

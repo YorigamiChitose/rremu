@@ -101,6 +101,13 @@ impl Repl {
                 self.cmd_info_regs();
                 Outcome::Continue
             }
+            Command::Breakpoint(expr) => self.cmd_breakpoint(&expr),
+            Command::Watchpoint(expr) => self.cmd_watchpoint(&expr),
+            Command::Delete(n) => self.cmd_delete(n),
+            Command::InfoWatchpoints => {
+                self.cmd_info_watchpoints();
+                Outcome::Continue
+            }
             Command::Quit => Outcome::Quit,
         }
     }
@@ -108,11 +115,15 @@ impl Repl {
     fn print_help(&self) {
         println!("Available commands:");
         println!("  help          Show this help");
-        println!("  c             Continue execution (stops on exit/trap/Ctrl+C)");
+        println!("  c             Continue execution (stops on exit/trap/breakpoint/Ctrl+C)");
         println!("  si [N]        Step N instructions (default 1)");
         println!("  x N ADDR      Examine N words at ADDR (peek, no side effects)");
         println!("  p EXPR        Evaluate and print expression");
+        println!("  b EXPR        Set breakpoint at address EXPR");
+        println!("  w EXPR        Set watchpoint on address EXPR (reports value changes)");
+        println!("  d N           Delete watchpoint N");
         println!("  info r        Show registers and CSRs");
+        println!("  info w        List breakpoints and watchpoints");
         println!("  q             Quit");
     }
 
@@ -131,6 +142,14 @@ impl Repl {
             }
             RunResult::Trapped { cause } => {
                 println!("Trap: cause=0x{cause:08x}");
+                Outcome::Continue
+            }
+            RunResult::HitBreakpoint { addr } => {
+                println!("Breakpoint hit at 0x{addr:08x}.");
+                Outcome::Continue
+            }
+            RunResult::HitWatchpoint { id, addr, old, new } => {
+                println!("Watchpoint {id} hit at 0x{addr:08x}: 0x{old:08x} -> 0x{new:08x}.");
                 Outcome::Continue
             }
             RunResult::Paused => {
@@ -158,6 +177,14 @@ impl Repl {
                 }
                 RunResult::Trapped { cause } => {
                     println!("Trap: cause=0x{cause:08x}");
+                    return Outcome::Continue;
+                }
+                RunResult::HitBreakpoint { addr } => {
+                    println!("Breakpoint hit at 0x{addr:08x}.");
+                    return Outcome::Continue;
+                }
+                RunResult::HitWatchpoint { id, addr, old, new } => {
+                    println!("Watchpoint {id} hit at 0x{addr:08x}: 0x{old:08x} -> 0x{new:08x}.");
                     return Outcome::Continue;
                 }
                 RunResult::Paused => {}
@@ -225,6 +252,52 @@ impl Repl {
         println!("minstret  = {}", c.minstret);
     }
 
+    fn cmd_breakpoint(&mut self, expr: &Expr) -> Outcome {
+        let addr = match self.machine.eval(expr) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("rremu: {e}");
+                return Outcome::Continue;
+            }
+        };
+        if self.machine.add_breakpoint(addr) {
+            println!("Breakpoint set at 0x{addr:08x}.");
+        } else {
+            println!("Breakpoint already exists at 0x{addr:08x}.");
+        }
+        Outcome::Continue
+    }
+
+    fn cmd_watchpoint(&mut self, expr: &Expr) -> Outcome {
+        let id = self.machine.add_watchpoint(expr.clone());
+        println!("Watchpoint {id} set.");
+        Outcome::Continue
+    }
+
+    fn cmd_delete(&mut self, n: usize) -> Outcome {
+        if self.machine.remove_watchpoint(n) {
+            println!("Watchpoint {n} deleted.");
+        } else {
+            eprintln!("rremu: no watchpoint {n}");
+        }
+        Outcome::Continue
+    }
+
+    fn cmd_info_watchpoints(&self) {
+        let bps = self.machine.breakpoints();
+        let wps = self.machine.watchpoints();
+        if bps.is_empty() && wps.is_empty() {
+            println!("No breakpoints or watchpoints.");
+            return;
+        }
+        for (i, addr) in bps.iter().enumerate() {
+            println!("breakpoint {i}: 0x{addr:08x}");
+        }
+        for wp in wps {
+            println!("watchpoint {}: expr={:?}", wp.id, wp.expr);
+        }
+    }
+
     fn flush_uart(&mut self) {
         let bytes = self.machine.drain_uart();
         if !bytes.is_empty() {
@@ -246,6 +319,10 @@ enum Command {
     Examine { count: u64, addr: Expr },
     Print(Expr),
     InfoRegs,
+    Breakpoint(Expr),
+    Watchpoint(Expr),
+    Delete(usize),
+    InfoWatchpoints,
     Quit,
 }
 
@@ -287,9 +364,30 @@ fn parse_command(line: &str) -> Result<Command, String> {
         }
         "info" | "i" => match rest {
             "r" | "reg" | "registers" => Ok(Command::InfoRegs),
-            "" => Err("usage: info r  (registers)".into()),
-            _ => Err(format!("unknown info subcommand: {rest} (try 'info r')")),
+            "w" | "wp" | "watchpoints" => Ok(Command::InfoWatchpoints),
+            "" => Err("usage: info r|w".into()),
+            _ => Err(format!("unknown info subcommand: {rest} (try 'info r' or 'info w')")),
         },
+        "b" | "break" => {
+            if rest.is_empty() {
+                return Err("usage: b EXPR".into());
+            }
+            let expr = parse_expr(rest).map_err(|e| format!("parse error: {e}"))?;
+            Ok(Command::Breakpoint(expr))
+        }
+        "w" | "watch" => {
+            if rest.is_empty() {
+                return Err("usage: w EXPR".into());
+            }
+            let expr = parse_expr(rest).map_err(|e| format!("parse error: {e}"))?;
+            Ok(Command::Watchpoint(expr))
+        }
+        "d" | "delete" => {
+            let n = rest
+                .parse::<usize>()
+                .map_err(|_| format!("usage: d N (watchpoint id)"))?;
+            Ok(Command::Delete(n))
+        }
         "q" | "quit" | "exit" => Ok(Command::Quit),
         _ => Err(format!("unknown command: {cmd} (type 'help')")),
     }
