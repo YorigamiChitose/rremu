@@ -9,12 +9,15 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScree
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use rremu_machine::{Machine, RunResult};
+use rremu_machine::{FramebufferFrame, Machine, RunResult};
 
 use crate::render;
 use crate::speed::SpeedTier;
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
+
+/// 统一帧预算：约 30fps。
+const FRAME_BUDGET: Duration = Duration::from_millis(33);
 
 pub struct TuiApp {
     machine: Machine,
@@ -25,6 +28,9 @@ pub struct TuiApp {
     fb_view: bool,
     should_quit: bool,
     exit_code: i32,
+    /// 帧缓冲缓存：仅当 dirty 时从设备拷入，render 读缓存。
+    fb_cache: Vec<u32>,
+    fb_dims: (u32, u32),
 }
 
 impl TuiApp {
@@ -38,6 +44,8 @@ impl TuiApp {
             fb_view: false,
             should_quit: false,
             exit_code: 0,
+            fb_cache: Vec::new(),
+            fb_dims: (0, 0),
         }
     }
 
@@ -54,7 +62,10 @@ impl TuiApp {
         while !self.should_quit {
             let frame_start = Instant::now();
 
-            let poll_timeout = if self.running { Duration::ZERO } else { Duration::from_millis(33) };
+            // 非运行时：poll 到帧预算（30fps 节奏，按键即时响应）；
+            // 运行时：poll(ZERO) 取走已排队按键，首个按键后即回到执行。
+            let poll_timeout =
+                if self.running { Duration::ZERO } else { FRAME_BUDGET.saturating_sub(frame_start.elapsed()) };
             while event::poll(poll_timeout)? {
                 if let Event::Key(k) = event::read()? {
                     self.handle_key(k);
@@ -69,12 +80,27 @@ impl TuiApp {
             }
 
             if self.running {
-                self.tick_machine();
+                self.tick_machine(frame_start);
+                // 帧节奏：Steps 档每帧恰好一批，提前完成则等满预算；
+                // Full 档在预算内循环，通常已用满。
+                let elapsed = frame_start.elapsed();
+                if elapsed < FRAME_BUDGET {
+                    std::thread::sleep(FRAME_BUDGET - elapsed);
+                }
             }
 
+            self.sync_fb_cache();
             let snap = self.machine.snapshot();
             let disasm = self.collect_disasm(snap.pc);
-            let fb = if self.fb_view { self.machine.framebuffer_snapshot() } else { None };
+            let fb = if self.fb_view {
+                Some(FramebufferFrame {
+                    width: self.fb_dims.0,
+                    height: self.fb_dims.1,
+                    pixels: &self.fb_cache,
+                })
+            } else {
+                None
+            };
             let data = render::RenderData {
                 snap: &snap,
                 disasm: &disasm,
@@ -85,20 +111,28 @@ impl TuiApp {
                 fb_view: self.fb_view,
             };
             terminal.draw(|f| render::draw(f, &data))?;
-
-            if !self.running {
-                let elapsed = frame_start.elapsed();
-                if elapsed < Duration::from_millis(33) {
-                    std::thread::sleep(Duration::from_millis(33) - elapsed);
-                }
-            }
         }
         Ok(())
     }
 
-    fn tick_machine(&mut self) {
-        let batch = self.speed.batch();
-        let rr = self.machine.step_n(batch);
+    /// 推进机器：Steps 档每帧恰好一批；Full 档在帧预算内连续批量执行。
+    fn tick_machine(&mut self, frame_start: Instant) {
+        match self.speed {
+            SpeedTier::Steps(n) => {
+                let rr = self.machine.step_n(n);
+                self.apply_run_result(rr);
+            }
+            SpeedTier::Full => {
+                while self.running && frame_start.elapsed() < FRAME_BUDGET {
+                    let rr = self.machine.step_n(SpeedTier::Full.batch());
+                    self.apply_run_result(rr);
+                }
+            }
+        }
+    }
+
+    /// 统一处理执行结果（tick_machine 与 single_step 共用）。
+    fn apply_run_result(&mut self, rr: RunResult) {
         match rr {
             RunResult::Exited { code } => {
                 self.running = false;
@@ -114,6 +148,27 @@ impl TuiApp {
         }
     }
 
+    /// 同步帧缓冲缓存：首次开启/尺寸变化时全量拉取，否则仅在 dirty 时拷贝。
+    fn sync_fb_cache(&mut self) {
+        if !self.fb_view {
+            return;
+        }
+        let Some((width, height)) = self.machine.framebuffer_dimensions() else {
+            return;
+        };
+        if self.fb_dims != (width, height) {
+            // 全量拉取（不清 dirty），保证开启即有画面。
+            if let Some(frame) = self.machine.framebuffer_full_frame() {
+                self.fb_dims = (frame.width, frame.height);
+                self.fb_cache = frame.pixels.to_vec();
+            }
+            return;
+        }
+        if let Some(frame) = self.machine.framebuffer_dirty_frame() {
+            self.fb_cache.copy_from_slice(frame.pixels);
+        }
+    }
+
     /// 反汇编：pc 前 4 后 12（最坏 4 字节/条 → 前扫 16 字节）。
     fn collect_disasm(&mut self, pc: u32) -> Vec<rremu_machine::DisasmLine> {
         let start = pc.saturating_sub(16);
@@ -122,13 +177,13 @@ impl TuiApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        if self.input_mode {
-            self.handle_input_mode_key(key);
-            return;
-        }
-        // Ctrl+C always quits (safety valve in raw mode)
+        // Ctrl+C always quits (safety valve in raw mode) — 优先于输入模式。
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return;
+        }
+        if self.input_mode {
+            self.handle_input_mode_key(key);
             return;
         }
         match key.code {
@@ -147,16 +202,21 @@ impl TuiApp {
                 self.speed = SpeedTier::Full;
                 self.running = true;
             }
-            KeyCode::Char('i') => {
+            KeyCode::Char('i') if !self.exited => {
                 // Enter UART input mode
                 self.input_mode = true;
             }
             KeyCode::Char('r') => {
                 // Reset machine → 清除退出状态，可重新运行
-                let _ = self.machine.reset();
-                self.exited = false;
-                self.running = false;
-                self.exit_code = 0;
+                if self.machine.reset().is_ok() {
+                    self.exited = false;
+                    self.running = false;
+                    self.exit_code = 0;
+                    self.input_mode = false;
+                    // 缓存失效：下一帧按重置后的设备全量重填
+                    self.fb_dims = (0, 0);
+                    self.fb_cache.clear();
+                }
             }
             KeyCode::Char('b') => {
                 // Toggle framebuffer view
@@ -177,15 +237,7 @@ impl TuiApp {
     /// Execute a single instruction (for `s` key).
     fn single_step(&mut self) {
         let rr = self.machine.step_n(1);
-        match rr {
-            RunResult::Exited { code } => {
-                self.exited = true;
-                self.exit_code = code;
-                // 同 tick_machine：保持 TUI 打开，用户按 q 退出
-            }
-            RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {}
-            RunResult::Paused => {}
-        }
+        self.apply_run_result(rr);
     }
 
     fn handle_input_mode_key(&mut self, key: KeyEvent) {

@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use rremu_machine::{
-    reg_name, AccessSize, DisasmLine, EmuEvent, FramebufferSnapshot, MachineSnapshot, MemKind,
+    reg_name, AccessSize, DisasmLine, EmuEvent, FramebufferFrame, MachineSnapshot, MemKind,
     RunState,
 };
 
@@ -19,7 +19,7 @@ use crate::speed::SpeedTier;
 pub struct RenderData<'a> {
     pub snap: &'a MachineSnapshot,
     pub disasm: &'a [DisasmLine],
-    pub fb: Option<&'a FramebufferSnapshot>,
+    pub fb: Option<&'a FramebufferFrame<'a>>,
     pub speed: SpeedTier,
     pub running: bool,
     pub input_mode: bool,
@@ -68,7 +68,7 @@ fn draw_middle(
     area: Rect,
     snap: &MachineSnapshot,
     disasm: &[DisasmLine],
-    fb: Option<&FramebufferSnapshot>,
+    fb: Option<&FramebufferFrame<'_>>,
     fb_view: bool,
 ) {
     let cols = Layout::default()
@@ -144,7 +144,7 @@ fn draw_right_panels(
     area: Rect,
     snap: &MachineSnapshot,
     disasm: &[DisasmLine],
-    fb: Option<&FramebufferSnapshot>,
+    fb: Option<&FramebufferFrame<'_>>,
     fb_view: bool,
 ) {
     let halves = Layout::default()
@@ -241,7 +241,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool) {
 }
 
 /// 帧缓冲内嵌渲染：下采样到面板尺寸，每格背景色 = 对应像素。
-fn draw_framebuffer(f: &mut Frame, area: Rect, fb: &FramebufferSnapshot) {
+fn draw_framebuffer(f: &mut Frame, area: Rect, fb: &FramebufferFrame) {
     let block = Block::default().borders(Borders::ALL).title(" Framebuffer ");
     let inner = block.inner(area);
     f.render_widget(block, area);

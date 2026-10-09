@@ -53,18 +53,11 @@ pub struct DisasmLine {
     pub is_current: bool,
 }
 
-/// 帧缓冲快照（TUI 内嵌渲染用，0x00RRGGBB 像素）。
-#[derive(Debug, Clone)]
-pub struct FramebufferSnapshot {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: Vec<u32>,
-}
-
-/// 帧缓冲零拷贝引用（窗口前端 dirty 驱动刷新用）。
+/// 帧缓冲零拷贝引用（窗口/TUI 刷新用）。
 ///
 /// `pixels` 生命周期绑定到 `&mut Machine`，调用方需在再次修改 machine 前
-/// 用完（如 `Window::update` 完成像素拷贝/上屏）。dirty 标志由本方法消费一次。
+/// 用完（如完成像素拷贝/上屏）。dirty 驱动的获取会消费一次 dirty 标志；
+/// 全量获取则不改变 dirty。
 #[derive(Debug)]
 pub struct FramebufferFrame<'a> {
     pub width: u32,
@@ -318,6 +311,8 @@ impl MachineBuilder {
             uart_base: self.uart_base,
             clint_base: self.clint_base,
             fb_base: self.fb_base,
+            fb_width: self.fb_width,
+            fb_height: self.fb_height,
             entry,
             state: RunState::Idle,
             last_instr: None,
@@ -339,6 +334,8 @@ pub struct Machine {
     uart_base: Option<u32>,
     clint_base: Option<u32>,
     fb_base: Option<u32>,
+    fb_width: u32,
+    fb_height: u32,
     entry: u32,
     state: RunState,
     last_instr: Option<(u32, Instruction)>,
@@ -608,15 +605,24 @@ impl Machine {
         Ok((lo >> offset) | (hi << (32 - offset)))
     }
 
-    /// 帧缓冲快照（TUI 内嵌渲染用；无 framebuffer 返回 None）。
-    pub fn framebuffer_snapshot(&mut self) -> Option<FramebufferSnapshot> {
+    /// 帧缓冲尺寸（无 framebuffer 返回 None）。
+    pub fn framebuffer_dimensions(&self) -> Option<(u32, u32)> {
+        if self.fb_base.is_some() {
+            Some((self.fb_width, self.fb_height))
+        } else {
+            None
+        }
+    }
+
+    /// 帧缓冲全帧只读访问（不清 dirty）：TUI 缓存首次填充/尺寸变化时用。
+    pub fn framebuffer_full_frame(&mut self) -> Option<FramebufferFrame<'_>> {
         let addr = self.fb_base?;
         let dev = self.bus.device_mut(addr)?;
         let fb = dev.as_any_mut().downcast_ref::<Framebuffer>()?;
-        Some(FramebufferSnapshot {
+        Some(FramebufferFrame {
             width: fb.width(),
             height: fb.height(),
-            pixels: fb.frame().to_vec(),
+            pixels: fb.frame(),
         })
     }
 
