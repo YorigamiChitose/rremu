@@ -22,13 +22,18 @@ pub trait FbDisplay {
     fn poll(&mut self) -> bool;
 }
 
+/// 窗口工厂（懒启动，bin 注入）：fb 首次产生写入时调用以创建窗口；
+/// 返回 None 表示当前环境无法开窗（如无 X11）。
+pub type WindowFactory = Box<dyn FnMut() -> Option<Box<dyn FbDisplay>>>;
+
 /// REPL 调试器：持有 machine 实例与全局 Ctrl+C 暂停标志。
 pub struct Repl {
     machine: Machine,
     pause_flag: Arc<AtomicBool>,
-    /// 可选显示后端（CLI 模式 + fb 配置时由 bin 创建并注入）；
-    /// None 表示无后端（TUI 路径、或用户已关窗、或 fb 未配置）。
+    /// 活动显示后端；None 表示尚未懒启动、用户已关窗或无窗可用。
     display: Option<Box<dyn FbDisplay>>,
+    /// 窗口工厂：尚无窗口且 fb 产生写入时调用；开窗失败或用户关窗后丢弃。
+    window_factory: Option<WindowFactory>,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -42,8 +47,8 @@ enum Outcome {
 const WINDOW_BATCH: u64 = 1024;
 
 impl Repl {
-    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, display: Option<Box<dyn FbDisplay>>) -> Self {
-        Self { machine, pause_flag, display }
+    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, window_factory: Option<WindowFactory>) -> Self {
+        Self { machine, pause_flag, display: None, window_factory }
     }
 
     /// 交互式 REPL（无 `-c` 时）。
@@ -150,33 +155,29 @@ impl Repl {
         }
         self.pause_flag.store(false, Ordering::Relaxed);
 
-        // 有显示后端时自行跑 step_n 循环，每批泵后端（dirty 上屏 / 否则 poll 关窗）；
-        // 无后端时走 machine.run 全速循环（仅靠 pause_flag 停机）。
+        // 有显示后端（或窗口可能懒启动）时自行跑 step_n 循环：每批先
+        // ensure_window（fb 首次写入时拉起窗口），再泵后端（dirty 上屏 /
+        // 否则 poll 关窗）；确定无窗可能时走 machine.run 全速循环（仅靠
+        // pause_flag 停机）。
         let mut display_closed = false;
-        let result = if self.display.is_some() {
-            // 初始泵一次：让窗口出现并处理一次 OS 事件
-            if !self.pump_display() {
-                display_closed = true;
-                RunResult::Paused
-            } else {
-                loop {
-                    if self.pause_flag.load(Ordering::Relaxed) {
-                        break RunResult::Paused;
+        let result = if self.display.is_some() || self.window_factory.is_some() {
+            loop {
+                if self.pause_flag.load(Ordering::Relaxed) {
+                    break RunResult::Paused;
+                }
+                let step_rr = self.machine.step_n(WINDOW_BATCH);
+                self.ensure_window();
+                if !self.pump_display() {
+                    display_closed = true;
+                    break RunResult::Paused;
+                }
+                match step_rr {
+                    RunResult::Exited { code } => break RunResult::Exited { code },
+                    RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
+                    RunResult::HitWatchpoint { id, pc, old, new } => {
+                        break RunResult::HitWatchpoint { id, pc, old, new };
                     }
-                    let step_rr = self.machine.step_n(WINDOW_BATCH);
-                    // 泵后端：dirty → 上屏；否则仅 poll 检测关窗
-                    if !self.pump_display() {
-                        display_closed = true;
-                        break RunResult::Paused;
-                    }
-                    match step_rr {
-                        RunResult::Exited { code } => break RunResult::Exited { code },
-                        RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
-                        RunResult::HitWatchpoint { id, pc, old, new } => {
-                            break RunResult::HitWatchpoint { id, pc, old, new };
-                        }
-                        RunResult::Paused => {}
-                    }
+                    RunResult::Paused => {}
                 }
             }
         } else {
@@ -202,7 +203,8 @@ impl Repl {
                 println!("0x{pc:08x}:  {instr}");
             }
             self.flush_uart();
-            // 有显示后端时单步也泵：让用户能逐指令看 fb 变化
+            // 单步也泵：懒启动窗口（首次写 fb 时弹出）+ 逐指令看 fb 变化
+            self.ensure_window();
             if self.display.is_some() && !self.pump_display() {
                 println!("Framebuffer window closed.");
             }
@@ -347,8 +349,35 @@ impl Repl {
         }
     }
 
+    /// 懒启动窗口：尚无窗口且工厂可用时，若 fb 已产生写入（dirty）则创建
+    /// 窗口并推送当前帧。工厂返回 None（如无 X11）→ 丢弃工厂，之后不再尝试。
+    fn ensure_window(&mut self) {
+        if self.display.is_some() {
+            return;
+        }
+        if self.machine.framebuffer_dirty_frame().is_none() {
+            return;
+        }
+        let Some(factory) = self.window_factory.as_mut() else { return };
+        match factory() {
+            Some(mut window) => {
+                // 推送触发创建的这一帧（全帧读取，不清 dirty）
+                let open = self
+                    .machine
+                    .framebuffer_full_frame()
+                    .is_none_or(|f| window.update(f.pixels));
+                if open {
+                    self.display = Some(window);
+                } else {
+                    self.window_factory = None;
+                }
+            }
+            None => self.window_factory = None,
+        }
+    }
+
     /// 泵显示后端：dirty → 上屏；否则仅 poll。返回后端是否打开；
-    /// 关窗时置 None（后续命令按无后端运行）。
+    /// 关窗时置 None（后续命令按无后端运行，工厂一并丢弃）。
     fn pump_display(&mut self) -> bool {
         let Some(display) = self.display.as_mut() else {
             return true;
@@ -360,6 +389,7 @@ impl Repl {
         };
         if !open {
             self.display = None;
+            self.window_factory = None; // 用户已关窗：之后不再重开
         }
         open
     }

@@ -58,7 +58,7 @@ struct Args {
     #[arg(long, value_name = "ADDR", value_parser = parse_addr)]
     entry: Option<u32>,
 
-    /// 禁用 Framebuffer 设备（不映射 fb，CLI 模式不自动开窗）
+    /// 禁用 Framebuffer 设备（不映射 fb，也不创建帧缓冲窗口）
     #[arg(long)]
     no_fb: bool,
 
@@ -97,7 +97,7 @@ fn try_main() -> anyhow::Result<i32> {
         .ram(args.base, mem_size)
         .uart(0x1000_0000)
         .clint(0x0200_0000);
-    // 默认映射 fb 设备；--no-fb 时跳过（CLI 不会自动开窗，TUI 也无内嵌视图）
+    // 默认映射 fb 设备；--no-fb 时跳过（无设备即无写入，CLI 不会开窗，TUI 也无内嵌视图）
     if !args.no_fb {
         builder = builder.framebuffer(0x2000_0000, FB_WIDTH, FB_HEIGHT);
     }
@@ -122,28 +122,29 @@ fn try_main() -> anyhow::Result<i32> {
     })
     .context("failed to set Ctrl+C handler")?;
 
-    // CLI 模式 + fb 已配置 → 自动开 minifb 窗口。
-    // 开窗失败（无 X11）→ 降级为无窗模式继续运行，仅打印警告。
+    // CLI 模式：窗口懒启动 —— 启动时不开窗，注入窗口工厂；REPL 检测到
+    // fb 首次写入（dirty）才创建窗口并推送当前帧。不写 fb 的程序/测试
+    // 不会被弹窗打扰；开窗失败（无 X11）→ 丢弃工厂降级无窗模式，仅警告一次。
     // 注：minifb 在 workspace 依赖中禁用 wayland 后端、仅启用 x11，
     // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因
     // xdg-decoration 协议缺失会导致无边框窗口无法移动。
-    let window = if !args.no_fb {
-        match Window::new(
-            FB_WIDTH as usize,
-            FB_HEIGHT as usize,
-            "rremu framebuffer",
-        ) {
-            Ok(w) => Some(Box::new(FbWindow(w)) as Box<dyn FbDisplay>),
-            Err(e) => {
-                eprintln!("rremu: warning: could not open framebuffer window ({e}); continuing without window");
-                None
-            }
-        }
-    } else {
+    let window_factory: Option<rremu_cli::WindowFactory> = if args.no_fb {
         None
+    } else {
+        Some(Box::new(|| {
+            match Window::new(FB_WIDTH as usize, FB_HEIGHT as usize, "rremu framebuffer") {
+                Ok(w) => Some(Box::new(FbWindow(w)) as Box<dyn FbDisplay>),
+                Err(e) => {
+                    eprintln!(
+                        "rremu: warning: could not open framebuffer window ({e}); continuing without window"
+                    );
+                    None
+                }
+            }
+        }))
     };
 
-    let mut repl = Repl::new(machine, pause_flag, window);
+    let mut repl = Repl::new(machine, pause_flag, window_factory);
     let code = if args.cmds.is_empty() {
         repl.run_interactive()
     } else {

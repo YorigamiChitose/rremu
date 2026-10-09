@@ -345,7 +345,7 @@ pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpo
 - rustyline 18；提示符 `rremu> `；空行重复上一条 `si`（可选增强，非必做）
 - 命令解析：首 token 分发；`x n m` 中 n 为十进制计数、m 为表达式；`p/w/b` 取行剩余整体作为表达式；未知命令 → 报错并提示 `help`
 - 输出格式：`p` → `= 26 (0x1a)`；`x` → 每行 4 字 `0x80000000:  0x12345678  ...`；`info w` → 编号/表达式/当前值/命中次数
-- 帧缓冲显示经本 crate 声明的 `FbDisplay` trait（`update(&[u32])/poll()`）解耦：REPL 只持有 `Option<Box<dyn FbDisplay>>`，具体实现由 bin 提供（rremu-window），库本身不依赖窗口/显示后端
+- 帧缓冲显示经本 crate 声明的 `FbDisplay` trait（`update(&[u32])/poll()`）解耦，且**懒启动**：REPL 持有 bin 注入的窗口工厂 `Option<WindowFactory>`（`FnMut() -> Option<Box<dyn FbDisplay>>`），fb 首次产生写入（dirty）才创建窗口并推当前帧；开窗失败（无显示环境）或用户关窗后丢弃工厂，按无窗继续。库本身不依赖窗口/显示后端
 - Ctrl+C：运行态由 ctrlc 处理器置 `AtomicBool` → `run()` 返回 `Paused` 回提示符；提示符态由 rustyline 自身处理（Interrupted，清行重来）
 - `-c` 批处理：逐条执行并回显；任一条导致 `Exited` 则忽略剩余并按退出码结束进程；全部执行完且 stdin 非 TTY → 自动 `q`
 - 验收：脚本会话集成测试（spawn 子进程喂命令断言输出）
@@ -404,7 +404,7 @@ pub struct Args {
 ```
 - `parse_size()`：`16M → 0x1000000`，非法后缀报错
 - 预留不实现：`--no-uart` `--window` `--trace`
-- `--no-fb`：禁用 fb 设备映射 + 不自动开窗
+- `--no-fb`：禁用 fb 设备映射 + 不创建窗口（默认懒启动：首次写 fb 才开窗）
 - 示例：`rremu hello.elf` / `rremu hello.elf -c c` / `rremu hello.elf -c "b 0x80000100" -c c -c "info r"` / `rremu hello.elf -t -m 64M -v` / `rremu hello.elf --no-fb -c c`
 
 ## 9. 外部依赖规格
