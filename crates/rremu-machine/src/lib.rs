@@ -3,16 +3,18 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rremu_bus::{AccessSize, Bus, BusError, BusDevice, BusRouter, EmuEvent, EventSink};
+use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
 use rremu_cpu::{Cpu, StepOutcome};
+use rremu_decode::{decode16, decode32, instr_len};
 use rremu_devices::{Clint, Framebuffer, Ram, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::{csr, Address, Word};
 use rremu_loader::Image;
 use thiserror::Error;
 
-// 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa）。
+// 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa/bus）。
 // pub use 同时将名称引入本模块，供内部代码直接使用。
+pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
 pub use rremu_isa::{reg_name, Instruction, Priv};
 
 /// 运行状态（快照展示用）。
@@ -41,6 +43,15 @@ pub struct Watchpoint {
     pub id: usize,
     pub expr: Expr,
     pub last_value: u32,
+}
+
+/// 反汇编行（TUI 前端用）。
+#[derive(Debug, Clone)]
+pub struct DisasmLine {
+    pub addr: u32,
+    pub len: u8,
+    pub text: String,
+    pub is_current: bool,
 }
 
 #[derive(Debug, Error)]
@@ -513,6 +524,81 @@ impl Machine {
     /// 调试 peek：无副作用读一个 Word（表达式/x 命令用，D12）。
     pub fn peek(&mut self, addr: u32) -> Result<u32, BusError> {
         self.bus.peek(addr, AccessSize::Word)
+    }
+
+    /// 反汇编指定地址的指令（TUI 用，内部走无副作用 peek）。
+    pub fn disasm_at(&mut self, addr: u32, is_current: bool) -> DisasmLine {
+        let hw = match self.peek_half(addr) {
+            Ok(h) => h,
+            Err(_) => {
+                return DisasmLine {
+                    addr, len: 2, text: ".word ????????".into(), is_current,
+                };
+            }
+        };
+        let len = instr_len(hw);
+        let instr = if len == 4 {
+            match self.peek_word_maybe_unaligned(addr) {
+                Ok(w) => decode32(w, addr),
+                Err(_) => {
+                    return DisasmLine {
+                        addr, len: len as u8, text: format!(".word {:#010x}", 0),
+                        is_current,
+                    };
+                }
+            }
+        } else {
+            decode16(hw, addr)
+        };
+        let text = match instr {
+            Ok(i) => i.to_string(),
+            Err(_) => {
+                let bits = if len == 4 {
+                    self.peek_word_maybe_unaligned(addr).unwrap_or(0)
+                } else {
+                    u32::from(hw)
+                };
+                format!(".word {:#010x}", bits)
+            }
+        };
+        DisasmLine { addr, len: len as u8, text, is_current }
+    }
+
+    /// 扫描反汇编范围（TUI 反汇编面板用）。
+    /// 从 start 向前解码直到产出 `max_lines` 条或越过 end。
+    pub fn disasm_range(&mut self, start: u32, end: u32, max_lines: usize, current_pc: u32) -> Vec<DisasmLine> {
+        let mut lines = Vec::new();
+        let mut addr = start;
+        while addr <= end && lines.len() < max_lines {
+            let line = self.disasm_at(addr, addr == current_pc);
+            let step = line.len.max(2) as u32;
+            lines.push(line);
+            addr = match addr.checked_add(step) {
+                Some(a) => a,
+                None => break,
+            };
+        }
+        lines
+    }
+
+    /// 无副作用读半字（小端，支持任意地址对齐）。
+    fn peek_half(&mut self, addr: u32) -> Result<u16, BusError> {
+        let aligned = addr & !3;
+        let offset = (addr & 3) * 8;
+        let word = self.bus.peek(aligned, AccessSize::Word)?;
+        Ok(((word >> offset) & 0xFFFF) as u16)
+    }
+
+    /// 无副作用读字（支持非对齐地址，拼接两个对齐字）。
+    fn peek_word_maybe_unaligned(&mut self, addr: u32) -> Result<u32, BusError> {
+        if addr & 3 == 0 {
+            return self.bus.peek(addr, AccessSize::Word);
+        }
+        let aligned = addr & !3;
+        let offset = (addr & 3) * 8;
+        let lo = self.bus.peek(aligned, AccessSize::Word)?;
+        let hi = self.bus.peek(aligned + 4, AccessSize::Word)?;
+        Ok((lo >> offset) | (hi << (32 - offset)))
     }
 
     /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek，D12）。

@@ -5,6 +5,9 @@
 
 mod app;
 mod render;
+mod speed;
+
+pub use speed::SpeedTier;
 
 use rremu_machine::Machine;
 

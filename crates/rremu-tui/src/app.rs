@@ -12,26 +12,35 @@ use ratatui::Terminal;
 use rremu_machine::{Machine, RunResult};
 
 use crate::render;
+use crate::speed::SpeedTier;
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 pub struct TuiApp {
     machine: Machine,
     running: bool,
+    speed: SpeedTier,
+    input_mode: bool,
     should_quit: bool,
     exit_code: i32,
 }
 
 impl TuiApp {
     pub fn new(machine: Machine) -> Self {
-        Self { machine, running: false, should_quit: false, exit_code: 0 }
+        Self {
+            machine,
+            running: false,
+            speed: SpeedTier::Steps(1),
+            input_mode: false,
+            should_quit: false,
+            exit_code: 0,
+        }
     }
 
     /// 启动终端 → 主循环 → 清理；返回退出码。
     pub fn run(mut self) -> io::Result<i32> {
         let mut terminal = setup_terminal()?;
         let result = self.run_loop(&mut terminal);
-        // 无论主循环是否出错，必须恢复终端
         let _ = teardown_terminal(&mut terminal);
         result?;
         Ok(self.exit_code)
@@ -41,7 +50,6 @@ impl TuiApp {
         while !self.should_quit {
             let frame_start = Instant::now();
 
-            // 运行态非阻塞轮询（零超时）；暂停态短超时（33ms ≈ 30fps）
             let poll_timeout = if self.running { Duration::ZERO } else { Duration::from_millis(33) };
             while event::poll(poll_timeout)? {
                 if let Event::Key(k) = event::read()? {
@@ -61,9 +69,9 @@ impl TuiApp {
             }
 
             let snap = self.machine.snapshot();
-            terminal.draw(|f| render::draw(f, &snap))?;
+            let disasm = self.collect_disasm(snap.pc);
+            terminal.draw(|f| render::draw(f, &snap, &disasm, self.speed, self.running, self.input_mode))?;
 
-            // 暂停时节流到 ~30fps；运行态全速（由 poll 超时与 batch 自然限流）
             if !self.running {
                 let elapsed = frame_start.elapsed();
                 if elapsed < Duration::from_millis(33) {
@@ -74,9 +82,9 @@ impl TuiApp {
         Ok(())
     }
 
-    /// 批量 tick 机器（M4.3 接入速度档位；M4.1 仅预留 1 步/帧）。
     fn tick_machine(&mut self) {
-        let rr = self.machine.step_n(1);
+        let batch = self.speed.batch();
+        let rr = self.machine.step_n(batch);
         match rr {
             RunResult::Exited { code } => {
                 self.running = false;
@@ -90,14 +98,32 @@ impl TuiApp {
         }
     }
 
+    /// 反汇编：pc 前 4 后 12（最坏 4 字节/条 → 前扫 16 字节）。
+    fn collect_disasm(&mut self, pc: u32) -> Vec<rremu_machine::DisasmLine> {
+        let start = pc.saturating_sub(16);
+        let end = pc.saturating_add(48);
+        self.machine.disasm_range(start, end, 17, pc)
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.input_mode {
+            self.handle_input_mode_key(key);
+            return;
+        }
         if let KeyCode::Char('q') = key.code {
             self.should_quit = true;
         }
     }
+
+    fn handle_input_mode_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.input_mode = false,
+            KeyCode::Char(c) => self.machine.uart_push_input(c as u8),
+            _ => {}
+        }
+    }
 }
 
-/// 进入 raw 模式 + 备用屏幕，创建 ratatui 终端。
 fn setup_terminal() -> io::Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -106,7 +132,6 @@ fn setup_terminal() -> io::Result<TuiTerminal> {
     Terminal::new(backend)
 }
 
-/// 恢复终端：退出备用屏幕 + 关闭 raw 模式。
 fn teardown_terminal(terminal: &mut TuiTerminal) -> io::Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
