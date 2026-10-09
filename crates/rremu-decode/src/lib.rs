@@ -3,7 +3,7 @@
 use rremu_isa::{Address, Instruction, Word};
 use thiserror::Error;
 
-/// 指令长度（字节）：低 2 位 == 0b11 为 4 字节，否则 2 字节（RVC，M2 解码）。
+/// 指令长度（字节）：低 2 位 == 0b11 为 4 字节，否则 2 字节（RVC 压缩指令）。
 #[inline]
 pub fn instr_len(first_half: u16) -> usize {
     if first_half & 0b11 == 0b11 { 4 } else { 2 }

@@ -1,11 +1,11 @@
-//! rremu-window：minifb 独立显示窗（M5）。
+//! rremu-window：minifb 独立显示窗。
 //!
-//! 设计原则（PLAN §11 M5）：纯显示窗，仅做两件事：
+//! 设计原则：纯显示窗，仅做两件事：
 //!   1. 接收外部传入的 u32 像素缓冲，刷新到原生窗口；
 //!   2. 检测用户是否关闭窗口（OS 原生 X 按钮），返回 `false` 让前端停机。
 //!
 //! **不包含**任何调试按键、运行/暂停/调速/单步等控制逻辑（控制仍在 CLI REPL）；
-//! Framebuffer 设备本身也是纯设备（M3），不附带窗口或调试功能。
+//! Framebuffer 设备本身也是纯设备，不附带窗口或调试功能。
 //!
 //! 依赖图：window 仅依赖 minifb + thiserror，不依赖 machine/cpu/bus（更纯净，
 //! bin/Repl 通过 `Machine::framebuffer_dirty_frame()` 取 `&[u32]` 再传给 `Window::update`）。

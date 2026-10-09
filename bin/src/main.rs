@@ -1,4 +1,4 @@
-//! rremu：可执行入口（composition root，M1.11）。
+//! rremu：可执行入口（composition root）。
 //!
 //! 职责：解析命令行参数 → 配置日志 → 加载 ELF → 构建 Machine →
 //! 注册 Ctrl+C → 选择前端（CLI/TUI）→ 运行。所有组装只发生在这里。
@@ -104,7 +104,7 @@ fn try_main() -> anyhow::Result<i32> {
     })
     .context("failed to set Ctrl+C handler")?;
 
-    // CLI 模式 + fb 已配置 → 自动开 minifb 窗口（PLAN §11 M5）。
+    // CLI 模式 + fb 已配置 → 自动开 minifb 窗口。
     // 开窗失败（无 X11）→ 降级为无窗模式继续运行，仅打印警告。
     // 注：minifb 在 workspace 依赖中禁用 wayland 后端、仅启用 x11，
     // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因

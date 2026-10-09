@@ -1,6 +1,5 @@
-//! M1.12 集成测试：`rremu rv32ui-p-add.elf -c c` PASS（tohost=1 → exit 0）。
+//! 集成测试：`rremu rv32ui-p-add.elf -c c` PASS（tohost=1 → exit 0）。
 //!
-//! 验收（PLAN §11 步 1.12）：rv32ui-p-add PASS（tohost=1）。
 //! riscv-tests 约定：TESTNUM=1 写入 tohost 表示 PASS；rremu 退出码 = tohost>>1 = 0。
 
 #![allow(clippy::expect_used)] // 集成测试内放行

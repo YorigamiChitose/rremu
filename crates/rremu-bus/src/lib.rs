@@ -8,7 +8,7 @@ use thiserror::Error;
 /// 访问宽度。
 ///
 /// RV64 扩展点：未来新增 `DoubleWord`（8 字节），届时总线返回值/事件 value
-/// 需由 u32 扩到 u64，TUI value 增加 16 位 hex 档位（见 PLAN §5.3）。
+/// 需由 u32 扩到 u64，TUI value 增加 16 位 hex 档位。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessSize {
     Byte,
@@ -141,7 +141,7 @@ pub trait Bus {
     /// 策略**：不判定指令长度、不处理跨 XLEN、不做拼合。跨 XLEN（`pc&3==2`）
     /// 时如何拆成两次对齐 Half 读并拼合，由 CPU 取指单元（IFU）决定并连续调用
     /// 本原语两次完成。这样总线保持与 ISA 解耦的纯净传输层，且 RV64 扩展时
-    /// 拆分策略随 XLEN 留在 CPU 侧（见 PLAN §5.3/§5.4）。
+    /// 拆分策略随 XLEN 留在 CPU 侧。
     ///
     /// 对齐违例返 `BusError::Misaligned { addr, size }`，CPU 映射为相应 trap。
     fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;

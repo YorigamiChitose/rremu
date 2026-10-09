@@ -912,7 +912,7 @@ mod tests {
 
     #[test]
     fn expr_alias_table_matches_isa() {
-        // PLAN §5.7：expr 与 isa 的双别名表由本测试锁定同步
+        // expr 与 isa 的双别名表由本测试锁定同步
         for (i, name) in rremu_isa::ABI_NAMES.iter().enumerate() {
             assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
         }
@@ -994,7 +994,7 @@ mod tests {
         assert!(out.contains("hello"), "uart_out should contain 'hello': {out}");
     }
 
-    // ---- M3.5：MachineBuilder 集成 CLINT/Framebuffer ----
+    // ---- MachineBuilder 集成 CLINT/Framebuffer ----
 
     #[test]
     fn clint_accessible_via_device_mut() {
@@ -1031,14 +1031,14 @@ mod tests {
 
     #[test]
     fn framebuffer_dirty_frame_returns_none_when_clean() {
-        // M5.2 验收：无写入时 dirty=false，dirty_frame() 返回 None。
+        // 无写入时 dirty=false，dirty_frame() 返回 None。
         let mut m = hello_machine();
         assert!(m.framebuffer_dirty_frame().is_none(), "clean fb should return None");
     }
 
     #[test]
     fn framebuffer_dirty_frame_returns_some_after_write_and_clears_dirty() {
-        // M5.2 验收：写入后 dirty=true → 返回 Some(零拷贝引用)，消费一次后再次 None。
+        // 写入后 dirty=true → 返回 Some(零拷贝引用)，消费一次后再次 None。
         let mut m = hello_machine();
         let base = m.framebuffer_base().expect("framebuffer mounted");
         // 通过 device_mut 拿到 fb 设备句柄，直接 write_bytes 触发 dirty
@@ -1059,7 +1059,7 @@ mod tests {
 
     #[test]
     fn mem_ring_records_fetch_after_single_step() {
-        // M3.5 验收：单步后 mem_ring 非空，且至少含一条 MemAccess 事件
+        // 单步后 mem_ring 非空，且至少含一条 MemAccess 事件
         // （取指即触发 Fetch 类访问）。
         let mut m = hello_machine();
         assert!(m.mem_ring().is_empty(), "mem_ring starts empty");
@@ -1072,7 +1072,7 @@ mod tests {
         );
     }
 
-    // ---- M3.6：定时器中断端到端 + MemAccess ring 验证 ----
+    // ---- 定时器中断端到端 + MemAccess ring 验证 ----
 
     const TIMER_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/timer.elf");
 

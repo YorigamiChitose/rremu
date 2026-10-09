@@ -1,6 +1,4 @@
-//! M1.11 集成测试：`rremu hello.elf -c c` 输出 "hello world" 且退出码 0。
-//!
-//! 验收（PLAN §11 步 1.11）：`rremu hello.elf -c c` 输出 hello world 退出码 0。
+//! 集成测试：`rremu hello.elf -c c` 输出 "hello world" 且退出码 0。
 
 #![allow(clippy::expect_used)] // 集成测试内放行
 

@@ -1,4 +1,4 @@
-//! rremu-tui：ratatui 多面板 TUI 前端（M4）。
+//! rremu-tui：ratatui 多面板 TUI 前端。
 //!
 //! 依赖红线：仅通过 `rremu_machine` 公开 API 访问状态，不直接接触总线/寄存器。
 //! 线程模型：单线程协作式 —— 事件轮询 + 机器批量 tick + 30fps 渲染。

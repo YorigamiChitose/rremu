@@ -1,7 +1,7 @@
 //! rremu-expr：调试器表达式 —— 词法 / 递归下降解析 / AST 求值 + EvalContext trait。
-//! 零外部依赖的叶子 crate（thiserror 除外，见 PLAN §3.2 红线）。
+//! 零外部依赖的叶子 crate（thiserror 除外）。
 //!
-//! 文法（PLAN §5.7，C 优先级，低→高）：
+//! 文法（C 优先级，低→高）：
 //!
 //! ```text
 //! expr    := or

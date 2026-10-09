@@ -22,7 +22,7 @@ impl core::fmt::Display for Priv {
     }
 }
 
-/// RV32I 指令枚举（M1）。M/C/Zicsr 变体在 M2 扩展。
+/// RV32I 指令枚举；M/C/Zicsr 变体见下方分组。
 ///
 /// 立即数已按 spec 做符号扩展；寄存器编号为 0..=31 原始编号。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

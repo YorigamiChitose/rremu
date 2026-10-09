@@ -1,4 +1,4 @@
-//! 速度档位：1/2/4/8/16/32/64/全速（←/→ 切换，M4.3）。
+//! 速度档位：1/2/4/8/16/32/64/全速（←/→ 切换）。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedTier {

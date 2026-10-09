@@ -205,7 +205,7 @@ impl Cpu {
     ///   对齐 `Half` 读 `pc` 与 `pc+2`（各一条 `IF H`），拼成 `lo | (hi << 16)`。
     ///
     /// 调用前 `pc` 已保证偶数；返回 Err 为取指异常 cause。
-    /// RV64 扩展点：拆分序列需随 XLEN=8 调整（见 PLAN §5.4）。
+    /// RV64 扩展点：拆分序列需随 XLEN=8 调整。
     fn fetch_word<B: Bus, E: EventSink>(
         bus: &mut B,
         pc: u32,
@@ -547,7 +547,7 @@ impl Cpu {
         })
     }
 
-    /// 陷入流程（PLAN §5.4）：mepc ← pc；mcause ← cause；priv ← M；pc ← mtvec（仅 DIRECT）。
+    /// 陷入流程：mepc ← pc；mcause ← cause；priv ← M；pc ← mtvec（仅 DIRECT）。
     fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32) -> Result<StepOutcome, CpuError> {
         sink.emit(EmuEvent::Trap { cause, pc: self.pc });
         self.csr.mepc = self.pc;
@@ -1305,7 +1305,7 @@ mod tests {
         );
     }
 
-    // ---- interrupt tests (M3.3) ----
+    // ---- interrupt tests ----
 
     /// 测试 IRQ 设备：返回可配置的中断 cause。
     struct MockIrq {

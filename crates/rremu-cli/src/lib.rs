@@ -1,7 +1,7 @@
 //! rremu-cli：GDB 风格 REPL 调试器前端（rustyline）。只通过 machine 公开 API 交互。
 //!
-//! M1 命令集（PLAN §6）：`help` / `c` / `si [n]` / `x n m` / `p expr` / `info r` / `q`。
-//! 断点/监视点（`b` / `w` / `info w` / `d`）在 M2 补充。
+//! 命令集：`help` / `c` / `si [n]` / `x n m` / `p expr` / `info r` / `q`，
+//! 以及断点/监视点（`b` / `w` / `info w` / `d`）。
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
