@@ -7,7 +7,6 @@ rust-version.workspace = true
 [dependencies]
 rremu-machine.workspace = true
 rremu-expr.workspace = true
-rremu-window.workspace = true
 rustyline.workspace = true
 
 [lints]

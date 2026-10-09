@@ -9,10 +9,28 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context};
 use clap::Parser;
 
-use rremu_cli::Repl;
+use rremu_cli::{FbDisplay, Repl};
 use rremu_loader::load_elf;
 use rremu_machine::MachineBuilder;
 use rremu_window::Window;
+
+/// 帧缓冲尺寸（设备映射与窗口共用）。
+const FB_WIDTH: u32 = 640;
+const FB_HEIGHT: u32 = 480;
+
+/// minifb 窗口的 FbDisplay 适配（newtype：trait 与类型均在外部，
+/// 孤儿规则要求本地包装）。
+struct FbWindow(Window);
+
+impl FbDisplay for FbWindow {
+    fn update(&mut self, pixels: &[u32]) -> bool {
+        self.0.update(pixels)
+    }
+
+    fn poll(&mut self) -> bool {
+        self.0.poll()
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "rremu", version, about = "RISC-V RV32IMC 模拟器与调试器")]
@@ -81,7 +99,7 @@ fn try_main() -> anyhow::Result<i32> {
         .clint(0x0200_0000);
     // 默认映射 fb 设备；--no-fb 时跳过（CLI 不会自动开窗，TUI 也无内嵌视图）
     if !args.no_fb {
-        builder = builder.framebuffer(0x2000_0000, 640, 480);
+        builder = builder.framebuffer(0x2000_0000, FB_WIDTH, FB_HEIGHT);
     }
     let builder = builder.load(image);
     let entry = args.entry;
@@ -110,8 +128,12 @@ fn try_main() -> anyhow::Result<i32> {
     // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因
     // xdg-decoration 协议缺失会导致无边框窗口无法移动。
     let window = if !args.no_fb {
-        match Window::new(640, 480, "rremu framebuffer") {
-            Ok(w) => Some(w),
+        match Window::new(
+            FB_WIDTH as usize,
+            FB_HEIGHT as usize,
+            "rremu framebuffer",
+        ) {
+            Ok(w) => Some(Box::new(FbWindow(w)) as Box<dyn FbDisplay>),
             Err(e) => {
                 eprintln!("rremu: warning: could not open framebuffer window ({e}); continuing without window");
                 None

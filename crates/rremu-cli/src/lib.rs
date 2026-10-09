@@ -9,17 +9,26 @@ use std::sync::Arc;
 
 use rremu_expr::{parse as parse_expr, Expr};
 use rremu_machine::{reg_name, Machine, RunResult, RunState};
-use rremu_window::Window;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+
+/// 帧缓冲显示后端（具体实现由 bin 提供，如 minifb 窗口）。
+///
+/// 库本身不依赖任何窗口/图形系统；pixels 长度契约 = 帧宽 × 帧高。
+pub trait FbDisplay {
+    /// 上传新像素帧；返回后端是否仍然打开。
+    fn update(&mut self, pixels: &[u32]) -> bool;
+    /// 仅处理后端事件（无新帧时）；返回是否打开。
+    fn poll(&mut self) -> bool;
+}
 
 /// REPL 调试器：持有 machine 实例与全局 Ctrl+C 暂停标志。
 pub struct Repl {
     machine: Machine,
     pause_flag: Arc<AtomicBool>,
-    /// 可选独立显示窗（CLI 模式 + fb 配置时由 bin 创建并注入）；
-    /// None 表示无窗（TUI 路径、或用户已关窗、或 fb 未配置）。
-    window: Option<Window>,
+    /// 可选显示后端（CLI 模式 + fb 配置时由 bin 创建并注入）；
+    /// None 表示无后端（TUI 路径、或用户已关窗、或 fb 未配置）。
+    display: Option<Box<dyn FbDisplay>>,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -33,8 +42,8 @@ enum Outcome {
 const WINDOW_BATCH: u64 = 1024;
 
 impl Repl {
-    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, window: Option<Window>) -> Self {
-        Self { machine, pause_flag, window }
+    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, display: Option<Box<dyn FbDisplay>>) -> Self {
+        Self { machine, pause_flag, display }
     }
 
     /// 交互式 REPL（无 `-c` 时）。
@@ -141,74 +150,45 @@ impl Repl {
         }
         self.pause_flag.store(false, Ordering::Relaxed);
 
-        // 有窗时自行跑 step_n 循环，每批泵窗（dirty 上屏 / 否则 poll 关窗）；
-        // 无窗时走 machine.run 全速循环（仅靠 pause_flag 停机）。
-        let mut window_died = false;
-        let result = match &mut self.window {
-            Some(win) => {
-                // 初始 poll：让窗口出现并处理一次 OS 事件
-                if !win.poll() {
-                    window_died = true;
-                    RunResult::Paused
-                } else {
-                    loop {
-                        if self.pause_flag.load(Ordering::Relaxed) {
-                            break RunResult::Paused;
+        // 有显示后端时自行跑 step_n 循环，每批泵后端（dirty 上屏 / 否则 poll 关窗）；
+        // 无后端时走 machine.run 全速循环（仅靠 pause_flag 停机）。
+        let mut display_closed = false;
+        let result = if self.display.is_some() {
+            // 初始泵一次：让窗口出现并处理一次 OS 事件
+            if !self.pump_display() {
+                display_closed = true;
+                RunResult::Paused
+            } else {
+                loop {
+                    if self.pause_flag.load(Ordering::Relaxed) {
+                        break RunResult::Paused;
+                    }
+                    let step_rr = self.machine.step_n(WINDOW_BATCH);
+                    // 泵后端：dirty → 上屏；否则仅 poll 检测关窗
+                    if !self.pump_display() {
+                        display_closed = true;
+                        break RunResult::Paused;
+                    }
+                    match step_rr {
+                        RunResult::Exited { code } => break RunResult::Exited { code },
+                        RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
+                        RunResult::HitWatchpoint { id, pc, old, new } => {
+                            break RunResult::HitWatchpoint { id, pc, old, new };
                         }
-                        let step_rr = self.machine.step_n(WINDOW_BATCH);
-                        // 泵窗：dirty → 上屏（拷贝 frame.pixels）；否则仅 poll 检测关窗
-                        let open = if let Some(frame) = self.machine.framebuffer_dirty_frame() {
-                            win.update(frame.pixels)
-                        } else {
-                            win.poll()
-                        };
-                        if !open {
-                            window_died = true;
-                            break RunResult::Paused;
-                        }
-                        match step_rr {
-                            RunResult::Exited { code } => break RunResult::Exited { code },
-                            RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
-                            RunResult::HitWatchpoint { id, pc, old, new } => {
-                                break RunResult::HitWatchpoint { id, pc, old, new };
-                            }
-                            RunResult::Paused | RunResult::Trapped { .. } => {}
-                        }
+                        RunResult::Paused | RunResult::Trapped { .. } => {}
                     }
                 }
             }
-            None => self.machine.run(&self.pause_flag),
+        } else {
+            self.machine.run(&self.pause_flag)
         };
 
-        if window_died {
-            // 窗已关：丢弃以免后续 c 试图再次使用已关闭的窗
-            self.window = None;
+        if display_closed {
             println!("Framebuffer window closed; paused. Subsequent 'c' runs without window.");
         }
 
         self.flush_uart();
-        match result {
-            RunResult::Exited { code } => {
-                println!("Program exited with code {code}.");
-                Outcome::ProgramExited(code)
-            }
-            RunResult::Trapped { cause } => {
-                println!("Trap: cause=0x{cause:08x}");
-                Outcome::Continue
-            }
-            RunResult::HitBreakpoint { addr } => {
-                println!("Breakpoint hit at 0x{addr:08x}.");
-                Outcome::Continue
-            }
-            RunResult::HitWatchpoint { id, pc, old, new } => {
-                println!("Watchpoint {id} hit at pc 0x{pc:08x}: 0x{old:08x} -> 0x{new:08x}.");
-                Outcome::Continue
-            }
-            RunResult::Paused => {
-                println!("Paused.");
-                Outcome::Continue
-            }
-        }
+        self.report_result(result)
     }
 
     fn cmd_step(&mut self, n: u64) -> Outcome {
@@ -222,36 +202,15 @@ impl Repl {
                 println!("0x{pc:08x}:  {instr}");
             }
             self.flush_uart();
-            // 有窗时单步也泵窗：让用户能逐指令看 fb 变化
-            if let Some(win) = self.window.as_mut() {
-                let open = if let Some(frame) = self.machine.framebuffer_dirty_frame() {
-                    win.update(frame.pixels)
-                } else {
-                    win.poll()
-                };
-                if !open {
-                    self.window = None;
-                    println!("Framebuffer window closed.");
-                }
+            // 有显示后端时单步也泵：让用户能逐指令看 fb 变化
+            if self.display.is_some() && !self.pump_display() {
+                println!("Framebuffer window closed.");
             }
+            // Paused（Ctrl+C）：保持原行为，静默继续剩余步数；
+            // 其余结果统一报告并结束本批。
             match result {
-                RunResult::Exited { code } => {
-                    println!("Program exited with code {code}.");
-                    return Outcome::ProgramExited(code);
-                }
-                RunResult::Trapped { cause } => {
-                    println!("Trap: cause=0x{cause:08x}");
-                    return Outcome::Continue;
-                }
-                RunResult::HitBreakpoint { addr } => {
-                    println!("Breakpoint hit at 0x{addr:08x}.");
-                    return Outcome::Continue;
-                }
-                RunResult::HitWatchpoint { id, pc, old, new } => {
-                    println!("Watchpoint {id} hit at pc 0x{pc:08x}: 0x{old:08x} -> 0x{new:08x}.");
-                    return Outcome::Continue;
-                }
                 RunResult::Paused => {}
+                rr => return self.report_result(rr),
             }
         }
         Outcome::Continue
@@ -379,6 +338,49 @@ impl Repl {
             let _ = io::stdout().flush();
             let _ = io::stdout().write_all(&bytes);
             let _ = io::stdout().flush();
+        }
+    }
+
+    /// 泵显示后端：dirty → 上屏；否则仅 poll。返回后端是否打开；
+    /// 关窗时置 None（后续命令按无后端运行）。
+    fn pump_display(&mut self) -> bool {
+        let Some(display) = self.display.as_mut() else {
+            return true;
+        };
+        let open = if let Some(frame) = self.machine.framebuffer_dirty_frame() {
+            display.update(frame.pixels)
+        } else {
+            display.poll()
+        };
+        if !open {
+            self.display = None;
+        }
+        open
+    }
+
+    /// 统一打印 RunResult 并映射为命令 Outcome。
+    fn report_result(&self, rr: RunResult) -> Outcome {
+        match rr {
+            RunResult::Exited { code } => {
+                println!("Program exited with code {code}.");
+                Outcome::ProgramExited(code)
+            }
+            RunResult::Trapped { cause } => {
+                println!("Trap: cause=0x{cause:08x}");
+                Outcome::Continue
+            }
+            RunResult::HitBreakpoint { addr } => {
+                println!("Breakpoint hit at 0x{addr:08x}.");
+                Outcome::Continue
+            }
+            RunResult::HitWatchpoint { id, pc, old, new } => {
+                println!("Watchpoint {id} hit at pc 0x{pc:08x}: 0x{old:08x} -> 0x{new:08x}.");
+                Outcome::Continue
+            }
+            RunResult::Paused => {
+                println!("Paused.");
+                Outcome::Continue
+            }
         }
     }
 
