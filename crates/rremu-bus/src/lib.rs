@@ -58,17 +58,20 @@ pub enum BusError {
 /// 设备侧事件类型（存储访问的类别）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemKind {
-    Read,
-    Write,
-    Fetch,
+    /// 指令取（instruction fetch）。
+    Inst,
+    /// 数据读（load）。
+    DataRead,
+    /// 数据写（store）。
+    DataWrite,
 }
 
 impl fmt::Display for MemKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MemKind::Read => write!(f, "R"),
-            MemKind::Write => write!(f, "W"),
-            MemKind::Fetch => write!(f, "X"),
+            MemKind::Inst => write!(f, "IF"),
+            MemKind::DataRead => write!(f, "DR"),
+            MemKind::DataWrite => write!(f, "DW"),
         }
     }
 }
@@ -122,13 +125,24 @@ pub trait BusDevice {
 }
 
 /// CPU/前端编程面对的总线接口（依赖倒置：cpu 只认此 trait）。
+///
+/// 对外只暴露三个语义方法：`inst_read`（取指）、`data_read`（load）、
+/// `data_write`（store），分别对应 `MemKind::Inst/DataRead/DataWrite`，
+/// 使访存事件能直接区分指令取与数据访问。原 `fetch/read/write` 由
+/// `BusRouter` 内部私有方法承担（见 `route_read`/`route_write`/`route_read_raw`）。
 pub trait Bus {
-    /// 取指读（事件 kind = Fetch）。
-    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
-    /// 数据读（事件 kind = Read）。
-    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
-    /// 数据写（事件 kind = Write；命中 watch 且 bit0==1 时发 `EmuEvent::Halt`）。
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+    /// 取指读（事件 kind = `MemKind::Inst`）。
+    ///
+    /// 恒取 4 字节，返回的 u32 即从 `addr` 起的完整指令字。
+    /// 内部按 `addr&3` 处理对齐：4 字节对齐时单次对齐 Word 读；
+    /// 2 字节对齐（RVC）时读两个对齐字拼合（仅发一条合成 `MemAccess` 事件）。
+    /// 违例（addr 为奇数）返 `BusError::Misaligned { size: AccessSize::Half }`，
+    /// CPU 据此映射到 `INSTR_MISALIGNED`。
+    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 数据读（事件 kind = `MemKind::DataRead`）。
+    fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 数据写（事件 kind = `MemKind::DataWrite`；命中 watch 且 bit0==1 时发 `EmuEvent::Halt`）。
+    fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
     /// 无副作用、无事件读（调试 peek）。
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
     /// 批量写入（镜像加载，无事件）。
@@ -185,38 +199,15 @@ impl BusRouter {
         }
         Ok(())
     }
-}
 
-impl Default for BusRouter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Bus for BusRouter {
-    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError> {
-        Self::check_align(addr, AccessSize::Word)?;
-        let cycle = self.cycle;
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::Unmapped { addr })?;
-        // 取指恒按 Word 宽度读
-        let region = &mut self.regions[idx];
-        let value = region.device.read(addr, AccessSize::Word, sink)?;
-        sink.emit(EmuEvent::MemAccess {
-            cycle,
-            kind: MemKind::Fetch,
-            size: AccessSize::Word,
-            addr,
-            value,
-            device: region.device.device_name().to_owned(),
-        });
-        Ok(value)
-    }
-
-    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    /// 路由 + 设备读 + 发 `MemAccess{kind}` 事件（公开方法 inst_read/data_read 共用）。
+    fn route_read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        kind: MemKind,
+        sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
         let idx = self
@@ -228,7 +219,7 @@ impl Bus for BusRouter {
         let value = region.device.read(addr, size, sink)?;
         sink.emit(EmuEvent::MemAccess {
             cycle,
-            kind: MemKind::Read,
+            kind,
             size,
             addr,
             value,
@@ -237,7 +228,36 @@ impl Bus for BusRouter {
         Ok(value)
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+    /// 路由 + 设备读，**不发事件**（供 `inst_read` 跨字路径用）。
+    /// 返回 (值, 设备名引用)。注意：与 `peek` 不同，这里走 `device.read()`
+    /// —— 有副作用（如 UART FIFO 弹出）；指令区为 RAM，副作用不触发，安全。
+    fn route_read_raw(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        sink: &mut dyn EventSink,
+    ) -> Result<(u32, &str), BusError> {
+        Self::check_align(addr, size)?;
+        let idx = self
+            .regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })?;
+        let region = &mut self.regions[idx];
+        let value = region.device.read(addr, size, sink)?;
+        let name = region.device.device_name();
+        Ok((value, name))
+    }
+
+    /// 路由 + 设备写 + 发 `MemAccess{kind}` 事件 + tohost 监视（data_write 用）。
+    fn route_write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        kind: MemKind,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
         let idx = self
@@ -249,7 +269,7 @@ impl Bus for BusRouter {
         region.device.write(addr, size, data, sink)?;
         sink.emit(EmuEvent::MemAccess {
             cycle,
-            kind: MemKind::Write,
+            kind,
             size,
             addr,
             value: data,
@@ -260,6 +280,52 @@ impl Bus for BusRouter {
             sink.emit(EmuEvent::Halt { code: (data >> 1) as i32 });
         }
         Ok(())
+    }
+}
+
+impl Default for BusRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Bus for BusRouter {
+    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        // RVC 要求 2 字节对齐；奇数地址违例
+        if addr & 1 != 0 {
+            return Err(BusError::Misaligned { addr, size: AccessSize::Half });
+        }
+        // 4 字节对齐：单次对齐 Word 读 + 一条 IF W 事件
+        if addr & 3 == 0 {
+            return self.route_read(addr, AccessSize::Word, MemKind::Inst, sink);
+        }
+        // 2 字节对齐（addr & 3 == 2）：跨字拼合
+        let aligned = addr & !3;
+        let cycle = self.cycle;
+        // 第一次读拿值与设备名（route_read_raw 不发事件）
+        let (lo, dev_name) = self.route_read_raw(aligned, AccessSize::Word, sink)?;
+        let dev_name = dev_name.to_owned(); // 断开 &self 借用，让第二次 route_read_raw 可借
+        // 第二次读高半字（仍走 route_read_raw，不发事件）
+        let (hi, _) = self.route_read_raw(aligned.wrapping_add(4), AccessSize::Word, sink)?;
+        let value = (lo >> 16) | (hi << 16);
+        // 只发一条合成事件，覆盖指令地址
+        sink.emit(EmuEvent::MemAccess {
+            cycle,
+            kind: MemKind::Inst,
+            size: AccessSize::Word,
+            addr,
+            value,
+            device: dev_name,
+        });
+        Ok(value)
+    }
+
+    fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        self.route_read(addr, size, MemKind::DataRead, sink)
+    }
+
+    fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+        self.route_write(addr, size, data, MemKind::DataWrite, sink)
     }
 
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError> {
@@ -401,11 +467,11 @@ mod tests {
         let mut bus = BusRouter::new();
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         let mut sink = Collector::default();
-        bus.write(0x8000_0100, AccessSize::Word, 0xdead_beef, &mut sink).unwrap();
-        let v = bus.read(0x8000_0100, AccessSize::Word, &mut sink).unwrap();
+        bus.data_write(0x8000_0100, AccessSize::Word, 0xdead_beef, &mut sink).unwrap();
+        let v = bus.data_read(0x8000_0100, AccessSize::Word, &mut sink).unwrap();
         assert_eq!(v, 0xdead_beef);
         // 子宽度写入低位
-        bus.write(0x8000_0100, AccessSize::Byte, 0x12, &mut sink).unwrap();
+        bus.data_write(0x8000_0100, AccessSize::Byte, 0x12, &mut sink).unwrap();
         assert_eq!(bus.peek(0x8000_0100, AccessSize::Word).unwrap(), 0xdead_bef2 & 0xffff_ff00 | 0x12);
     }
 
@@ -414,8 +480,8 @@ mod tests {
         let mut bus = BusRouter::new();
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         let mut sink = Collector::default();
-        assert_eq!(bus.read(0x9000_0000, AccessSize::Word, &mut sink), Err(BusError::Unmapped { addr: 0x9000_0000 }));
-        assert_eq!(bus.write(0x1000_0000, AccessSize::Byte, 1, &mut sink), Err(BusError::Unmapped { addr: 0x1000_0000 }));
+        assert_eq!(bus.data_read(0x9000_0000, AccessSize::Word, &mut sink), Err(BusError::Unmapped { addr: 0x9000_0000 }));
+        assert_eq!(bus.data_write(0x1000_0000, AccessSize::Byte, 1, &mut sink), Err(BusError::Unmapped { addr: 0x1000_0000 }));
         assert!(bus.peek(0x0, AccessSize::Word).is_err());
     }
 
@@ -425,15 +491,75 @@ mod tests {
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         let mut sink = Collector::default();
         assert_eq!(
-            bus.read(0x8000_0002, AccessSize::Word, &mut sink),
+            bus.data_read(0x8000_0002, AccessSize::Word, &mut sink),
             Err(BusError::Misaligned { addr: 0x8000_0002, size: AccessSize::Word })
         );
         assert_eq!(
-            bus.write(0x8000_0001, AccessSize::Half, 0, &mut sink),
+            bus.data_write(0x8000_0001, AccessSize::Half, 0, &mut sink),
             Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
         );
         // 字节访问任意对齐皆可
-        bus.write(0x8000_0003, AccessSize::Byte, 0x55, &mut sink).unwrap();
+        bus.data_write(0x8000_0003, AccessSize::Byte, 0x55, &mut sink).unwrap();
+    }
+
+    #[test]
+    fn inst_read_unaligned_rvc() {
+        // 跨字取指（addr & 3 == 2）：inst_read 应读两个对齐字拼合，仅发一条合成事件
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.set_cycle(7);
+        // 在 0x8000_0002 处放一条 32 位指令 0x1234_5678
+        // 内存字节布局（小端）：
+        //   0x8000_0000: 0xAA 0xBB (前一条指令的尾巴，不影响)
+        //   0x8000_0002: 0x78 0x56 0x34 0x12  (我们要取的指令 0x1234_5678)
+        //   0x8000_0006: 0xCC 0xDD
+        // 即 0x8000_0000 字 = 0x5678_BBAA；0x8000_0004 字 = 0xDDCC_1234
+        bus.write_bytes(0x8000_0000, &[0xAA, 0xBB, 0x78, 0x56, 0x34, 0x12, 0xCC, 0xDD]).unwrap();
+        let mut sink = Collector::default();
+        let v = bus.inst_read(0x8000_0002, &mut sink).unwrap();
+        assert_eq!(v, 0x1234_5678);
+        // 只应有一条 MemAccess 事件（合成）
+        let ma_count = sink.0.iter().filter(|e| matches!(e, EmuEvent::MemAccess { .. })).count();
+        assert_eq!(ma_count, 1, "inst_read cross-word path must emit exactly one MemAccess event");
+        match sink.0[0] {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
+                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Word, 0x8000_0002, 0x1234_5678));
+                assert_eq!(device, "ram");
+            }
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+    }
+
+    #[test]
+    fn inst_read_aligned_single_event() {
+        // 4 字节对齐取指：单次对齐 Word 读 + 一条 IF W 事件
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.set_cycle(99);
+        bus.write_bytes(0x8000_0000, &[0x13, 0x00, 0x00, 0x00]).unwrap(); // addi x0, x0, 0 (nop)
+        let mut sink = Collector::default();
+        let v = bus.inst_read(0x8000_0000, &mut sink).unwrap();
+        assert_eq!(v, 0x0000_0013);
+        assert_eq!(sink.0.len(), 1);
+        match sink.0[0] {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
+                assert_eq!((cycle, kind, size, addr, value), (99, MemKind::Inst, AccessSize::Word, 0x8000_0000, 0x0000_0013));
+                assert_eq!(device, "ram");
+            }
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+    }
+
+    #[test]
+    fn inst_read_odd_address_misaligned() {
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        let mut sink = Collector::default();
+        // 奇数地址违例：返 Misaligned{size:Half}，供 CPU 映射 INSTR_MISALIGNED
+        assert_eq!(
+            bus.inst_read(0x8000_0001, &mut sink),
+            Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
+        );
     }
 
     #[test]
@@ -454,19 +580,22 @@ mod tests {
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         bus.set_cycle(42);
         let mut sink = Collector::default();
-        bus.write(0x8000_0000, AccessSize::Word, 7, &mut sink).unwrap();
-        bus.read(0x8000_0000, AccessSize::Half, &mut sink).unwrap();
-        bus.fetch(0x8000_0000, &mut sink).unwrap();
+        bus.data_write(0x8000_0000, AccessSize::Word, 7, &mut sink).unwrap();
+        bus.data_read(0x8000_0000, AccessSize::Half, &mut sink).unwrap();
+        bus.inst_read(0x8000_0000, &mut sink).unwrap();
         assert_eq!(sink.0.len(), 3);
         match sink.0[0] {
             EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (42, MemKind::Write, AccessSize::Word, 0x8000_0000, 7));
+                assert_eq!((cycle, kind, size, addr, value), (42, MemKind::DataWrite, AccessSize::Word, 0x8000_0000, 7));
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
         }
         match sink.0[2] {
-            EmuEvent::MemAccess { kind, .. } => assert_eq!(kind, MemKind::Fetch),
+            EmuEvent::MemAccess { kind, size, .. } => {
+                assert_eq!(kind, MemKind::Inst);
+                assert_eq!(size, AccessSize::Word);
+            }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
         }
         // peek 不产生事件
@@ -481,13 +610,13 @@ mod tests {
         bus.set_watch(Some(0x8000_0100));
         let mut sink = Collector::default();
         // bit0=0：非退出写
-        bus.write(0x8000_0100, AccessSize::Word, 2, &mut sink).unwrap();
+        bus.data_write(0x8000_0100, AccessSize::Word, 2, &mut sink).unwrap();
         assert!(!sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { .. })));
         // bit0=1：退出，code = 3 >> 1 = 1
-        bus.write(0x8000_0100, AccessSize::Word, 3, &mut sink).unwrap();
+        bus.data_write(0x8000_0100, AccessSize::Word, 3, &mut sink).unwrap();
         assert!(sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { code: 1 })));
         // watch 地址外的写不触发
-        bus.write(0x8000_0200, AccessSize::Word, 1, &mut sink).unwrap();
+        bus.data_write(0x8000_0200, AccessSize::Word, 1, &mut sink).unwrap();
         assert_eq!(sink.0.iter().filter(|e| matches!(e, EmuEvent::Halt { .. })).count(), 1);
     }
 
