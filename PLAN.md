@@ -75,12 +75,12 @@
 
 ```
 bin → cli, tui, window, machine, loader, expr(间接), clap, anyhow, ctrlc, tracing-subscriber
-cli → machine, expr, rustyline, tracing
+cli → machine, expr, rustyline
 tui → machine, ratatui, crossterm
 window → minifb, thiserror
 machine → cpu, bus, devices, loader, expr, thiserror, tracing
-devices → bus, thiserror, tracing
-cpu → isa, decode, bus, thiserror, tracing
+devices → bus, thiserror
+cpu → isa, decode, bus, thiserror
 decode → isa, thiserror
 bus → thiserror
 isa → （无）
@@ -159,7 +159,7 @@ pub fn decode16(hw: u16, pc: Address) -> Result<isa::Instruction, DecodeError>;
 
 ```rust
 pub enum AccessSize { Byte, Half, Word }   // RV64 预留：DoubleWord（8 字节）
-pub enum BusError { Unmapped { addr: u32 }, Misaligned { addr: u32, size: AccessSize }, Device { addr: u32, msg: String }, PeekUnsupported { addr: u32 }, Overlap { start, end } }
+pub enum BusError { Unmapped { addr: u32 }, Misaligned { addr: u32, size: AccessSize }, Device { addr: u32, msg: String }, Overlap { start, end } }
 
 // 事件经 data_read/data_write/inst_read 的 sink 参数贯穿：cpu 把 sink 传给 bus，设备直接上报 UartOutput 等
 // （单一事件流，避免设备持有 sink 引发的共享所有权）
@@ -187,7 +187,8 @@ pub trait Bus { // 依赖倒置：cpu 只依赖此 trait；对外只暴露三个
 // MemKind 与三个语义方法一一对应；Display：Inst→IF、DataRead→DR、DataWrite→DW
 pub enum MemKind { Inst, DataRead, DataWrite }
 pub struct BusRouter { /* Vec<Region{Range, Box<dyn BusDevice>}>，map() 检查重叠；
-                          私有助手 route_read/route_write 承担对齐+路由+事件（三个语义方法均为单次物理访问原语）；
+                          私有助手 region_index 定位、route_read/route_write 承担对齐+路由+事件
+                          （三个语义方法均为单次物理访问原语）；
                           watch 命中且 data&1==1 → 发 Halt{code: data>>1} */ }
 
 pub enum EmuEvent {
@@ -198,6 +199,7 @@ pub enum EmuEvent {
 pub trait EventSink { fn emit(&mut self, ev: EmuEvent); }
 ```
 - 小端；`data_read/data_write` 返回值低位对齐；对齐检查在总线层（Word/4、Half/2）
+- 未映射访问统一返 `BusError::Unmapped`（read/write/peek 一致）
 - `peek_read` 无默认实现：强制每个设备显式声明无副作用读语义（D12 的落地）
 
 **取指位宽与跨 XLEN 读取（bus 纯净原语 + CPU 取指单元决策；事件位宽与物理读取一致）**
@@ -316,22 +318,26 @@ impl Expr { pub fn eval(&self, ctx: &mut dyn EvalContext) -> Result<u32, EvalErr
 impl Machine {
     pub fn step_n(&mut self, n: u64) -> RunResult;
     pub fn run(&mut self, pause: &AtomicBool) -> RunResult;      // 全速；pause 供 Ctrl+C
-    pub fn reset(&mut self);
+    pub fn reset(&mut self) -> Result<(), MachineError>;
     pub fn snapshot(&self) -> MachineSnapshot;
-    pub fn peek(&mut self, addr: u32) -> Result<u32, BusError>;  // 走 BusDevice::peek_read
+    pub fn state(&self) -> RunState;                             // 轻量状态查询
+    pub fn peek(&mut self, addr: u32) -> Result<u32, BusError>;  // 调试器语义：支持非对齐
     pub fn eval(&mut self, expr: &Expr) -> Result<u32, EvalError>; // EvalContext 实现 = 寄存器 + peek
-    pub fn add_breakpoint(&mut self, addr: u32) -> u32;           // 返回编号
+    pub fn add_breakpoint(&mut self, addr: u32) -> bool;         // 是否新增
     pub fn add_watchpoint(&mut self, expr: Expr) -> u32;
     pub fn remove_watchpoint(&mut self, id: u32) -> bool;
     pub fn watchpoints(&self) -> &[Watchpoint];
+    pub fn framebuffer_dimensions(&self) -> Option<(u32, u32)>;  // TUI 缓存分配用
     pub fn uart_push_input(&mut self, byte: u8);
     pub fn set_event_ring_capacity(&mut self, n: usize);          // 默认 mem 16 / uart 1024
 }
-pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpoint { id: u32, old: u32, new: u32 }, Paused, Trapped { cause: u32 } }
+pub enum RunState { Idle, Running, Paused, Exited(i32) }
+pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpoint { id: u32, old: u32, new: u32 }, Paused }
 ```
+- 陷入（ecall/ebreak/中断等）对前端非致命：CPU 将 pc 重定向至 mtvec，`run()`/`step_n()` 继续执行；陷入信息经 `EmuEvent::Trap` 进入 mem ring 统一展示
 - 运行中每条指令后按序检查：tohost 写入（bus 事件拦截）→ 断点（pc 匹配）→ 监视点（重算比对）→ pause 标志
 - tohost 退出：写入值 `(code << 1) | 1` → `Exited { code }`；riscv-tests 失败码同样透传
-- `MachineSnapshot { cycle, pc, priv_, gprs: [u32;32], csrs: CsrSnapshot, state: RunState, mem_ring: VecDeque<MemAccess>, uart_out: Vec<u8>, uart_in_len, watchpoints: Vec<WatchInfo> }`
+- `MachineSnapshot { cycle, pc, priv_, gprs: [u32;32], csrs: CsrSnapshot, state: RunState, mem_ring: VecDeque<EmuEvent>, uart_out: Vec<u8> }`
 - 验收：断点/监视点/peek/快照单测；hello.elf `run()` → `Exited { code: 0 }` 且 UART 事件流包含 "hello"
 
 ### 5.9 rremu-cli
@@ -339,6 +345,7 @@ pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpo
 - rustyline 18；提示符 `rremu> `；空行重复上一条 `si`（可选增强，非必做）
 - 命令解析：首 token 分发；`x n m` 中 n 为十进制计数、m 为表达式；`p/w/b` 取行剩余整体作为表达式；未知命令 → 报错并提示 `help`
 - 输出格式：`p` → `= 26 (0x1a)`；`x` → 每行 4 字 `0x80000000:  0x12345678  ...`；`info w` → 编号/表达式/当前值/命中次数
+- 帧缓冲显示经本 crate 声明的 `FbDisplay` trait（`update(&[u32])/poll()`）解耦：REPL 只持有 `Option<Box<dyn FbDisplay>>`，具体实现由 bin 提供（rremu-window），库本身不依赖窗口/显示后端
 - Ctrl+C：运行态由 ctrlc 处理器置 `AtomicBool` → `run()` 返回 `Paused` 回提示符；提示符态由 rustyline 自身处理（Interrupted，清行重来）
 - `-c` 批处理：逐条执行并回显；任一条导致 `Exited` 则忽略剩余并按退出码结束进程；全部执行完且 stdin 非 TTY → 自动 `q`
 - 验收：脚本会话集成测试（spawn 子进程喂命令断言输出）
@@ -347,7 +354,9 @@ pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpo
 
 - 面板：顶栏（cycle/速度档/状态/pc）│ 左栏寄存器（x0-x31/pc/priv/CSR：mstatus mtvec mepc mcause mie mip mcycle minstret）│ 右上反汇编（pc 前 4 后 12，当前行高亮）│ 右下最近存储访问 ring 16 条（#cycle/读写/宽度/地址/数据/设备名）│ 底部串口终端 │ 状态栏按键提示
 - 按键：Space 暂停/继续；s 单步；←/→ 档位 1/2/4/8/16/32/64/全速；f 全速；i 串口输入模式（Esc 返回）；r 复位；q 退出
-- 线程模型：machine 独立线程按档位 tick 执行；TUI 主线程 ~30fps 拉快照渲染；控制经 mpsc；断点/监视点命中 → 自动暂停并高亮提示（管理命令仍在 CLI，TUI 只展示）
+- 执行模型：单线程协作式 —— 事件轮询 + 机器按档位批量 tick + 帧限渲染（~30fps：运行时也按 33ms 帧限，Steps 档每帧执行固定步数，全速档在帧时间预算内连续执行）；断点/监视点命中 → 自动暂停（管理命令仍在 CLI，TUI 只展示）
+- 帧缓冲：本地缓存 + dirty 驱动，仅画面变化时经 `framebuffer_dirty_frame()` 拷入缓存；不再每帧 clone 整帧
+- Ctrl+C 优先级高于串口输入模式（输入模式下也可安全退出）
 - 反汇编：调用 `isa::Instruction` Display；decode 失败行显示 `.word 0x????????`
 
 ### 5.11 bin（rremu）
@@ -400,12 +409,12 @@ pub struct Args {
 
 ## 9. 外部依赖规格
 
-**原则**：版本收口 `[workspace.dependencies]`（成员 `workspace = true`）；caret + lockfile；库 crate 白名单仅 thiserror/tracing；专属依赖进专属 crate。
+**原则**：版本收口 `[workspace.dependencies]`（成员 `workspace = true`）；caret + lockfile；库 crate 白名单仅 thiserror（tracing 仅 machine）；专属依赖进专属 crate。
 
 | crate | 版本 | 特性 | 位置 |
 |---|---|---|---|
 | thiserror | 2.0 | 默认 | bus/decode/cpu/loader/machine |
-| tracing | 0.1 | 默认 | 全部库 crate |
+| tracing | 0.1 | 默认 | machine |
 | tracing-subscriber | 0.3 | env-filter, fmt | bin |
 | goblin | 0.10 | default-features=false; elf32, elf64*, endian_fd | loader |
 | anyhow | 1.0 | 默认 | bin |
