@@ -134,18 +134,17 @@ pub trait BusDevice {
 /// 使访存事件能直接区分指令取与数据访问。原 `fetch/read/write` 由
 /// `BusRouter` 内部私有方法承担（见 `route_read`/`route_write`）。
 pub trait Bus {
-    /// 取指读（事件 kind = `MemKind::Inst`），每次逻辑取指保证拿回完整 4 字节指令字。
+    /// 取指读原语（事件 kind = `MemKind::Inst`）：**一次**对齐物理读，宽度严格由
+    /// 调用方 `size` 决定，发一条对应位宽的 `IF` 事件（B/H/W）。
     ///
-    /// 物理访问与事件位宽严格一致，按 `addr` 对齐决定：
-    /// - XLEN 对齐（`addr & 3 == 0`）：**一次 Word(4 字节) 读**，发一条 `IF W`。
-    /// - 跨 XLEN 边界（`addr & 3 == 2`，仅 RVC 允许 2 字节对齐）：指令横跨两个
-    ///   对齐 Word，**按两次 Half(2 字节) 读** `addr` 与 `addr+2`，各自 2 字节对齐、
-    ///   不跨 Word 边界，分别发一条 `IF H`（共两条），在总线上拼成完整 word 返回。
-    /// - 奇数地址：`BusError::Misaligned { size: Half }`，CPU 映射为 `INSTR_MISALIGNED`。
+    /// 本方法只做"路由 + 按 `size` 对齐校验 + 设备读 + 发事件"，**不含任何取指
+    /// 策略**：不判定指令长度、不处理跨 XLEN、不做拼合。跨 XLEN（`pc&3==2`）
+    /// 时如何拆成两次对齐 Half 读并拼合，由 CPU 取指单元（IFU）决定并连续调用
+    /// 本原语两次完成。这样总线保持与 ISA 解耦的纯净传输层，且 RV64 扩展时
+    /// 拆分策略随 XLEN 留在 CPU 侧（见 PLAN §5.3/§5.4）。
     ///
-    /// 返回值始终是从 `addr` 起的完整小端 4 字节指令字（RVC 16 位指令时高 16 位
-    /// 为相邻字节，CPU 侧用低 16 位判长即可）。
-    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    /// 对齐违例返 `BusError::Misaligned { addr, size }`，CPU 映射为相应 trap。
+    fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     /// 数据读（事件 kind = `MemKind::DataRead`）。
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     /// 数据写（事件 kind = `MemKind::DataWrite`；命中 watch 且 bit0==1 时发 `EmuEvent::Halt`）。
@@ -276,24 +275,9 @@ impl Default for BusRouter {
 }
 
 impl Bus for BusRouter {
-    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError> {
-        // RVC 要求 2 字节对齐；奇数地址违例
-        if addr & 1 != 0 {
-            return Err(BusError::Misaligned { addr, size: AccessSize::Half });
-        }
-        // XLEN 对齐（RV32: addr & 3 == 0）：单次 XLEN(Word) 读 + 一条 IF W 记录
-        if addr & 3 == 0 {
-            return self.route_read(addr, AccessSize::Word, MemKind::Inst, sink);
-        }
-        // 跨 XLEN 边界（RV32: addr & 3 == 2，仅 RVC 允许 2 字节对齐）：一条 32 位
-        // 指令横跨两个对齐 XLEN 字，单次对齐 Word 读取不到完整指令。此时按两次
-        // 2 字节读：Half@addr（低半字）+ Half@addr+2（高半字），各自 2 字节对齐、
-        // 天然不跨 Word 边界，设备原生支持。两次读各自发一条 IF H 记录（位宽与
-        // 物理读取严格一致），拼合后返回完整指令字给 CPU。
-        // RV64 扩展点：此处 Half/Half 需按 XLEN(8) 重新选择最小对齐访问序列（见 PLAN §5.3）。
-        let lo = self.route_read(addr, AccessSize::Half, MemKind::Inst, sink)?;
-        let hi = self.route_read(addr.wrapping_add(2), AccessSize::Half, MemKind::Inst, sink)?;
-        Ok(lo | (hi << 16))
+    fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        // 单次对齐物理读原语：跨 XLEN 拆分由 CPU(IFU) 决定，总线不感知指令长度。
+        self.route_read(addr, size, MemKind::Inst, sink)
     }
 
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
@@ -479,23 +463,38 @@ mod tests {
     }
 
     #[test]
-    fn inst_read_cross_xlen_two_half_events() {
-        // 跨 XLEN 取指（addr & 3 == 2）：inst_read 按两次 Half 读（addr、addr+2），
-        // 各自发一条 IF H 事件，拼合后返回完整指令字。
+    fn inst_read_word_single_event() {
+        // 取指原语：一次对齐 Word 读，只发一条 IF W，不做任何跨字处理
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.set_cycle(99);
+        bus.write_bytes(0x8000_0000, &[0x13, 0x00, 0x00, 0x00]).unwrap(); // addi x0, x0, 0 (nop)
+        let mut sink = Collector::default();
+        let v = bus.inst_read(0x8000_0000, AccessSize::Word, &mut sink).unwrap();
+        assert_eq!(v, 0x0000_0013);
+        assert_eq!(sink.0.len(), 1);
+        match sink.0[0] {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
+                assert_eq!((cycle, kind, size, addr, value), (99, MemKind::Inst, AccessSize::Word, 0x8000_0000, 0x0000_0013));
+                assert_eq!(device, "ram");
+            }
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+    }
+
+    #[test]
+    fn inst_read_half_single_event() {
+        // 取指原语：2 字节对齐 Half 读只发一条 IF H（跨 XLEN 拆分由 CPU 连续调两次，
+        // 总线本身不拼合）。内存小端：@...02 = 78 56，@...04 = 34 12。
         let mut bus = BusRouter::new();
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         bus.set_cycle(7);
-        // 在 0x8000_0002 处放一条 32 位指令 0x1234_5678
-        // 内存字节布局（小端）：
-        //   0x8000_0000: 0xAA 0xBB (前一条指令的尾巴，不影响)
-        //   0x8000_0002: 0x78 0x56 | 0x34 0x12   (低半字 @...02，高半字 @...04)
-        //   0x8000_0006: 0xCC 0xDD
         bus.write_bytes(0x8000_0000, &[0xAA, 0xBB, 0x78, 0x56, 0x34, 0x12, 0xCC, 0xDD]).unwrap();
         let mut sink = Collector::default();
-        let v = bus.inst_read(0x8000_0002, &mut sink).unwrap();
-        assert_eq!(v, 0x1234_5678);
-        // 应有且仅有两条 MemAccess 事件，均为 IF H
-        assert_eq!(sink.0.len(), 2, "cross-XLEN fetch must emit exactly two IF H events");
+        let lo = bus.inst_read(0x8000_0002, AccessSize::Half, &mut sink).unwrap();
+        let hi = bus.inst_read(0x8000_0004, AccessSize::Half, &mut sink).unwrap();
+        assert_eq!((lo, hi), (0x5678, 0x1234));
+        assert_eq!(sink.0.len(), 2, "two primitive IF H calls emit two events");
         match sink.0[0] {
             EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
                 assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Half, 0x8000_0002, 0x5678));
@@ -513,34 +512,19 @@ mod tests {
     }
 
     #[test]
-    fn inst_read_aligned_single_event() {
-        // 4 字节对齐取指：单次对齐 Word 读 + 一条 IF W 事件
-        let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
-        bus.set_cycle(99);
-        bus.write_bytes(0x8000_0000, &[0x13, 0x00, 0x00, 0x00]).unwrap(); // addi x0, x0, 0 (nop)
-        let mut sink = Collector::default();
-        let v = bus.inst_read(0x8000_0000, &mut sink).unwrap();
-        assert_eq!(v, 0x0000_0013);
-        assert_eq!(sink.0.len(), 1);
-        match sink.0[0] {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (99, MemKind::Inst, AccessSize::Word, 0x8000_0000, 0x0000_0013));
-                assert_eq!(device, "ram");
-            }
-            ref ev => panic!("expected MemAccess, got {ev:?}"),
-        }
-    }
-
-    #[test]
-    fn inst_read_odd_address_misaligned() {
+    fn inst_read_enforces_alignment_per_size() {
+        // 原语严格按传入 size 校验对齐，不替调用方拆字：
+        // Half @奇数 → Misaligned{Half}；Word @2字节对齐 → Misaligned{Word}（拼合是 CPU 的事）。
         let mut bus = BusRouter::new();
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         let mut sink = Collector::default();
-        // 奇数地址违例：返 Misaligned{size:Half}，供 CPU 映射 INSTR_MISALIGNED
         assert_eq!(
-            bus.inst_read(0x8000_0001, &mut sink),
+            bus.inst_read(0x8000_0001, AccessSize::Half, &mut sink),
             Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
+        );
+        assert_eq!(
+            bus.inst_read(0x8000_0002, AccessSize::Word, &mut sink),
+            Err(BusError::Misaligned { addr: 0x8000_0002, size: AccessSize::Word })
         );
     }
 
@@ -564,7 +548,7 @@ mod tests {
         let mut sink = Collector::default();
         bus.data_write(0x8000_0000, AccessSize::Word, 7, &mut sink).unwrap();
         bus.data_read(0x8000_0000, AccessSize::Half, &mut sink).unwrap();
-        bus.inst_read(0x8000_0000, &mut sink).unwrap();
+        bus.inst_read(0x8000_0000, AccessSize::Word, &mut sink).unwrap();
         assert_eq!(sink.0.len(), 3);
         match sink.0[0] {
             EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {

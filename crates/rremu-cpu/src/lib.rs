@@ -154,25 +154,17 @@ impl Cpu {
             }
         }
 
-        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）。inst_read 内部也会查，
-        // 这里先查可让 trap 路径与本文件历史一致；inst_read 拿到的奇数地址
-        // 会返 Misaligned{size:Half}，CPU 侧一并映射到 INSTR_MISALIGNED。
+        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）。取指原语 inst_read 也会按
+        // size 查对齐，这里在拆分前先统一拦截奇数地址 → INSTR_MISALIGNED。
         if pc & 0x1 != 0 {
             return self.trap(sink, cause::INSTR_MISALIGNED);
         }
 
-        // 取指：一次 inst_read 拿全 4 字节（4 字节对齐时单次对齐 Word 读；
-        // 2 字节对齐时 bus 内部读两个对齐字拼合并发一条 IF W 合成事件）。
-        let word = match bus.inst_read(pc, sink) {
+        // 取指单元(IFU)：取回 pc 处完整 4 字节指令字。跨 XLEN 的拆分编排（对齐一次
+        // Word / pc&3==2 两次 Half 拼合）在 CPU 侧决定，bus.inst_read 只是单次对齐原语。
+        let word = match Self::fetch_word(bus, pc, sink) {
             Ok(w) => w,
-            Err(e) => {
-                let c = if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
-                    cause::INSTR_MISALIGNED
-                } else {
-                    cause::INSTR_ACCESS_FAULT
-                };
-                return self.trap(sink, c);
-            }
+            Err(c) => return self.trap(sink, c),
         };
         let lo = word as u16;
 
@@ -203,6 +195,40 @@ impl Cpu {
             }
             Err(TrapErr { cause }) => self.trap(sink, cause),
         }
+    }
+
+    /// 取指单元(IFU)：取回 `pc` 处完整小端 4 字节指令字。
+    ///
+    /// 跨 XLEN 拆分策略属于 CPU/ISA（总线原语 `inst_read` 只做单次对齐读）：
+    /// - `pc & 3 == 0`：一次对齐 `Word` 读（一条 `IF W`）。
+    /// - `pc & 3 == 2`（仅 RVC 允许 2 字节对齐）：指令横跨两个对齐 Word，按两次
+    ///   对齐 `Half` 读 `pc` 与 `pc+2`（各一条 `IF H`），拼成 `lo | (hi << 16)`。
+    ///
+    /// 调用前 `pc` 已保证偶数；返回 Err 为取指异常 cause。
+    /// RV64 扩展点：拆分序列需随 XLEN=8 调整（见 PLAN §5.4）。
+    fn fetch_word<B: Bus, E: EventSink>(
+        bus: &mut B,
+        pc: u32,
+        sink: &mut E,
+    ) -> Result<u32, u32> {
+        /// 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT。
+        fn fetch_cause(e: rremu_bus::BusError) -> u32 {
+            if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
+                cause::INSTR_MISALIGNED
+            } else {
+                cause::INSTR_ACCESS_FAULT
+            }
+        }
+
+        if pc & 3 == 0 {
+            return bus.inst_read(pc, AccessSize::Word, sink).map_err(fetch_cause);
+        }
+        // pc & 3 == 2：两次对齐 Half，物理位宽与 IF 事件严格一致
+        let lo = bus.inst_read(pc, AccessSize::Half, sink).map_err(fetch_cause)?;
+        let hi = bus
+            .inst_read(pc.wrapping_add(2), AccessSize::Half, sink)
+            .map_err(fetch_cause)?;
+        Ok(lo | (hi << 16))
     }
 
     /// 执行一条已解码指令；成功返回下一 pc，失败返回 trap 原因。
@@ -1247,16 +1273,36 @@ mod tests {
 
     #[test]
     fn exec_cross_boundary_32bit_instr() {
-        // 32 位指令放在 2 字节对齐但非 4 字节对齐的地址，测试跨边界取指
+        // 32 位指令放在 2 字节对齐但非 4 字节对齐的地址，测试跨边界取指（IFU 拆分）
         let mut h = Harness::new();
         let nop = encode_c(&Instruction::CAddi { rd: 0, imm: 0 }); // c.nop
-        let addi = i_enc(OP_IMM, 1, 0b000, 0, 42);
+        let addi = i_enc(OP_IMM, 1, 0b000, 0, 42); // = 0x02a00093
         let mut bytes = nop.to_le_bytes().to_vec();
         bytes.extend_from_slice(&addi.to_le_bytes());
         h.bus.write_bytes(BASE, &bytes).unwrap();
         h.run(2);
         assert_eq!(h.cpu.reg(1), 42);
         assert_eq!(h.cpu.pc(), BASE + 6);
+
+        // 取指事件：第 1 条 c.nop 对齐取一条 IF W；第 2 条 addi 跨 XLEN，
+        // IFU 发两条 IF H（@BASE+2 低半字 0x0093，@BASE+4 高半字 0x02a0）。addi 无访存。
+        let mem: Vec<_> = h
+            .sink
+            .0
+            .iter()
+            .filter_map(|e| match e {
+                EmuEvent::MemAccess { kind, size, addr, value, .. } => Some((*kind, *size, *addr, *value)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            mem,
+            vec![
+                (rremu_bus::MemKind::Inst, AccessSize::Word, BASE, (addi & 0xffff) << 16 | u32::from(nop)),
+                (rremu_bus::MemKind::Inst, AccessSize::Half, BASE + 2, addi & 0xffff),
+                (rremu_bus::MemKind::Inst, AccessSize::Half, BASE + 4, addi >> 16),
+            ]
+        );
     }
 
     // ---- interrupt tests (M3.3) ----
