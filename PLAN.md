@@ -160,10 +160,10 @@ pub fn decode16(hw: u16, pc: Address) -> Result<isa::Instruction, DecodeError>;
 ### 5.3 rremu-bus
 
 ```rust
-pub enum AccessSize { Byte, Half, Word }
+pub enum AccessSize { Byte, Half, Word }   // RV64 预留：DoubleWord（8 字节）
 pub enum BusError { Unmapped { addr: u32 }, Misaligned { addr: u32, size: AccessSize }, Device { addr: u32, msg: String }, PeekUnsupported { addr: u32 }, Overlap { start, end } }
 
-// 事件经 read/write 的 sink 参数贯穿：cpu 把自己的 sink 传给 bus，设备直接上报 UartOutput 等
+// 事件经 data_read/data_write/inst_read 的 sink 参数贯穿：cpu 把 sink 传给 bus，设备直接上报 UartOutput 等
 // （单一事件流，避免设备持有 sink 引发的共享所有权）
 pub trait BusDevice {
     fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 可有副作用
@@ -172,30 +172,44 @@ pub trait BusDevice {
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;     // 镜像加载，无事件
     fn device_name(&self) -> &str;
     fn as_any_mut(&mut self) -> &mut dyn Any;                                       // machine 层安全下取具体设备
+    fn check_interrupt(&self) -> Option<u32> { None }                               // M3：中断源设备覆写
+    fn tick(&mut self, cycle: u64) {}                                               // M3：cycle 下发（CLINT mtime）
 }
-pub trait Bus { // 依赖倒置：cpu 只依赖此 trait
-    fn fetch(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
-    fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+pub trait Bus { // 依赖倒置：cpu 只依赖此 trait；对外只暴露三个语义访问方法
+    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 取指，恒读一个 XLEN（RV32=4字节）
+    fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;      // 无副作用无事件
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
     fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice>;
     fn set_watch(&mut self, addr: Option<u32>);                                     // tohost 监视
     fn set_cycle(&mut self, cycle: u64);
+    fn pending_interrupt(&mut self) -> Option<u32>;                                 // cause 降序聚合（MEI>MTI>MSI）
 }
-pub struct BusRouter { /* Vec<Region{Range, Box<dyn BusDevice>}>，map() 检查重叠；watch 命中且 data&1==1 → 发 Halt{code: data>>1} */ }
+// MemKind 与三个语义方法一一对应；Display：Inst→IF、DataRead→DR、DataWrite→DW
+pub enum MemKind { Inst, DataRead, DataWrite }
+pub struct BusRouter { /* Vec<Region{Range, Box<dyn BusDevice>}>，map() 检查重叠；
+                          私有助手 route_read/route_read_raw(静默)/route_write 承担对齐+路由+事件；
+                          watch 命中且 data&1==1 → 发 Halt{code: data>>1} */ }
 pub struct IrqLine { /* raise()/clear()/is_pending() */ }
 
 pub enum EmuEvent {
-    MemAccess { cycle: u64, kind: MemKind /* Read|Write|Fetch */, size: AccessSize, addr: u32, value: u32, device: String },
+    MemAccess { cycle: u64, kind: MemKind /* Inst|DataRead|DataWrite */, size: AccessSize, addr: u32, value: u32, device: String },
     UartOutput { byte: u8 }, UartInput { byte: u8 },
     Trap { cause: u32, pc: u32 }, Halt { code: i32 },
 }
 pub trait EventSink { fn emit(&mut self, ev: EmuEvent); }
 ```
-- 小端；`read/write` 返回值低位对齐；对齐检查在总线层（Word/4、Half/2）
+- 小端；`data_read/data_write` 返回值低位对齐；对齐检查在总线层（Word/4、Half/2）
 - `peek_read` 无默认实现：强制每个设备显式声明无副作用读语义（D12 的落地）
-- 验收：路由/未映射/未对齐/注册重叠单测；EventSink 组合实现（Vec 收集器）单测
+
+**取指位宽与跨 XLEN 读取（访存显示的位宽必须与读取一致）**
+- CPU 每条指令只调用**一次** `inst_read(pc)`，逻辑层恒取一个 XLEN（RV32 = 4 字节），发**一条** `size = Word` 的 `IF` 记录；一次即拿回完整 32 位指令，**不**拆成"先读半字判长、再读半字"的两次访问（避免一条指令两行、实现不优雅）。
+- **跨 XLEN 边界**：取指地址未按 XLEN 对齐时（RV32 下 `pc & 3 == 2`，仅 RVC 允许 2 字节对齐），一条 32 位指令会横跨两个对齐 XLEN 字，单次对齐 XLEN 读无法取得完整指令。此时 `BusRouter::inst_read` 物理上**分两次 XLEN 读**（`route_read_raw` 静默读 `aligned` 与 `aligned+XLEN`，不上报中间事件），在总线上拼合，对 CPU/事件仍呈现为"一次 `inst_read`、**一条** `IF W` 合成记录（`addr = pc`、`value` = 拼合指令字、device = 首次命中设备）"。
+- 对齐违例：`pc` 为奇数返 `Misaligned { size: Half }`，CPU 映射为 `INSTR_MISALIGNED`。
+- 数据访问 `data_read/data_write` 严格按传入 `AccessSize`（B/H/W）读取并发对应 `size` 的记录；TUI value 按类型定宽显示且保留前导 0（B=2 位 hex、H=4 位、W=8 位），再用空格右对齐到 W 宽度。
+- **RV64 扩展规划（仅预留，M5 前不实现）**：XLEN=8 时 `inst_read` 恒读 8 字节，跨 8 字节边界同理读两个对齐 8 字节拼合。落地需要：① `AccessSize` 增加 `DoubleWord`；② `EmuEvent::MemAccess.value` 与 `BusDevice::read` 返回值、`data` 入参由 `u32` 扩到 `u64`（或泛型化承载）；③ `data_read/data_write` 支持 `DoubleWord`；④ TUI value 增加 DW=16 位 hex 档位（右对齐宽度随之变为 18 列）；⑤ `peek`/表达式解引用/`x` 命令宽度随 XLEN。`inst_read` 跨字分支与 `AccessSize` 注释已标记该扩展点。
+- 验收：路由/未映射/未对齐/注册重叠单测；EventSink 组合实现（Vec 收集器）单测；`inst_read` 对齐单事件 / 跨 XLEN 拼合单事件 / 奇数地址违例单测
 
 ### 5.4 rremu-cpu
 

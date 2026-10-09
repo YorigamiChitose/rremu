@@ -6,6 +6,9 @@ use core::ops::Range;
 use thiserror::Error;
 
 /// 访问宽度。
+///
+/// RV64 扩展点：未来新增 `DoubleWord`（8 字节），届时总线返回值/事件 value
+/// 需由 u32 扩到 u64，TUI value 增加 16 位 hex 档位（见 PLAN §5.3）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessSize {
     Byte,
@@ -295,17 +298,21 @@ impl Bus for BusRouter {
         if addr & 1 != 0 {
             return Err(BusError::Misaligned { addr, size: AccessSize::Half });
         }
-        // 4 字节对齐：单次对齐 Word 读 + 一条 IF W 事件
+        // XLEN 对齐（RV32: addr & 3 == 0）：单次 XLEN 读 + 一条 IF W 记录
         if addr & 3 == 0 {
             return self.route_read(addr, AccessSize::Word, MemKind::Inst, sink);
         }
-        // 2 字节对齐（addr & 3 == 2）：跨字拼合
+        // 跨 XLEN 边界（RV32: addr & 3 == 2，仅 RVC 允许 2 字节对齐）：一条 32 位
+        // 指令横跨两个对齐 XLEN 字，单次对齐 XLEN 读取不到完整指令，故物理上分
+        // 两次 XLEN 读（aligned 与 aligned+4）再拼合。route_read_raw 静默读、
+        // 不上报中间事件，对 CPU/事件仍呈现为一次取指、一条 IF W 合成记录。
+        // RV64 扩展点：此处 3/4/Word 需泛化为 XLEN(8)/DoubleWord（见 PLAN §5.3）。
         let aligned = addr & !3;
         let cycle = self.cycle;
-        // 第一次读拿值与设备名（route_read_raw 不发事件）
+        // 第一次 XLEN 读拿值与设备名（route_read_raw 不发事件）
         let (lo, dev_name) = self.route_read_raw(aligned, AccessSize::Word, sink)?;
         let dev_name = dev_name.to_owned(); // 断开 &self 借用，让第二次 route_read_raw 可借
-        // 第二次读高半字（仍走 route_read_raw，不发事件）
+        // 第二次 XLEN 读高半字（仍走 route_read_raw，不发事件）
         let (hi, _) = self.route_read_raw(aligned.wrapping_add(4), AccessSize::Word, sink)?;
         let value = (lo >> 16) | (hi << 16);
         // 只发一条合成事件，覆盖指令地址
