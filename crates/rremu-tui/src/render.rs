@@ -189,23 +189,26 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
         .map(|ev| match ev {
             EmuEvent::MemAccess { cycle, kind, size, addr, value, device } => {
                 let kind_str = match kind {
-                    MemKind::Read => "R",
-                    MemKind::Write => "W",
-                    MemKind::Fetch => "X",
+                    MemKind::Inst => "IF",
+                    MemKind::DataRead => "DR",
+                    MemKind::DataWrite => "DW",
                 };
                 let size_str = match size {
                     AccessSize::Byte => "B",
                     AccessSize::Half => "H",
                     AccessSize::Word => "W",
                 };
+                // value 按实际宽度显示（{:#x} 无前导 0），再 {:>10} 右对齐到 10 列
+                let val_str = format!("{:#x}", value);
+                let val_padded = format!("{val_str:>10}");
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{cycle:<6}"), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(format!("{kind_str}{size_str}"), Style::default().fg(Color::Yellow)),
+                    Span::styled(format!("{kind_str} {size_str}"), Style::default().fg(Color::Yellow)),
                     Span::raw(" "),
                     Span::styled(format!("{addr:#010x}"), Style::default().fg(Color::Cyan)),
                     Span::raw(" "),
-                    Span::styled(format!("{value:#010x}"), Style::default().fg(Color::Green)),
+                    Span::styled(val_padded, Style::default().fg(Color::Green)),
                     Span::raw(" "),
                     Span::styled(device.as_str(), Style::default().fg(Color::Magenta)),
                 ]))
