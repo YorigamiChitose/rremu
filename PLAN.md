@@ -1,7 +1,7 @@
 # rremu 项目规划
 
 > 版本 v1.0 · 定稿日期 2026-10-08
-> 来源：与需求方逐项讨论确认。所有决策均已核对，本文档是实施与验收的唯一依据；任何变更先改本文档再改代码。
+> 来源：与需求方逐项讨论确认。所有决策均已核对，本文档是架构与实现的依据；任何变更先改本文档再改代码。
 
 ---
 
@@ -56,15 +56,15 @@
 ┌─────────────────────────────────────────────────────────────┐
 │  bin (rremu) —— clap 解析 · composition root（唯一组装点）    │
 │     ├── rremu-cli   REPL 调试器（rustyline + rremu-expr）    │
-│     ├── rremu-tui   TUI 视图（ratatui，M4）                  │
-│     └── rremu-window 独立窗口（minifb，M5）                  │
+│     ├── rremu-tui   TUI 视图（ratatui）                      │
+│     └── rremu-window 独立窗口（minifb）                      │
 ├─────────────────────────────────────────────────────────────┤
 │  rremu-machine —— Machine/Builder/快照/控制/断点/监视点       │
 ├──────────────┬───────────────────────┬──────────────────────┤
 │  rremu-cpu   │  rremu-devices        │  rremu-loader        │
 │  状态+执行    │  ram/uart/clint/fb    │  ELF 解析（零 IO）    │
 ├──────────────┴───────────────────────┴──────────────────────┤
-│  rremu-bus —— BusDevice/Bus trait · IrqLine · EmuEvent/EventSink │
+│  rremu-bus —— BusDevice/Bus trait · EmuEvent/EventSink      │
 ├─────────────────────────────────────────────────────────────┤
 │  rremu-isa（指令/寄存器/CSR 定义）   rremu-decode（纯函数解码）│
 │  rremu-expr（表达式 AST+求值，独立叶 crate）                  │
@@ -74,10 +74,10 @@
 ### 3.1 crate 依赖方向（edge = "依赖"）
 
 ```
-bin → cli, tui*, window*, machine, loader, expr(间接), clap, anyhow, ctrlc, tracing-subscriber
+bin → cli, tui, window, machine, loader, expr(间接), clap, anyhow, ctrlc, tracing-subscriber
 cli → machine, expr, rustyline, tracing
-tui* → machine, ratatui, crossterm
-window* → minifb, thiserror
+tui → machine, ratatui, crossterm
+window → minifb, thiserror
 machine → cpu, bus, devices, loader, expr, thiserror, tracing
 devices → bus, thiserror, tracing
 cpu → isa, decode, bus, thiserror, tracing
@@ -86,8 +86,6 @@ bus → thiserror
 isa → （无）
 expr → （无）
 ```
-
-`*` = 按里程碑后置引入。
 
 ### 3.2 依赖红线（违反即打回）
 
@@ -108,15 +106,15 @@ rremu/
 ├── crates/
 │   ├── rremu-isa/             # Word/Address 类型、Instruction 枚举、CSR 常量、Priv、反汇编 Display
 │   ├── rremu-decode/          # instr_len / decode16 / decode32，纯函数
-│   ├── rremu-bus/             # BusDevice trait、Bus 路由、IrqLine、EmuEvent、EventSink、peek 语义
+│   ├── rremu-bus/             # BusDevice trait、Bus 路由、EmuEvent、EventSink、peek 语义
 │   ├── rremu-cpu/             # Cpu 状态 + step 执行循环 + trap
-│   ├── rremu-devices/         # ram / uart（M1）、clint / framebuffer（M3）
+│   ├── rremu-devices/         # ram / uart、clint / framebuffer
 │   ├── rremu-loader/          # Image/Segment，goblin 解析 ELF32 + tohost 符号提取
 │   ├── rremu-expr/            # 词法/递归下降/AST 求值 + EvalContext trait
 │   ├── rremu-machine/         # MachineBuilder/Machine/RunResult/MachineSnapshot/断点监视点
 │   ├── rremu-cli/             # REPL：命令解析与分发（rustyline）
-│   ├── rremu-tui/             # TUI（M4）
-│   └── rremu-window/          # 独立窗口（M5）
+│   ├── rremu-tui/             # TUI
+│   └── rremu-window/          # 独立窗口
 ├── bin/                       # crate 名 rremu：main.rs + clap Args + 前端选择
 ├── tests/                     # 集成测试 + 固件缓存
 │   ├── data/                  # hello.elf / rv32ui-p-add.elf 等（脚本生成，gitignore）
@@ -155,7 +153,7 @@ pub fn decode16(hw: u16, pc: Address) -> Result<isa::Instruction, DecodeError>;
 #[derive(Debug, Error)] pub enum DecodeError { Illegal { bits: u32, pc: u32 }, Unimplemented { bits: u32, pc: u32 } }
 ```
 - 取指侧只看 `instr_len(first_half)` 决定取 2 还是 4 字节，32 位指令跨 4 字节边界由 cpu 层拼接，decode 保持纯函数
-- 验收：RV32I 40 条每类至少 1 条单测；M/C/Zicsr 在 M2 补全时同步补测；非法 opcode 报 `Illegal`
+- 验收：RV32I 40 条每类至少 1 条单测；M/C/Zicsr 指令同步覆盖；非法 opcode 报 `Illegal`
 
 ### 5.3 rremu-bus
 
@@ -172,8 +170,8 @@ pub trait BusDevice {
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;     // 镜像加载，无事件
     fn device_name(&self) -> &str;
     fn as_any_mut(&mut self) -> &mut dyn Any;                                       // machine 层安全下取具体设备
-    fn check_interrupt(&self) -> Option<u32> { None }                               // M3：中断源设备覆写
-    fn tick(&mut self, cycle: u64) {}                                               // M3：cycle 下发（CLINT mtime）
+    fn check_interrupt(&self) -> Option<u32> { None }                               // 中断源设备覆写
+    fn tick(&mut self, cycle: u64) {}                                               // cycle 下发（CLINT mtime）
 }
 pub trait Bus { // 依赖倒置：cpu 只依赖此 trait；对外只暴露三个语义访问方法
     fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 取指原语：单次对齐物理读，发一条 IF（size 由 CPU/IFU 给定）；不含跨 XLEN 策略
@@ -191,7 +189,6 @@ pub enum MemKind { Inst, DataRead, DataWrite }
 pub struct BusRouter { /* Vec<Region{Range, Box<dyn BusDevice>}>，map() 检查重叠；
                           私有助手 route_read/route_write 承担对齐+路由+事件（三个语义方法均为单次物理访问原语）；
                           watch 命中且 data&1==1 → 发 Halt{code: data>>1} */ }
-pub struct IrqLine { /* raise()/clear()/is_pending() */ }
 
 pub enum EmuEvent {
     MemAccess { cycle: u64, kind: MemKind /* Inst|DataRead|DataWrite */, size: AccessSize, addr: u32, value: u32, device: String },
@@ -210,7 +207,7 @@ pub trait EventSink { fn emit(&mut self, ev: EmuEvent); }
   - **跨 XLEN**（`pc & 3 == 2`，仅 RVC 允许 2 字节对齐）：32 位指令横跨两个对齐 Word，IFU 调两次 `inst_read(pc, Half)` 与 `inst_read(pc+2, Half)`（各自 2 字节对齐、不跨 Word 边界），**各发一条 `IF H`（共两条）**，在 CPU 内拼成 `lo | (hi << 16)`。
   - `pc` 奇数：CPU 在拆分前直接陷 `INSTR_MISALIGNED`；原语对任何 `size` 对齐违例返 `Misaligned{addr,size}`，CPU 映射为 `INSTR_MISALIGNED`，其余总线错误（Unmapped/Device）映射为 `INSTR_ACCESS_FAULT`。
 - 数据访问 `data_read/data_write` 同为单次对齐原语，严格按传入 `AccessSize`（B/H/W）发对应 `size` 的记录；**数据非对齐不拆分**，仍返 `Misaligned`（CPU 陷 LOAD/STORE_MISALIGNED）——跨 XLEN 拆分只用于取指。TUI value 按类型定宽显示且保留前导 0（B=2 位 hex、H=4 位、W=8 位），再用空格右对齐到 W 宽度。
-- **RV64 扩展规划（仅预留，M5 前不实现）**：同一规则随 XLEN=8 泛化——只要 4 字节指令落在一个对齐 XLEN 块内（`pc % 8 ∈ {0,2,4}`）就读一次对齐 `DoubleWord`（一条 `IF DW`）；仅当跨过 8 字节边界（`pc % 8 == 6`）才拆成边界两侧两个对齐 `Half`（两条 `IF H`）。决策仍在 `Cpu::fetch_word`（随 XLEN 参数化），bus 只新增宽度。落地需要：① `AccessSize` 增加 `DoubleWord`；② `EmuEvent::MemAccess.value` 与 `BusDevice::read` 返回值、`data` 入参由 `u32` 扩到 `u64`（或泛型化承载）；③ `data_read/data_write` 支持 `DoubleWord`；④ TUI value 增加 DW=16 位 hex 档位（右对齐宽度随之变为 18 列）；⑤ `peek`/表达式解引用/`x` 命令宽度随 XLEN。扩展点已标记于 `inst_read`/`AccessSize`/`Cpu::fetch_word` 注释。
+- **RV64 扩展规划（仅预留，暂不实现）**：同一规则随 XLEN=8 泛化——只要 4 字节指令落在一个对齐 XLEN 块内（`pc % 8 ∈ {0,2,4}`）就读一次对齐 `DoubleWord`（一条 `IF DW`）；仅当跨过 8 字节边界（`pc % 8 == 6`）才拆成边界两侧两个对齐 `Half`（两条 `IF H`）。决策仍在 `Cpu::fetch_word`（随 XLEN 参数化），bus 只新增宽度。落地需要：① `AccessSize` 增加 `DoubleWord`；② `EmuEvent::MemAccess.value` 与 `BusDevice::read` 返回值、`data` 入参由 `u32` 扩到 `u64`（或泛型化承载）；③ `data_read/data_write` 支持 `DoubleWord`；④ TUI value 增加 DW=16 位 hex 档位（右对齐宽度随之变为 18 列）；⑤ `peek`/表达式解引用/`x` 命令宽度随 XLEN。扩展点已标记于 `inst_read`/`AccessSize`/`Cpu::fetch_word` 注释。
 - 验收：bus 侧——`inst_read` 原语单次单事件（`IF W`/`IF H`）、严格按 `size` 报对齐违例；cpu 侧——对齐取指一条 `IF W`、跨 XLEN 取指两条 `IF H`（addr/value 正确）且指令正确执行（`exec_cross_boundary_32bit_instr`）、奇数 `pc` 陷 `INSTR_MISALIGNED`；加上路由/未映射/注册重叠与 EventSink 收集单测
 
 ### 5.4 rremu-cpu
@@ -226,13 +223,13 @@ pub enum StepOutcome { Executed { instr: isa::Instruction, len: u8 }, Trapped { 
 - trap 流程：`mepc ← pc; mcause ← cause; priv_ ← Machine; pc ← mtvec`（mtvec 仅支持 DIRECT 模式，VECTORED 报 Unimplemented）
 - mret：`pc ← mepc; priv_ ← mstatus.MPP`；ecall/ebreak/非法指令/地址未对齐 → trap
 - 语义要点：全部运算 u32 wrapping；移位量取低 5 位；`mulh` 系列按符号组合实现并有黄金值单测；DIV/REM 除零与溢出按 spec 返回定义值（不 trap）
-- 验收：单测（寄存器写回、x0 恒零、分支跳转、trap 进出）；集成验收见 §11
+- 验收：单测（寄存器写回、x0 恒零、分支跳转、trap 进出）
 
 ### 5.5 rremu-devices
 
-**RAM**（M1）：`Ram::new(base, size)`，Vec<u8> 小端，全宽度读写，peek 等价 read。
+**RAM**：`Ram::new(base, size)`，Vec<u8> 小端，全宽度读写，peek 等价 read。
 
-**UART**（M1，NS16550A 子集，默认基址 0x1000_0000）：
+**UART**（NS16550A 子集，默认基址 0x1000_0000）：
 
 | offset | 寄存器 | 行为 |
 |---|---|---|
@@ -246,9 +243,9 @@ pub enum StepOutcome { Executed { instr: isa::Instruction, len: u8 }, Trapped { 
 - 输入注入：`Uart::push_input(u8)`（machine 转发）；peek_read RDR 返回队首但不弹出
 - 验收：写 THR 触发事件；RDR 读副作用与 peek 无副作用对比单测
 
-**CLINT**（M3，基址 0x0200_0000）：msip(+0x0000)、mtimecmp(+0x4000)、mtime(+0xBFF8)；mtime 到期 raise IrqLine（MachineTimer 中断）。
+**CLINT**（基址 0x0200_0000）：msip(+0x0000)、mtimecmp(+0x4000)、mtime(+0xBFF8)；mtime ≥ mtimecmp 时 `check_interrupt()` 返回 MTI，msip 置位返回 MSI。
 
-**Framebuffer**（M3，基址 0x2000_0000）：固定宽高（默认 640×480，RGB565 → 内部 u32）；字节写入按像素组装；`dirty` 标记 + `frame(&self) -> &[u32]`；peek 直读。
+**Framebuffer**（基址 0x2000_0000）：固定宽高（默认 640×480，RGB565 → 内部 u32）；字节写入按像素组装；`dirty` 标记 + `frame(&self) -> &[u32]`；peek 直读。
 
 ### 5.6 rremu-loader
 
@@ -346,7 +343,7 @@ pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpo
 - `-c` 批处理：逐条执行并回显；任一条导致 `Exited` 则忽略剩余并按退出码结束进程；全部执行完且 stdin 非 TTY → 自动 `q`
 - 验收：脚本会话集成测试（spawn 子进程喂命令断言输出）
 
-### 5.10 rremu-tui（M4）
+### 5.10 rremu-tui
 
 - 面板：顶栏（cycle/速度档/状态/pc）│ 左栏寄存器（x0-x31/pc/priv/CSR：mstatus mtvec mepc mcause mie mip mcycle minstret）│ 右上反汇编（pc 前 4 后 12，当前行高亮）│ 右下最近存储访问 ring 16 条（#cycle/读写/宽度/地址/数据/设备名）│ 底部串口终端 │ 状态栏按键提示
 - 按键：Space 暂停/继续；s 单步；←/→ 档位 1/2/4/8/16/32/64/全速；f 全速；i 串口输入模式（Esc 返回）；r 复位；q 退出
@@ -379,7 +376,7 @@ pub enum RunResult { Exited { code: i32 }, HitBreakpoint { pc: u32 }, HitWatchpo
 
 ## 7. TUI 规格
 
-见 §5.10（已定稿，此处为索引）。里程碑：M4。
+见 §5.10（此处为索引）。
 
 ## 8. 外部参数规格
 
@@ -397,27 +394,27 @@ pub struct Args {
 }
 ```
 - `parse_size()`：`16M → 0x1000000`，非法后缀报错
-- 预留（M3+ 不实现）：`--no-uart` `--window` `--trace`
-- M5 实现：`--no-fb`（禁用 fb 设备映射 + 不自动开窗）
+- 预留不实现：`--no-uart` `--window` `--trace`
+- `--no-fb`：禁用 fb 设备映射 + 不自动开窗
 - 示例：`rremu hello.elf` / `rremu hello.elf -c c` / `rremu hello.elf -c "b 0x80000100" -c c -c "info r"` / `rremu hello.elf -t -m 64M -v` / `rremu hello.elf --no-fb -c c`
 
 ## 9. 外部依赖规格
 
 **原则**：版本收口 `[workspace.dependencies]`（成员 `workspace = true`）；caret + lockfile；库 crate 白名单仅 thiserror/tracing；专属依赖进专属 crate。
 
-| 阶段 | crate | 版本 | 特性 | 位置 |
-|---|---|---|---|---|
-| M1 | thiserror | 2.0 | 默认 | bus/decode/cpu/loader/machine |
-| M1 | tracing | 0.1 | 默认 | 全部库 crate |
-| M1 | tracing-subscriber | 0.3 | env-filter, fmt | bin |
-| M1 | goblin | 0.10 | default-features=false; elf32, elf64*, endian_fd | loader |
-| M1 | anyhow | 1.0 | 默认 | bin |
-| M1 | clap | 4.6 | derive | bin 独占 |
-| M1 | rustyline | 18 | 默认 | cli |
-| M1 | ctrlc | 3.5 | 默认 | bin |
-| M4 | ratatui | 0.30 | 默认 | tui |
-| M4 | crossterm | 0.29 | 默认 | tui |
-| M5 | minifb | 0.29 | default-features=false; x11 only | window |
+| crate | 版本 | 特性 | 位置 |
+|---|---|---|---|
+| thiserror | 2.0 | 默认 | bus/decode/cpu/loader/machine |
+| tracing | 0.1 | 默认 | 全部库 crate |
+| tracing-subscriber | 0.3 | env-filter, fmt | bin |
+| goblin | 0.10 | default-features=false; elf32, elf64*, endian_fd | loader |
+| anyhow | 1.0 | 默认 | bin |
+| clap | 4.6 | derive | bin 独占 |
+| rustyline | 18 | 默认 | cli |
+| ctrlc | 3.5 | 默认 | bin |
+| ratatui | 0.30 | 默认 | tui |
+| crossterm | 0.29 | 默认 | tui |
+| minifb | 0.29 | default-features=false; x11 only | window |
 
 \* goblin 0.10.x 上游缺陷：仅开 elf32 无法编译（0.10.7 实测），故同时启用 elf64；解析路径仍只走 elf32。
 
@@ -425,7 +422,7 @@ pub struct Args {
 
 ## 10. 测试策略
 
-**总原则（需求方要求）：每里程碑只用 3 个代表性测试验证，不追求跑全套。**
+**总原则：只用 3 个代表性测试验证，不追求跑全套。**
 
 | 层级 | 内容 | 所在 |
 |---|---|---|
@@ -435,109 +432,19 @@ pub struct Args {
 
 固件产出（本机已确认具备 `riscv64-unknown-elf-gcc`）：
 
-- `tools/build-firmware.sh`：手写 `tests/firmware/hello.S` + 链接脚本 → `riscv64-unknown-elf-gcc -march=rv32imc_zicsr -mabi=ilp32 -nostdlib` → `tests/data/hello.elf`（M1 前置）
+- `tools/build-firmware.sh`：手写 `tests/firmware/hello.S` + 链接脚本 → `riscv64-unknown-elf-gcc -march=rv32imc_zicsr -mabi=ilp32 -nostdlib` → `tests/data/hello.elf`
 - `tools/build-tests.sh`：`git clone --depth 1` 官方 riscv-tests → 用其 `env/` 头与链接脚本单独编译上述 3 个 `.S`（`-march=rv32imc/-mabi=ilp32`）→ 缓存 `tests/data/*.elf`（gitignore）
 - 兜底：若官方源码构建受阻，3 个代表测试降级为自研等价固件（Rust no_std 或汇编，断言 PASS/FAIL 写 tohost），先跑通后替换
 
-## 11. 里程碑分解
-
-### M1 —— workspace 骨架 + RV32I 核心 + 基础 REPL（可跑 hello world）
-
-| 步 | 任务 | 产出 | 验收（逐项勾选） |
-|---|---|---|---|
-| 1.1 | workspace 骨架 | 根 Cargo.toml、11 个 crate 目录、workspace lints | `cargo build` 全绿；`cargo clippy --workspace` 0 warning |
-| 1.2 | rremu-isa | 类型/Priv/Instruction(RV32I)/CSR 常量/Display/ABI 表 | Display 单测 ≥6 例通过 |
-| 1.3 | rremu-decode | instr_len/decode32（RV32I 全量） | 40 条分类单测全过；非法码报 Illegal |
-| 1.4 | rremu-bus | trait/Bus/IrqLine/EmuEvent/EventSink | 路由/未映射/未对齐/重叠注册单测过 |
-| 1.5 | rremu-devices(ram,uart) | Ram/Uart（寄存器表见 §5.5） | ram 宽度读写、uart 事件与 LSR/RDR 单测过 |
-| 1.6 | rremu-loader | load_elf + tohost 提取 | 最小 ELF 单测 + hello.elf 解析过 |
-| 1.7 | 固件脚本 | hello.S/链接脚本/build-firmware.sh | tests/data/hello.elf 生成成功 |
-| 1.8 | rremu-cpu | 状态 + step（RV32I + ecall/ebreak trap 骨架） | x0 恒零/写回/分支/trap 单测过 |
-| 1.9 | rremu-machine | Builder/Machine/run/step/snapshot/peek/事件环 | hello.elf `run()` → Exited{0} 且事件流含 "hello" |
-| 1.10 | rremu-expr | lexer/parser/eval/EvalContext | ≥15 例单测全过 |
-| 1.11 | rremu-cli + bin | REPL(help/c/si/x/p/q) + clap + ctrlc + 日志 | `rremu hello.elf -c c` 输出 hello world 退出码 0；`si`/`x`/`p` 手测通过；Ctrl+C 暂停回提示符 |
-| 1.12 | 代表测试① | tools/build-tests.sh + 集成测试 | rv32ui-p-add PASS（tohost=1） |
-
-### M2 —— M/C/Zicsr 扩展 + 最简 M-mode + 调试闭环
-
-| 步 | 任务 | 验收 |
-|---|---|---|
-| 2.1 | decode 补 M/C/Zicsr | 新增指令分类单测全过 |
-| 2.2 | cpu 补 M 语义（mulh/div/rem 特例值） | 除零/INT_MIN/-1/mulh 黄金值单测过 |
-| 2.3 | cpu 补 C 执行与 2 字节对齐 pc | 非对齐 pc 取指正确；跨边界 32 位指令拼接正确 |
-| 2.4 | CSR 读写 + 最简 M-mode trap | csrrw/s/c(i) 单测；ecall→mtvec、mret→mepc 单测过 |
-| 2.5 | machine 断点/监视点 | `b` 命中暂停、`w` 变化暂停并报 old/new、`info w`/`d n` 正确 |
-| 2.6 | 代表测试②③ + 全链路 | rv32um-p-mul、rv32uc-p-rvc PASS；`-c "w pc==0x80000100" -c c` 手测 |
-
-### M3 —— 设备丰富（CLINT + Framebuffer）
-
-| 步 | 任务 | 验收 |
-|---|---|---|
-| 3.1 | CLINT + 定时中断注入 | 自编定时器固件：mtime 到期 → trap → 计数递增，PASS |
-| 3.2 | Framebuffer 设备（dirty/帧导出） | 写像素 dirty 置位、frame() 内容正确单测过 |
-| 3.3 | CLI 观测增强（MemAccess 事件进快照 ring） | `si` 后快照含最近访问记录 |
-
-### M4 —— TUI
-
-| 步 | 任务 | 验收 |
-|---|---|---|
-| 4.1 | rremu-tui 骨架（线程模型 + 快照通道） | --tui 进入界面无闪烁，q 正常退出 |
-| 4.2 | 六面板渲染（§5.10） | 寄存器/CSR/反汇编/存储访问/串口/状态栏数据与 CLI info 一致 |
-| 4.3 | 按键控制全套 | Space/s/←/→/f/i/r/q 全部按 §5.10 行为工作 |
-| 4.4 | fb 内嵌渲染 | fb 固件画面在 TUI 中可见 |
-| 4.5 | 手测清单 | hello world、断点暂停、调速、输入回显各 1 遍 |
-
-### M5 —— 独立窗口 + 打磨
-
-**设计原则（2026-10-09 敲定）**：Framebuffer 设备是纯设备（M3 已实现，无任何调试按键或脱离 fb 的功能）；rremu-window 是纯 minifb 显示窗，仅做"按 fb 输出更新像素 + 检测用户关窗"两件事，无任何调试按键、无运行/暂停/调速/单步等控制逻辑（控制仍在 CLI REPL）；CLI 模式 + fb 已配置 → bin 自动开窗（无需 `--window` 旗标）；TUI 模式不开窗，沿用 M4 的 `b` 键内嵌渲染。`--no-fb` 旗标用于完全禁用 fb 设备（既不映射设备也不开窗）。
-
-| 步 | 任务 | 验收 |
-|---|---|---|
-| 5.1 | rremu-window（minifb 纯显示窗，dirty 驱动刷新） | Window::new/update/is_open 三 API；无键盘绑定；fb 画面在原生窗口显示 |
-| 5.2 | machine: `framebuffer_dirty_frame()` dirty 驱动 API | 返回 `(w,h,&[u32])` 仅在 dirty 时；调用清 dirty；避免每帧 clone 1.2MB |
-| 5.3 | bin + Repl 集成：CLI + fb 配置自动开窗；cmd_continue 改 step_n 循环泵窗；窗关 = pause | hello.elf CLI 模式弹窗并显示初始黑屏；用户关窗 → 暂停回提示符 |
-| 5.4 | CLI/参数打磨：`--no-fb` 旗标；`--help` 完整；非法参数文案清晰 | `--no-fb` 跳过 fb 设备映射与开窗；`-c`/`--tui` 冲突报错 |
-| 5.5 | 发布准备：`cargo build --release` 通过；clippy 0 warning；test 全绿；窗手测清单（沙箱无 X11，需用户手测） | release 二进制可执行；workspace clippy/test 全绿；手测清单交付 |
-
-## 12. 风险与对策
+## 11. 风险与对策
 
 | 风险 | 对策 |
 |---|---|
 | RVC 16/32 混合取指、跨 4 字节边界 | instr_len 先行；cpu 层取两个 halfword 拼接；rv32uc-p-rvc 兜底 |
 | M 扩展符号语义（mulh/div 特例） | 黄金值单测逐个锁定；rv32um-p-mul 兜底 |
 | peek_read 被误实现为有副作用 | trait 无默认实现 + code review 红线 + uart RDR 对比单测 |
-| Ctrl+C 与 rustyline raw 模式冲突 | 运行态才依赖 ctrlc 标志；提示符态交给 rustyline 自身 Interrupted；M1.11 显式手测 |
+| Ctrl+C 与 rustyline raw 模式冲突 | 运行态才依赖 ctrlc 标志；提示符态交给 rustyline 自身 Interrupted |
 | 官方 riscv-tests 构建受阻 | §10 兜底方案：自研等价固件 |
 | TUI 刷新拖慢模拟 | 快照节流 + machine 独立线程，TUI 只渲染不阻塞 |
 | 表达式别名双表漂移 | machine 层一致性测试锁定 expr 与 isa 的 ABI 表 |
 
-## 13. 全局逐项检查清单（最终验收）
-
-- [ ] workspace 12 crate 结构与 §4 一致，依赖方向符合 §3.1，红线 §3.2 无违反
-- [ ] RV32IMC_Zicsr 全量指令可解码、可执行；非法指令正确 trap
-- [ ] 最简 M-mode：ecall/ebreak/mret/mstatus/mtvec/mepc/mcause/mie/mip 行为符合 §5.4
-- [ ] 3 个代表性测试 PASS：rv32ui-p-add / rv32um-p-mul / rv32uc-p-rvc
-- [ ] hello world：`-c c` 与直接 `c` 两种路径均输出正确、退出码 0
-- [ ] CLI 全部 11 条命令按 §6 行为工作；Ctrl+C 中断有效
-- [ ] 表达式全语义按 §5.7 表实现，除零/非法寄存器/位置错误可报告
-- [ ] 监视点/断点/peek 均走无副作用读，UART 状态不被污染
-- [ ] TUI 六面板 + 8 个按键按 §5.10 工作；调速档位 8 档正确
-- [ ] Framebuffer：TUI 内嵌渲染 + minifb 独立窗口均可显示
-- [ ] clap 参数按 §8；`-c` 与 `--tui` 冲突报错；-m K/M/G 解析正确
-- [ ] 依赖版本与 §9 一致且全部收口 workspace.dependencies
-- [ ] `cargo clippy --workspace` 0 warning；`cargo test --workspace` 全绿
-- [ ] unsafe 全工程 0 处
-
-## 14. 规划一致性自查（本次定稿检查记录）
-
-| 检查项 | 结果 |
-|---|---|
-| CLI 11 条命令 ↔ MachineControl 方法一一对应 | ✓（c/si→run/step_n；b→add_breakpoint；w→add_watchpoint；d→remove_watchpoint；x/p→peek/eval；info→snapshot；q→进程退出） |
-| TUI 面板字段 ↔ MachineSnapshot 字段 | ✓（cycle/pc/priv/gprs/csrs/mem_ring/uart_out/state 全覆盖） |
-| TUI 调速 ↔ machine 线程 tick | ✓（档位序列 1/2/4/8/16/32/64/全速） |
-| D12 peek ↔ BusDevice::peek_read 无默认实现 | ✓（§5.3） |
-| 依赖表 ↔ 里程碑引入时机 | ✓（M1 八个、M4 两个、M5 一个；无提前引入） |
-| 测试数 ↔ 需求方"3 个代表性测试"约束 | ✓（固定 3 个 + 单测 + hello e2e） |
-| 红线 ↔ crate 依赖图 | ✓（leaf 零依赖；cpu 不见设备；前端只见 machine API；bin 唯一组装） |
-| 别名表双份风险 ↔ 一致性测试 | ✓（§5.7 取舍 + §12 对策） |
-| 工具链可得性 ↔ 固件方案 | ✓（已确认本机存在 riscv64-unknown-elf-gcc） |
