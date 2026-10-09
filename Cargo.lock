@@ -1526,7 +1526,6 @@ dependencies = [
  "rremu-machine",
  "rremu-window",
  "rustyline",
- "tracing",
 ]
 
 [[package]]
@@ -1537,7 +1536,6 @@ dependencies = [
  "rremu-decode",
  "rremu-isa",
  "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
@@ -1554,7 +1552,6 @@ version = "0.1.0"
 dependencies = [
  "rremu-bus",
  "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
@@ -1598,7 +1595,6 @@ dependencies = [
  "crossterm",
  "ratatui",
  "rremu-machine",
- "tracing",
 ]
 
 [[package]]
