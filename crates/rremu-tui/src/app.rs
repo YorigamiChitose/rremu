@@ -21,6 +21,7 @@ pub struct TuiApp {
     running: bool,
     speed: SpeedTier,
     input_mode: bool,
+    fb_view: bool,
     should_quit: bool,
     exit_code: i32,
 }
@@ -32,6 +33,7 @@ impl TuiApp {
             running: false,
             speed: SpeedTier::Steps(1),
             input_mode: false,
+            fb_view: false,
             should_quit: false,
             exit_code: 0,
         }
@@ -70,7 +72,17 @@ impl TuiApp {
 
             let snap = self.machine.snapshot();
             let disasm = self.collect_disasm(snap.pc);
-            terminal.draw(|f| render::draw(f, &snap, &disasm, self.speed, self.running, self.input_mode))?;
+            let fb = if self.fb_view { self.machine.framebuffer_snapshot() } else { None };
+            let data = render::RenderData {
+                snap: &snap,
+                disasm: &disasm,
+                fb: fb.as_ref(),
+                speed: self.speed,
+                running: self.running,
+                input_mode: self.input_mode,
+                fb_view: self.fb_view,
+            };
+            terminal.draw(|f| render::draw(f, &data))?;
 
             if !self.running {
                 let elapsed = frame_start.elapsed();
@@ -139,6 +151,10 @@ impl TuiApp {
                 // Reset machine
                 let _ = self.machine.reset();
                 self.running = false;
+            }
+            KeyCode::Char('b') => {
+                // Toggle framebuffer view
+                self.fb_view = !self.fb_view;
             }
             KeyCode::Left => {
                 // Speed down

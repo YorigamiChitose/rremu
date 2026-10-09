@@ -9,19 +9,24 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use rremu_machine::{
-    reg_name, AccessSize, DisasmLine, EmuEvent, MachineSnapshot, MemKind, RunState,
+    reg_name, AccessSize, DisasmLine, EmuEvent, FramebufferSnapshot, MachineSnapshot, MemKind,
+    RunState,
 };
 
 use crate::speed::SpeedTier;
 
-pub fn draw(
-    f: &mut Frame,
-    snap: &MachineSnapshot,
-    disasm: &[DisasmLine],
-    speed: SpeedTier,
-    running: bool,
-    input_mode: bool,
-) {
+/// 渲染所需的全部数据（避免 draw() 参数过多）。
+pub struct RenderData<'a> {
+    pub snap: &'a MachineSnapshot,
+    pub disasm: &'a [DisasmLine],
+    pub fb: Option<&'a FramebufferSnapshot>,
+    pub speed: SpeedTier,
+    pub running: bool,
+    pub input_mode: bool,
+    pub fb_view: bool,
+}
+
+pub fn draw(f: &mut Frame, data: &RenderData) {
     let area = f.area();
 
     let main = Layout::default()
@@ -34,10 +39,10 @@ pub fn draw(
         ])
         .split(area);
 
-    draw_top_bar(f, main[0], snap, speed, running);
-    draw_middle(f, main[1], snap, disasm);
-    draw_uart(f, main[2], snap, input_mode);
-    draw_status_bar(f, main[3], input_mode);
+    draw_top_bar(f, main[0], data.snap, data.speed, data.running);
+    draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view);
+    draw_uart(f, main[2], data.snap, data.input_mode);
+    draw_status_bar(f, main[3], data.input_mode);
 }
 
 fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedTier, running: bool) {
@@ -61,14 +66,21 @@ fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedT
     ]);
 }
 
-fn draw_middle(f: &mut Frame, area: Rect, snap: &MachineSnapshot, disasm: &[DisasmLine]) {
+fn draw_middle(
+    f: &mut Frame,
+    area: Rect,
+    snap: &MachineSnapshot,
+    disasm: &[DisasmLine],
+    fb: Option<&FramebufferSnapshot>,
+    fb_view: bool,
+) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(38), Constraint::Min(0)])
         .split(area);
 
     draw_registers(f, cols[0], snap);
-    draw_right_panels(f, cols[1], snap, disasm);
+    draw_right_panels(f, cols[1], snap, disasm, fb, fb_view);
 }
 
 fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
@@ -130,14 +142,24 @@ fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     f.render_widget(para, area);
 }
 
-fn draw_right_panels(f: &mut Frame, area: Rect, snap: &MachineSnapshot, disasm: &[DisasmLine]) {
+fn draw_right_panels(
+    f: &mut Frame,
+    area: Rect,
+    snap: &MachineSnapshot,
+    disasm: &[DisasmLine],
+    fb: Option<&FramebufferSnapshot>,
+    fb_view: bool,
+) {
     let halves = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
 
     draw_disasm(f, halves[0], disasm);
-    draw_mem_ring(f, halves[1], snap);
+    match (fb_view, fb) {
+        (true, Some(fb_data)) => draw_framebuffer(f, halves[1], fb_data),
+        _ => draw_mem_ring(f, halves[1], snap),
+    }
 }
 
 fn draw_disasm(f: &mut Frame, area: Rect, disasm: &[DisasmLine]) {
@@ -207,9 +229,39 @@ fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool) {
     let hint = if input_mode {
         " Esc: exit input mode | type to send to UART "
     } else {
-        " Space:run/pause  s:step  ←→:speed  f:full  i:input  r:reset  q:quit "
+        " Space:run/pause  s:step  ←→:speed  f:full  i:input  r:reset  b:fb  q:quit "
     };
     draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);
+}
+
+/// 帧缓冲内嵌渲染：下采样到面板尺寸，每格背景色 = 对应像素。
+fn draw_framebuffer(f: &mut Frame, area: Rect, fb: &FramebufferSnapshot) {
+    let block = Block::default().borders(Borders::ALL).title(" Framebuffer ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if fb.width == 0 || fb.height == 0 || fb.pixels.is_empty() || inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mut lines: Vec<Line> = Vec::with_capacity(inner.height as usize);
+    for y in 0..inner.height {
+        let mut spans: Vec<Span> = Vec::with_capacity(inner.width as usize);
+        for x in 0..inner.width {
+            let px = (u32::from(x) * fb.width) / u32::from(inner.width);
+            let py = (u32::from(y) * fb.height) / u32::from(inner.height);
+            let idx = (py * fb.width + px) as usize;
+            let pixel = fb.pixels.get(idx).copied().unwrap_or(0);
+            let r = ((pixel >> 16) & 0xff) as u8;
+            let g = ((pixel >> 8) & 0xff) as u8;
+            let b = (pixel & 0xff) as u8;
+            spans.push(Span::styled(" ", Style::default().bg(Color::Rgb(r, g, b))));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let para = Paragraph::new(lines);
+    f.render_widget(para, inner);
 }
 
 /// 渲染单行状态栏。

@@ -54,6 +54,14 @@ pub struct DisasmLine {
     pub is_current: bool,
 }
 
+/// 帧缓冲快照（TUI 内嵌渲染用，0x00RRGGBB 像素）。
+#[derive(Debug, Clone)]
+pub struct FramebufferSnapshot {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u32>,
+}
+
 #[derive(Debug, Error)]
 pub enum MachineError {
     #[error("segment {addr:#x}+{len} out of RAM range {ram_base:#x}..{ram_end:#x}")]
@@ -599,6 +607,18 @@ impl Machine {
         let lo = self.bus.peek(aligned, AccessSize::Word)?;
         let hi = self.bus.peek(aligned + 4, AccessSize::Word)?;
         Ok((lo >> offset) | (hi << (32 - offset)))
+    }
+
+    /// 帧缓冲快照（TUI 内嵌渲染用；无 framebuffer 返回 None）。
+    pub fn framebuffer_snapshot(&mut self) -> Option<FramebufferSnapshot> {
+        let addr = self.fb_base?;
+        let dev = self.bus.device_mut(addr)?;
+        let fb = dev.as_any_mut().downcast_ref::<Framebuffer>()?;
+        Some(FramebufferSnapshot {
+            width: fb.width(),
+            height: fb.height(),
+            pixels: fb.frame().to_vec(),
+        })
     }
 
     /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek，D12）。
