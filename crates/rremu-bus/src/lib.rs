@@ -111,6 +111,14 @@ pub trait BusDevice {
     fn device_name(&self) -> &str;
     /// 供 machine 层安全下取具体设备（如 uart 注入输入、ram 复位）。
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// 检查设备是否有 pending 中断（返回中断 cause 码，含 bit31）。
+    /// 默认无中断；CLINT 等中断源设备覆写此方法。
+    fn check_interrupt(&self) -> Option<u32> { None }
+
+    /// 每步周期同步：设备按 cycle 更新内部时序状态（如 CLINT mtime）。
+    /// 默认空操作。由 `BusRouter::set_cycle` 遍历调用。
+    fn tick(&mut self, _cycle: u64) {}
 }
 
 /// CPU/前端编程面对的总线接口（依赖倒置：cpu 只认此 trait）。
@@ -129,8 +137,11 @@ pub trait Bus {
     fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice>;
     /// 设置 tohost 监视地址（None 取消）。
     fn set_watch(&mut self, addr: Option<u32>);
-    /// CPU 每步开始前同步当前 cycle，供 MemAccess 事件携带。
+    /// CPU 每步开始前同步当前 cycle，供 MemAccess 事件携带，
+    /// 并下发 tick 到所有设备（CLINT 等用此更新内部时序状态）。
     fn set_cycle(&mut self, cycle: u64);
+    /// 聚合所有设备的 pending 中断，返回最高优先级 cause（cause 码降序：MEI>MTI>MSI）。
+    fn pending_interrupt(&mut self) -> Option<u32>;
 }
 
 struct Region {
@@ -288,6 +299,16 @@ impl Bus for BusRouter {
 
     fn set_cycle(&mut self, cycle: u64) {
         self.cycle = cycle;
+        for r in &mut self.regions {
+            r.device.tick(cycle);
+        }
+    }
+
+    fn pending_interrupt(&mut self) -> Option<u32> {
+        self.regions
+            .iter()
+            .filter_map(|r| r.device.check_interrupt())
+            .max()
     }
 }
 
@@ -478,5 +499,81 @@ mod tests {
         assert!(irq.is_pending());
         irq.clear();
         assert!(!irq.is_pending());
+    }
+
+    /// 测试设备：可配置返回一个中断 cause，并记录 tick 收到的 cycle。
+    struct MockIrq {
+        cause: Option<u32>,
+        ticked_cycle: u64,
+    }
+
+    impl MockIrq {
+        fn new(cause: u32) -> Self {
+            Self { cause: Some(cause), ticked_cycle: 0 }
+        }
+        fn none() -> Self {
+            Self { cause: None, ticked_cycle: 0 }
+        }
+    }
+
+    impl BusDevice for MockIrq {
+        fn read(&mut self, _addr: u32, _size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+            Ok(0)
+        }
+        fn write(&mut self, _addr: u32, _size: AccessSize, _data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+            Ok(())
+        }
+        fn peek_read(&mut self, _addr: u32, _size: AccessSize) -> Result<u32, BusError> {
+            Ok(0)
+        }
+        fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
+            Ok(())
+        }
+        fn device_name(&self) -> &str {
+            "mock-irq"
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn check_interrupt(&self) -> Option<u32> {
+            self.cause
+        }
+        fn tick(&mut self, cycle: u64) {
+            self.ticked_cycle = cycle;
+        }
+    }
+
+    #[test]
+    fn pending_interrupt_aggregates_max() {
+        let mut bus = BusRouter::new();
+        // MSI=0x8000_0003 < MTI=0x8000_0007
+        bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::new(0x8000_0003))).unwrap();
+        bus.map(0x2000_0000..0x2000_0010, Box::new(MockIrq::new(0x8000_0007))).unwrap();
+        assert_eq!(bus.pending_interrupt(), Some(0x8000_0007));
+    }
+
+    #[test]
+    fn pending_interrupt_none_when_no_device_has_irq() {
+        let mut bus = BusRouter::new();
+        bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::none())).unwrap();
+        bus.map(0x2000_0000..0x2000_0010, Box::new(MockRam::new(0x2000_0000, 0x10, "ram"))).unwrap();
+        assert_eq!(bus.pending_interrupt(), None);
+    }
+
+    #[test]
+    fn set_cycle_dispatches_tick_to_all_devices() {
+        let mut bus = BusRouter::new();
+        let dev1 = MockIrq::new(0x8000_0007);
+        let dev2 = MockIrq::new(0x8000_0003);
+        bus.map(0x1000_0000..0x1000_0010, Box::new(dev1)).unwrap();
+        bus.map(0x2000_0000..0x2000_0010, Box::new(dev2)).unwrap();
+        bus.set_cycle(42);
+        // tick 应被 dispatch 到所有设备
+        // 用 pending_interrupt 间接验证 tick 生效（MockIrq tick 只记录 cycle）
+        // 直接 downcast 检查 ticked_cycle
+        let d1 = bus.device_mut(0x1000_0000).unwrap().as_any_mut().downcast_ref::<MockIrq>().unwrap();
+        assert_eq!(d1.ticked_cycle, 42);
+        let d2 = bus.device_mut(0x2000_0000).unwrap().as_any_mut().downcast_ref::<MockIrq>().unwrap();
+        assert_eq!(d2.ticked_cycle, 42);
     }
 }
