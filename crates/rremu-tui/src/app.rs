@@ -19,6 +19,7 @@ type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 pub struct TuiApp {
     machine: Machine,
     running: bool,
+    exited: bool,
     speed: SpeedTier,
     input_mode: bool,
     fb_view: bool,
@@ -31,6 +32,7 @@ impl TuiApp {
         Self {
             machine,
             running: false,
+            exited: false,
             speed: SpeedTier::Steps(1),
             input_mode: false,
             fb_view: false,
@@ -100,6 +102,7 @@ impl TuiApp {
         match rr {
             RunResult::Exited { code } => {
                 self.running = false;
+                self.exited = true;
                 self.exit_code = code;
                 // 不设 should_quit：程序结束后 TUI 保持打开，让用户查看
                 // 最终寄存器/内存状态，按 q 退出。
@@ -130,16 +133,16 @@ impl TuiApp {
         }
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char(' ') => {
-                // Space: toggle run/pause
+            KeyCode::Char(' ') if !self.exited => {
+                // Space: toggle run/pause (程序已退出则忽略)
                 self.running = !self.running;
             }
-            KeyCode::Char('s') => {
+            KeyCode::Char('s') if !self.exited => {
                 // Single step: pause + one instruction
                 self.running = false;
                 self.single_step();
             }
-            KeyCode::Char('f') => {
+            KeyCode::Char('f') if !self.exited => {
                 // Direct to full speed
                 self.speed = SpeedTier::Full;
                 self.running = true;
@@ -149,9 +152,11 @@ impl TuiApp {
                 self.input_mode = true;
             }
             KeyCode::Char('r') => {
-                // Reset machine
+                // Reset machine → 清除退出状态，可重新运行
                 let _ = self.machine.reset();
+                self.exited = false;
                 self.running = false;
+                self.exit_code = 0;
             }
             KeyCode::Char('b') => {
                 // Toggle framebuffer view
@@ -174,6 +179,7 @@ impl TuiApp {
         let rr = self.machine.step_n(1);
         match rr {
             RunResult::Exited { code } => {
+                self.exited = true;
                 self.exit_code = code;
                 // 同 tick_machine：保持 TUI 打开，用户按 q 退出
             }
