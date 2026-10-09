@@ -264,6 +264,7 @@ fn c_imm_b(h: u16) -> i32 {
 }
 
 /// c.lwsp 的 uimm（8 位无符号，bits[1:0]=0）。
+/// spec: uimm[5]=bit12, uimm[4:2]=bits[6:4], uimm[7:6]=bits[3:2]
 #[inline]
 fn c_imm_lwsp(h: u16) -> i32 {
     let uimm = ((h as u32 >> 12) & 0x1) << 5
@@ -868,6 +869,39 @@ mod tests {
         // c.swsp x1, 0: rs2=1, funct3=110, op=10
         let swsp = (0b110u16 << 13) | (1 << 2) | 0b10;
         assert_eq!(decode16(swsp, PC), Ok(Instruction::CSwsp { rs2: 1, imm: 0 }));
+    }
+
+    #[test]
+    fn decode_c_lwsp_nonzero_offset() {
+        // 从 rv32uc-p-rvc.elf 的真实编码验证：
+        // 0x4532 = c.lwsp a0, 12(sp): bits[6:4]=011 → uimm[4:2]=3, <<2=12
+        let h = 0x4532u16;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 10, imm: 12 }));
+
+        // 0x4632 = c.lwsp a2, 12(sp): rd=12(a2), same offset
+        let h = 0x4632u16;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 12, imm: 12 }));
+
+        // 手工构造 c.lwsp a0, 4(sp): uimm=4 (uimm[2]=1)
+        // uimm[2] → inst[4], so inst[4]=1; bits[6:2]=00010
+        let h = (0b010u16 << 13) | (10u16 << 7) | (1u16 << 4) | 0b10;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 10, imm: 4 }));
+
+        // c.lwsp a0, 64(sp): uimm=64 (uimm[6]=1)
+        // uimm[6] → inst[2], so inst[2]=1; bits[6:2]=00001
+        let h = (0b010u16 << 13) | (10u16 << 7) | (1u16 << 2) | 0b10;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 10, imm: 64 }));
+
+        // c.lwsp a0, 128(sp): uimm=128 (uimm[7]=1)
+        // uimm[7] → inst[3], so inst[3]=1; bits[6:2]=00010... wait
+        // uimm[7] → inst[3], so inst[3]=1; bits[6:2]=00010
+        let h = (0b010u16 << 13) | (10u16 << 7) | (1u16 << 3) | 0b10;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 10, imm: 128 }));
+
+        // c.lwsp a0, 32(sp): uimm=32 (uimm[5]=1)
+        // uimm[5] → inst[12], so inst[12]=1
+        let h = (0b010u16 << 13) | (1u16 << 12) | (10u16 << 7) | 0b10;
+        assert_eq!(decode16(h, PC), Ok(Instruction::CLwsp { rd: 10, imm: 32 }));
     }
 
     #[test]

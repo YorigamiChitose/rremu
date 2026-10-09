@@ -663,7 +663,7 @@ mod tests {
         let mut m = hello_machine();
         // 值语义下 *ADDR 直接监视该地址的字；hello 运行中无人写 RAM，
         // 初始 0 → 无变化 → 直接跑完退出（不命中）
-        let expr = rremu_expr::parse("*0x8000_0100").unwrap();
+        let expr = rremu_expr::parse("*0x80000100").unwrap();
         m.add_watchpoint(expr);
         let pause = AtomicBool::new(false);
         assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
