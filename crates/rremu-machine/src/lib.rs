@@ -907,7 +907,7 @@ mod tests {
         {
             let bus = &mut m.bus;
             let collector = &mut m.collector;
-            bus.write(tohost, AccessSize::Word, value, collector).unwrap();
+            bus.data_write(tohost, AccessSize::Word, value, collector).unwrap();
         }
         let pause = AtomicBool::new(false);
         let rr = m.run(&pause);
@@ -1055,7 +1055,7 @@ mod tests {
             matches!(
                 ev,
                 EmuEvent::MemAccess {
-                    kind: MemKind::Read,
+                    kind: MemKind::DataRead,
                     device,
                     ..
                 } if device == "clint"
@@ -1065,7 +1065,7 @@ mod tests {
             matches!(
                 ev,
                 EmuEvent::MemAccess {
-                    kind: MemKind::Write,
+                    kind: MemKind::DataWrite,
                     device,
                     ..
                 } if device == "clint"
