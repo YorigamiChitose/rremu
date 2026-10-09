@@ -198,9 +198,15 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
                     AccessSize::Half => "H",
                     AccessSize::Word => "W",
                 };
-                // value 按实际宽度显示（{:#x} 无前导 0），再 {:>10} 右对齐到 10 列
-                let val_str = format!("{:#x}", value);
-                let val_padded = format!("{val_str:>10}");
+                // value 位宽与访问类型严格同步、保留前导 0：
+                // B=2 位 hex（0xXX，宽4）/ H=4 位（0xXXXX，宽6）/ W=8 位（0xXXXXXXXX，宽10），
+                // 再 {:>10} 用前导空格补齐，让所有行数值右边缘对齐到 W 宽度。
+                let val_natural = match size {
+                    AccessSize::Byte => format!("{:#04x}", value),
+                    AccessSize::Half => format!("{:#06x}", value),
+                    AccessSize::Word => format!("{:#010x}", value),
+                };
+                let val_padded = format!("{val_natural:>10}");
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{cycle:<6}"), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
