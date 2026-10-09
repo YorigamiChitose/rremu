@@ -132,15 +132,19 @@ pub trait BusDevice {
 /// 对外只暴露三个语义方法：`inst_read`（取指）、`data_read`（load）、
 /// `data_write`（store），分别对应 `MemKind::Inst/DataRead/DataWrite`，
 /// 使访存事件能直接区分指令取与数据访问。原 `fetch/read/write` 由
-/// `BusRouter` 内部私有方法承担（见 `route_read`/`route_write`/`route_read_raw`）。
+/// `BusRouter` 内部私有方法承担（见 `route_read`/`route_write`）。
 pub trait Bus {
-    /// 取指读（事件 kind = `MemKind::Inst`）。
+    /// 取指读（事件 kind = `MemKind::Inst`），每次逻辑取指保证拿回完整 4 字节指令字。
     ///
-    /// 恒取 4 字节，返回的 u32 即从 `addr` 起的完整指令字。
-    /// 内部按 `addr&3` 处理对齐：4 字节对齐时单次对齐 Word 读；
-    /// 2 字节对齐（RVC）时读两个对齐字拼合（仅发一条合成 `MemAccess` 事件）。
-    /// 违例（addr 为奇数）返 `BusError::Misaligned { size: AccessSize::Half }`，
-    /// CPU 据此映射到 `INSTR_MISALIGNED`。
+    /// 物理访问与事件位宽严格一致，按 `addr` 对齐决定：
+    /// - XLEN 对齐（`addr & 3 == 0`）：**一次 Word(4 字节) 读**，发一条 `IF W`。
+    /// - 跨 XLEN 边界（`addr & 3 == 2`，仅 RVC 允许 2 字节对齐）：指令横跨两个
+    ///   对齐 Word，**按两次 Half(2 字节) 读** `addr` 与 `addr+2`，各自 2 字节对齐、
+    ///   不跨 Word 边界，分别发一条 `IF H`（共两条），在总线上拼成完整 word 返回。
+    /// - 奇数地址：`BusError::Misaligned { size: Half }`，CPU 映射为 `INSTR_MISALIGNED`。
+    ///
+    /// 返回值始终是从 `addr` 起的完整小端 4 字节指令字（RVC 16 位指令时高 16 位
+    /// 为相邻字节，CPU 侧用低 16 位判长即可）。
     fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     /// 数据读（事件 kind = `MemKind::DataRead`）。
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
@@ -231,27 +235,6 @@ impl BusRouter {
         Ok(value)
     }
 
-    /// 路由 + 设备读，**不发事件**（供 `inst_read` 跨字路径用）。
-    /// 返回 (值, 设备名引用)。注意：与 `peek` 不同，这里走 `device.read()`
-    /// —— 有副作用（如 UART FIFO 弹出）；指令区为 RAM，副作用不触发，安全。
-    fn route_read_raw(
-        &mut self,
-        addr: u32,
-        size: AccessSize,
-        sink: &mut dyn EventSink,
-    ) -> Result<(u32, &str), BusError> {
-        Self::check_align(addr, size)?;
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::Unmapped { addr })?;
-        let region = &mut self.regions[idx];
-        let value = region.device.read(addr, size, sink)?;
-        let name = region.device.device_name();
-        Ok((value, name))
-    }
-
     /// 路由 + 设备写 + 发 `MemAccess{kind}` 事件 + tohost 监视（data_write 用）。
     fn route_write(
         &mut self,
@@ -298,33 +281,19 @@ impl Bus for BusRouter {
         if addr & 1 != 0 {
             return Err(BusError::Misaligned { addr, size: AccessSize::Half });
         }
-        // XLEN 对齐（RV32: addr & 3 == 0）：单次 XLEN 读 + 一条 IF W 记录
+        // XLEN 对齐（RV32: addr & 3 == 0）：单次 XLEN(Word) 读 + 一条 IF W 记录
         if addr & 3 == 0 {
             return self.route_read(addr, AccessSize::Word, MemKind::Inst, sink);
         }
         // 跨 XLEN 边界（RV32: addr & 3 == 2，仅 RVC 允许 2 字节对齐）：一条 32 位
-        // 指令横跨两个对齐 XLEN 字，单次对齐 XLEN 读取不到完整指令，故物理上分
-        // 两次 XLEN 读（aligned 与 aligned+4）再拼合。route_read_raw 静默读、
-        // 不上报中间事件，对 CPU/事件仍呈现为一次取指、一条 IF W 合成记录。
-        // RV64 扩展点：此处 3/4/Word 需泛化为 XLEN(8)/DoubleWord（见 PLAN §5.3）。
-        let aligned = addr & !3;
-        let cycle = self.cycle;
-        // 第一次 XLEN 读拿值与设备名（route_read_raw 不发事件）
-        let (lo, dev_name) = self.route_read_raw(aligned, AccessSize::Word, sink)?;
-        let dev_name = dev_name.to_owned(); // 断开 &self 借用，让第二次 route_read_raw 可借
-        // 第二次 XLEN 读高半字（仍走 route_read_raw，不发事件）
-        let (hi, _) = self.route_read_raw(aligned.wrapping_add(4), AccessSize::Word, sink)?;
-        let value = (lo >> 16) | (hi << 16);
-        // 只发一条合成事件，覆盖指令地址
-        sink.emit(EmuEvent::MemAccess {
-            cycle,
-            kind: MemKind::Inst,
-            size: AccessSize::Word,
-            addr,
-            value,
-            device: dev_name,
-        });
-        Ok(value)
+        // 指令横跨两个对齐 XLEN 字，单次对齐 Word 读取不到完整指令。此时按两次
+        // 2 字节读：Half@addr（低半字）+ Half@addr+2（高半字），各自 2 字节对齐、
+        // 天然不跨 Word 边界，设备原生支持。两次读各自发一条 IF H 记录（位宽与
+        // 物理读取严格一致），拼合后返回完整指令字给 CPU。
+        // RV64 扩展点：此处 Half/Half 需按 XLEN(8) 重新选择最小对齐访问序列（见 PLAN §5.3）。
+        let lo = self.route_read(addr, AccessSize::Half, MemKind::Inst, sink)?;
+        let hi = self.route_read(addr.wrapping_add(2), AccessSize::Half, MemKind::Inst, sink)?;
+        Ok(lo | (hi << 16))
     }
 
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
@@ -510,27 +479,33 @@ mod tests {
     }
 
     #[test]
-    fn inst_read_unaligned_rvc() {
-        // 跨字取指（addr & 3 == 2）：inst_read 应读两个对齐字拼合，仅发一条合成事件
+    fn inst_read_cross_xlen_two_half_events() {
+        // 跨 XLEN 取指（addr & 3 == 2）：inst_read 按两次 Half 读（addr、addr+2），
+        // 各自发一条 IF H 事件，拼合后返回完整指令字。
         let mut bus = BusRouter::new();
         bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
         bus.set_cycle(7);
         // 在 0x8000_0002 处放一条 32 位指令 0x1234_5678
         // 内存字节布局（小端）：
         //   0x8000_0000: 0xAA 0xBB (前一条指令的尾巴，不影响)
-        //   0x8000_0002: 0x78 0x56 0x34 0x12  (我们要取的指令 0x1234_5678)
+        //   0x8000_0002: 0x78 0x56 | 0x34 0x12   (低半字 @...02，高半字 @...04)
         //   0x8000_0006: 0xCC 0xDD
-        // 即 0x8000_0000 字 = 0x5678_BBAA；0x8000_0004 字 = 0xDDCC_1234
         bus.write_bytes(0x8000_0000, &[0xAA, 0xBB, 0x78, 0x56, 0x34, 0x12, 0xCC, 0xDD]).unwrap();
         let mut sink = Collector::default();
         let v = bus.inst_read(0x8000_0002, &mut sink).unwrap();
         assert_eq!(v, 0x1234_5678);
-        // 只应有一条 MemAccess 事件（合成）
-        let ma_count = sink.0.iter().filter(|e| matches!(e, EmuEvent::MemAccess { .. })).count();
-        assert_eq!(ma_count, 1, "inst_read cross-word path must emit exactly one MemAccess event");
+        // 应有且仅有两条 MemAccess 事件，均为 IF H
+        assert_eq!(sink.0.len(), 2, "cross-XLEN fetch must emit exactly two IF H events");
         match sink.0[0] {
             EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Word, 0x8000_0002, 0x1234_5678));
+                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Half, 0x8000_0002, 0x5678));
+                assert_eq!(device, "ram");
+            }
+            ref ev => panic!("expected MemAccess, got {ev:?}"),
+        }
+        match sink.0[1] {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
+                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Half, 0x8000_0004, 0x1234));
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
