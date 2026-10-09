@@ -230,12 +230,12 @@ const ALIASES: [(&str, RegId); 33] = [
 /// 寄存器名 → 编号：`x0`..`x31`、ABI 别名；非寄存器名返回 None。
 pub fn reg_from_name(name: &str) -> Option<RegId> {
     if let Some(rest) = name.strip_prefix('x') {
-        if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
-            if let Ok(n) = rest.parse::<u8>() {
-                if n <= 31 {
-                    return Some(n);
-                }
-            }
+        if !rest.is_empty()
+            && rest.bytes().all(|b| b.is_ascii_digit())
+            && let Ok(n) = rest.parse::<u8>()
+            && n <= 31
+        {
+            return Some(n);
         }
         return None;
     }

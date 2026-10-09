@@ -483,20 +483,20 @@ impl Machine {
 
     /// 经无副作用 LSR 读校正输入 FIFO 计数（0 或 1）。
     fn sync_uart_in_len(&mut self) {
-        if let Some(ub) = self.uart_base {
-            if let Ok(lsr) = self.bus.peek(ub + 5, AccessSize::Byte) {
-                self.uart_in_len = usize::from(lsr & 0x01 != 0);
-            }
+        if let Some(ub) = self.uart_base
+            && let Ok(lsr) = self.bus.peek(ub + 5, AccessSize::Byte)
+        {
+            self.uart_in_len = usize::from(lsr & 0x01 != 0);
         }
     }
 
     /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
     pub fn reset(&mut self) -> Result<(), MachineError> {
         self.cpu.reset(self.entry);
-        if let Some(dev) = self.bus.device_mut(self.ram_base) {
-            if let Some(ram) = dev.as_any_mut().downcast_mut::<Ram>() {
-                ram.reset();
-            }
+        if let Some(dev) = self.bus.device_mut(self.ram_base)
+            && let Some(ram) = dev.as_any_mut().downcast_mut::<Ram>()
+        {
+            ram.reset();
         }
         if let Some(img) = &self.image {
             for seg in &img.segments {
@@ -669,12 +669,12 @@ impl Machine {
     /// 注入 UART 输入字节。
     pub fn uart_push_input(&mut self, byte: u8) {
         let Some(ub) = self.uart_base else { return };
-        if let Some(dev) = self.bus.device_mut(ub) {
-            if let Some(uart) = dev.as_any_mut().downcast_mut::<Uart>() {
-                uart.push_input(byte);
-                self.uart_in_len += 1;
-                self.collector.emit(EmuEvent::UartInput { byte });
-            }
+        if let Some(dev) = self.bus.device_mut(ub)
+            && let Some(uart) = dev.as_any_mut().downcast_mut::<Uart>()
+        {
+            uart.push_input(byte);
+            self.uart_in_len += 1;
+            self.collector.emit(EmuEvent::UartInput { byte });
         }
     }
 

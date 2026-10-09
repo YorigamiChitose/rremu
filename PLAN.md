@@ -126,7 +126,7 @@ rremu/
     └── build-tests.sh         # 拉取并构建官方 riscv-tests 的 3 个代表测试
 ```
 
-**lint 基线**（workspace 统一）：`unsafe_code = "forbid"`；库 crate `clippy::unwrap_used = "deny"`、`clippy::expect_used = "warn"`；edition 2024 / rust-version 1.85。
+**lint 基线**（workspace 统一）：`unsafe_code = "forbid"`；库 crate `clippy::unwrap_used = "deny"`、`clippy::expect_used = "warn"`；edition 2024 / rust-version 1.99。
 
 ---
 

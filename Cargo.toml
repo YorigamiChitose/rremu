@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.99"
 
 # 内部 crate 统一走 path 依赖，成员一律 workspace = true 引用
 [workspace.dependencies]

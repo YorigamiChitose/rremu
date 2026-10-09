@@ -145,12 +145,12 @@ impl Cpu {
         let pc = self.pc;
 
         // 中断检查（取指前）
-        if (self.csr.mstatus & csr::MSTATUS_MIE) != 0 {
-            if let Some(irq_cause) = bus.pending_interrupt() {
-                let int_id = irq_cause & 0x7fff_ffff;
-                if (self.csr.mie >> int_id) & 1 == 1 {
-                    return self.trap(sink, irq_cause);
-                }
+        if (self.csr.mstatus & csr::MSTATUS_MIE) != 0
+            && let Some(irq_cause) = bus.pending_interrupt()
+        {
+            let int_id = irq_cause & 0x7fff_ffff;
+            if (self.csr.mie >> int_id) & 1 == 1 {
+                return self.trap(sink, irq_cause);
             }
         }
 
