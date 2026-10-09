@@ -61,6 +61,33 @@ pub struct Cpu {
     instret: u64,
 }
 
+/// CSR 表：一份描述同时生成 `csr_read`/`csr_write`，消除两张平行 match。
+///
+/// 条目 `ADDR => read EXPR` 为只读（写忽略）；`ADDR => read EXPR, write FIELD`
+/// 可读写，`FIELD` 为 `self.csr` 的字段名。
+macro_rules! csr_table {
+    ( $slf:ident; $( $addr:path => read $read:expr $(, write $field:ident)? );+ $(;)? ) => {
+        /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
+        pub fn csr_read(&self, addr: u16) -> u32 {
+            let $slf = self;
+            match addr {
+                $( $addr => $read, )+
+                _ => 0,
+            }
+        }
+
+        /// CSR 写入（CSR 指令执行用）。只读 CSR（mhartid/mcycle/minstret）与
+        /// 未知 CSR（satp/pmpaddr/medeleg 等）写入被忽略。
+        fn csr_write(&mut self, addr: u16, val: u32) {
+            let $slf = self;
+            match addr {
+                $( $addr => { $( $slf.csr.$field = val; )? } )+
+                _ => {}
+            }
+        }
+    };
+}
+
 impl Cpu {
     pub fn new(entry: u32) -> Self {
         Self { x: [0; 32], pc: entry, priv_: Priv::Machine, csr: CsrState::new(), cycle: 0, instret: 0 }
@@ -89,40 +116,38 @@ impl Cpu {
         &self.csr
     }
 
-    /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
-    pub fn csr_read(&self, addr: u16) -> u32 {
-        match addr {
-            csr::MSTATUS => self.csr.mstatus,
-            csr::MISA => self.csr.misa,
-            csr::MIE => self.csr.mie,
-            csr::MTVEC => self.csr.mtvec,
-            csr::MSCRATCH => self.csr.mscratch,
-            csr::MEPC => self.csr.mepc,
-            csr::MCAUSE => self.csr.mcause,
-            csr::MTVAL => self.csr.mtval,
-            csr::MIP => self.csr.mip,
-            csr::MCYCLE => self.cycle as u32,
-            csr::MINSTRET => self.instret as u32,
-            csr::MHARTID => self.csr.mhartid,
-            _ => 0,
+    csr_table! { s;
+        csr::MSTATUS  => read s.csr.mstatus, write mstatus;
+        csr::MISA     => read s.csr.misa, write misa;
+        csr::MIE      => read s.csr.mie, write mie;
+        csr::MTVEC    => read s.csr.mtvec, write mtvec;
+        csr::MSCRATCH => read s.csr.mscratch, write mscratch;
+        csr::MEPC     => read s.csr.mepc, write mepc;
+        csr::MCAUSE   => read s.csr.mcause, write mcause;
+        csr::MTVAL    => read s.csr.mtval, write mtval;
+        csr::MIP      => read s.csr.mip, write mip;
+        csr::MCYCLE   => read s.cycle as u32;
+        csr::MINSTRET => read s.instret as u32;
+        csr::MHARTID  => read s.csr.mhartid;
+    }
+
+    /// 总线错误 → 异常 cause：对齐违例返 `misalign`，其余（未映射/设备）返 `fault`。
+    fn cause_of(e: &rremu_bus::BusError, misalign: u32, fault: u32) -> u32 {
+        if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
+            misalign
+        } else {
+            fault
         }
     }
 
-    /// CSR 写入（CSR 指令执行用）。只读 CSR（mhartid/mcycle/minstret）与
-    /// 未知 CSR（satp/pmpaddr/medeleg 等）写入被忽略。
-    fn csr_write(&mut self, addr: u16, val: u32) {
-        match addr {
-            csr::MSTATUS => self.csr.mstatus = val,
-            csr::MISA => self.csr.misa = val,
-            csr::MIE => self.csr.mie = val,
-            csr::MTVEC => self.csr.mtvec = val,
-            csr::MSCRATCH => self.csr.mscratch = val,
-            csr::MEPC => self.csr.mepc = val,
-            csr::MCAUSE => self.csr.mcause = val,
-            csr::MTVAL => self.csr.mtval = val,
-            csr::MIP => self.csr.mip = val,
-            _ => {}
-        }
+    /// 更新 mstatus 三域：先清 MPP/MPIE/MIE，再写 MPP、MIE、MPIE。
+    fn update_mstatus(&mut self, mpp: u32, mie: u32, mpie: u32) {
+        let mut mstatus =
+            self.csr.mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
+        mstatus |= (mpp << csr::MSTATUS_MPP_SHIFT)
+            | (mie << csr::MSTATUS_MIE.trailing_zeros())
+            | (mpie << csr::MSTATUS_MPIE.trailing_zeros());
+        self.csr.mstatus = mstatus;
     }
 
     /// 复位到入口（寄存器/CSR/计数器清零，MPP=M）。
@@ -211,23 +236,18 @@ impl Cpu {
         pc: u32,
         sink: &mut E,
     ) -> Result<u32, u32> {
-        /// 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT。
-        fn fetch_cause(e: rremu_bus::BusError) -> u32 {
-            if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
-                cause::INSTR_MISALIGNED
-            } else {
-                cause::INSTR_ACCESS_FAULT
-            }
+        // 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT
+        fn map(e: rremu_bus::BusError) -> u32 {
+            Cpu::cause_of(&e, cause::INSTR_MISALIGNED, cause::INSTR_ACCESS_FAULT)
         }
-
         if pc & 3 == 0 {
-            return bus.inst_read(pc, AccessSize::Word, sink).map_err(fetch_cause);
+            return bus.inst_read(pc, AccessSize::Word, sink).map_err(map);
         }
         // pc & 3 == 2：两次对齐 Half，物理位宽与 IF 事件严格一致
-        let lo = bus.inst_read(pc, AccessSize::Half, sink).map_err(fetch_cause)?;
+        let lo = bus.inst_read(pc, AccessSize::Half, sink).map_err(map)?;
         let hi = bus
             .inst_read(pc.wrapping_add(2), AccessSize::Half, sink)
-            .map_err(fetch_cause)?;
+            .map_err(map)?;
         Ok(lo | (hi << 16))
     }
 
@@ -446,11 +466,8 @@ impl Cpu {
                 let mstatus = self.csr.mstatus;
                 let mpp = (mstatus >> csr::MSTATUS_MPP_SHIFT) & 0b11;
                 let mpie = (mstatus >> csr::MSTATUS_MPIE.trailing_zeros()) & 1;
-                // MIE = MPIE, MPIE = 1, MPP = 0 (U-mode)
-                let mut new_mstatus =
-                    mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
-                new_mstatus |= (mpie << csr::MSTATUS_MIE.trailing_zeros()) | csr::MSTATUS_MPIE;
-                self.csr.mstatus = new_mstatus;
+                // MPP = 0 (U-mode), MIE = MPIE, MPIE = 1
+                self.update_mstatus(0, mpie, 1);
                 self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
                 next_pc = self.csr.mepc;
             }
@@ -518,14 +535,7 @@ impl Cpu {
         size: AccessSize,
     ) -> Result<u32, TrapErr> {
         bus.data_read(addr, size, sink).map_err(|e| TrapErr {
-            cause: if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
-                match size {
-                    AccessSize::Half => cause::LOAD_MISALIGNED,
-                    _ => cause::LOAD_MISALIGNED,
-                }
-            } else {
-                cause::LOAD_ACCESS_FAULT
-            },
+            cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
         })
     }
 
@@ -539,11 +549,7 @@ impl Cpu {
         data: u32,
     ) -> Result<(), TrapErr> {
         bus.data_write(addr, size, data, sink).map_err(|e| TrapErr {
-            cause: if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
-                cause::STORE_MISALIGNED
-            } else {
-                cause::STORE_ACCESS_FAULT
-            },
+            cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
         })
     }
 
@@ -559,11 +565,7 @@ impl Cpu {
             Priv::User => 0b00,
         };
         let old_mie = (self.csr.mstatus >> csr::MSTATUS_MIE.trailing_zeros()) & 1;
-        let mut mstatus =
-            self.csr.mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
-        mstatus |= (mpp << csr::MSTATUS_MPP_SHIFT)
-            | (old_mie << csr::MSTATUS_MPIE.trailing_zeros());
-        self.csr.mstatus = mstatus;
+        self.update_mstatus(mpp, 0, old_mie);
 
         self.priv_ = Priv::Machine;
         self.cycle += 1;
