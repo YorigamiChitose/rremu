@@ -176,7 +176,7 @@ pub trait BusDevice {
     fn tick(&mut self, cycle: u64) {}                                               // M3：cycle 下发（CLINT mtime）
 }
 pub trait Bus { // 依赖倒置：cpu 只依赖此 trait；对外只暴露三个语义访问方法
-    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 取指，恒读一个 XLEN（RV32=4字节）
+    fn inst_read(&mut self, addr: u32, sink: &mut dyn EventSink) -> Result<u32, BusError>;   // 取指：对齐一次 Word(IF W)；跨 XLEN 两次 Half(两条 IF H)，返回完整 4 字节
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;      // 无副作用无事件
@@ -203,13 +203,15 @@ pub trait EventSink { fn emit(&mut self, ev: EmuEvent); }
 - 小端；`data_read/data_write` 返回值低位对齐；对齐检查在总线层（Word/4、Half/2）
 - `peek_read` 无默认实现：强制每个设备显式声明无副作用读语义（D12 的落地）
 
-**取指位宽与跨 XLEN 读取（访存显示的位宽必须与读取一致）**
-- CPU 每条指令只调用**一次** `inst_read(pc)`，逻辑层恒取一个 XLEN（RV32 = 4 字节），发**一条** `size = Word` 的 `IF` 记录；一次即拿回完整 32 位指令，**不**拆成"先读半字判长、再读半字"的两次访问（避免一条指令两行、实现不优雅）。
-- **跨 XLEN 边界**：取指地址未按 XLEN 对齐时（RV32 下 `pc & 3 == 2`，仅 RVC 允许 2 字节对齐），一条 32 位指令会横跨两个对齐 XLEN 字，单次对齐 XLEN 读无法取得完整指令。此时 `BusRouter::inst_read` 物理上**分两次 XLEN 读**（`route_read_raw` 静默读 `aligned` 与 `aligned+XLEN`，不上报中间事件），在总线上拼合，对 CPU/事件仍呈现为"一次 `inst_read`、**一条** `IF W` 合成记录（`addr = pc`、`value` = 拼合指令字、device = 首次命中设备）"。
+**取指位宽与跨 XLEN 读取（访存显示的位宽必须与物理读取一致）**
+- CPU 每条指令只调用**一次** `inst_read(pc)`，逻辑上保证拿回一个完整 XLEN（RV32 = 4 字节）指令字；对齐正常时**不**做"先读半字判长、再读半字"的拆分（对齐情况下一条指令一次 Word 读、一行记录）。
+- 物理访问与事件按 `pc` 对齐决定（`BusRouter::inst_read`）：
+  - **XLEN 对齐**（`pc & 3 == 0`）：一次 `Word`(4 字节) 读 → **一条** `IF W`。
+  - **跨 XLEN 边界**（`pc & 3 == 2`，仅 RVC 允许 2 字节对齐）：32 位指令横跨两个对齐 Word，对齐 Word 读取不到完整指令，于是**按两次 `Half`(2 字节) 读** `pc` 与 `pc+2`（各自 2 字节对齐、天然不跨 Word 边界，设备原生支持），**各自发一条 `IF H`（共两条）**，总线拼成 `lo | (hi << 16)` 返回。事件位宽与物理读取严格一致，不做静默读、不合成 Word 记录。
 - 对齐违例：`pc` 为奇数返 `Misaligned { size: Half }`，CPU 映射为 `INSTR_MISALIGNED`。
-- 数据访问 `data_read/data_write` 严格按传入 `AccessSize`（B/H/W）读取并发对应 `size` 的记录；TUI value 按类型定宽显示且保留前导 0（B=2 位 hex、H=4 位、W=8 位），再用空格右对齐到 W 宽度。
-- **RV64 扩展规划（仅预留，M5 前不实现）**：XLEN=8 时 `inst_read` 恒读 8 字节，跨 8 字节边界同理读两个对齐 8 字节拼合。落地需要：① `AccessSize` 增加 `DoubleWord`；② `EmuEvent::MemAccess.value` 与 `BusDevice::read` 返回值、`data` 入参由 `u32` 扩到 `u64`（或泛型化承载）；③ `data_read/data_write` 支持 `DoubleWord`；④ TUI value 增加 DW=16 位 hex 档位（右对齐宽度随之变为 18 列）；⑤ `peek`/表达式解引用/`x` 命令宽度随 XLEN。`inst_read` 跨字分支与 `AccessSize` 注释已标记该扩展点。
-- 验收：路由/未映射/未对齐/注册重叠单测；EventSink 组合实现（Vec 收集器）单测；`inst_read` 对齐单事件 / 跨 XLEN 拼合单事件 / 奇数地址违例单测
+- 数据访问 `data_read/data_write` 严格按传入 `AccessSize`（B/H/W）读取并发对应 `size` 的记录；**数据非对齐不拆分**，仍返 `Misaligned`（CPU 陷入 LOAD/STORE_MISALIGNED）——跨 XLEN 拆分只用于取指。TUI value 按类型定宽显示且保留前导 0（B=2 位 hex、H=4 位、W=8 位），再用空格右对齐到 W 宽度。
+- **RV64 扩展规划（仅预留，M5 前不实现）**：XLEN=8 时对齐取指一次 `DoubleWord`(8 字节) 读；跨 8 字节边界按"覆盖该指令的最小对齐访问序列"拆分（偏移 2/6 时为 Word+Word，偏移 4 时为 Half+DoubleWord 等），每次物理访问各发一条对应位宽的 `IF` 记录。落地需要：① `AccessSize` 增加 `DoubleWord`；② `EmuEvent::MemAccess.value` 与 `BusDevice::read` 返回值、`data` 入参由 `u32` 扩到 `u64`（或泛型化承载）；③ `data_read/data_write` 支持 `DoubleWord`；④ TUI value 增加 DW=16 位 hex 档位（右对齐宽度随之变为 18 列）；⑤ `peek`/表达式解引用/`x` 命令宽度随 XLEN。`inst_read` 跨字分支与 `AccessSize` 注释已标记该扩展点。
+- 验收：路由/未映射/未对齐/注册重叠单测；EventSink 组合实现（Vec 收集器）单测；`inst_read` 对齐单 `IF W` / 跨 XLEN 两条 `IF H`（addr/value 正确）/ 奇数地址违例单测
 
 ### 5.4 rremu-cpu
 
