@@ -199,6 +199,19 @@ fn c_imm_addi4spn(h: u16) -> u32 {
         | ((h as u32 >> 5) & 0x1) << 3
 }
 
+/// 从 top_bit 位（0-based）符号扩展：把 raw 视为 top_bit+1 位有符号数。
+#[inline]
+fn sext(raw: u32, top_bit: u32) -> i32 {
+    let shift = 31 - top_bit;
+    ((raw as i32) << shift) >> shift
+}
+
+/// CB/CI 编码的 6 位移位量：shamt[5]=bit12，shamt[4:0]=bits[6:2]。
+#[inline]
+fn c_shamt(h: u16) -> u8 {
+    (((h >> 12) & 0x1) << 5 | ((h >> 2) & 0x1f)) as u8
+}
+
 /// c.lw/c.sw 的 uimm（7 位无符号，bits[1:0]=0）。
 #[inline]
 fn c_imm_lw(h: u16) -> i32 {
@@ -211,8 +224,8 @@ fn c_imm_lw(h: u16) -> i32 {
 /// CI 格式 6 位符号扩展立即数（c.addi / c.li / c.slli/srli/srai shamt / c.andi）。
 #[inline]
 fn c_imm_ci(h: u16) -> i32 {
-    let raw = ((h >> 2) & 0x1f) as i32 | (((h >> 12) & 1) as i32) << 5;
-    (raw << 26) >> 26 // 从 bit5 符号扩展
+    let raw = u32::from(h >> 2 & 0x1f) | u32::from((h >> 12) & 1) << 5;
+    sext(raw, 5)
 }
 
 /// c.addi16sp 的符号扩展立即数（10 位，bits[1:0]=0）。
@@ -224,18 +237,18 @@ fn c_imm_addi16sp(h: u16) -> i32 {
         | ((h as u32 >> 3) & 0x3) << 7
         | ((h as u32 >> 2) & 0x1) << 5
         | ((h as u32 >> 11) & 0x1) << 3
-        | ((h as u32 >> 10) & 0x1) << 2;
+        | u32::from((h >> 10) & 1) << 2;
     // 符号扩展从 bit9
-    ((raw as i32) << 22) >> 22
+    sext(raw, 9)
 }
 
 /// c.lui 的立即数（20 位 upper，sign-extended）。
 #[inline]
 fn c_imm_lui(h: u16) -> u32 {
     // NZimm[5:0] = {bit12, bits[6:2]}, value = sign_extend(NZimm) << 12
-    let nzimm = ((h as u32 >> 12) & 0x1) << 5 | ((h as u32 >> 2) & 0x1f);
-    let sext = ((nzimm as i32) << 26) >> 26; // sign-extend from bit 5
-    (sext as u32) << 12
+    let nzimm = u32::from((h >> 12) & 1) << 5 | u32::from((h >> 2) & 0x1f);
+    // sign-extend from bit 5
+    (sext(nzimm, 5) as u32) << 12
 }
 
 /// CJ 格式跳转偏移（c.j / c.jal，12 位符号扩展，bit0=0）。
@@ -248,8 +261,8 @@ fn c_imm_j(h: u16) -> i32 {
         | ((h as u32 >> 7) & 0x1) << 6
         | ((h as u32 >> 6) & 0x1) << 7
         | ((h as u32 >> 3) & 0x7) << 1
-        | ((h as u32 >> 2) & 0x1) << 5;
-    ((raw as i32) << 20) >> 20
+        | u32::from((h >> 2) & 1) << 5;
+    sext(raw, 11)
 }
 
 /// CB 格式分支偏移（c.beqz/c.bnez，9 位符号扩展，bit0=0）。
@@ -259,8 +272,8 @@ fn c_imm_b(h: u16) -> i32 {
         | ((h as u32 >> 10) & 0x3) << 3
         | ((h as u32 >> 5) & 0x3) << 6
         | ((h as u32 >> 3) & 0x3) << 1
-        | ((h as u32 >> 2) & 0x1) << 5;
-    ((raw as i32) << 23) >> 23
+        | u32::from((h >> 2) & 1) << 5;
+    sext(raw, 8)
 }
 
 /// c.lwsp 的 uimm（8 位无符号，bits[1:0]=0）。
@@ -358,14 +371,12 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             let rd = creg(((half >> 7) & 0x7) as u8);
             match funct2 {
                 0b00 => {
-                    // c.srli: shamt[5]=bit12, shamt[4:0]=bits[6:2]
-                    let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
-                    Ok(Instruction::CSrli { rd, shamt })
+                    // c.srli: 6 位 shamt
+                    Ok(Instruction::CSrli { rd, shamt: c_shamt(half) })
                 }
                 0b01 => {
                     // c.srai
-                    let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
-                    Ok(Instruction::CSrai { rd, shamt })
+                    Ok(Instruction::CSrai { rd, shamt: c_shamt(half) })
                 }
                 0b10 => {
                     // c.andi
@@ -407,10 +418,9 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
 
         // ---- Quadrant 10 ----
         (0b10, 0b000) => {
-            // c.slli: rd=bits[11:7], shamt[5]=bit12, shamt[4:0]=bits[6:2]
+            // c.slli: rd=bits[11:7], 6 位 shamt
             let rd = ((half >> 7) & 0x1f) as u8;
-            let shamt = (((half >> 12) & 0x1) << 5 | ((half >> 2) & 0x1f)) as u8;
-            Ok(Instruction::CSlli { rd, shamt })
+            Ok(Instruction::CSlli { rd, shamt: c_shamt(half) })
         }
         (0b10, 0b010) => {
             // c.lwsp: rd=bits[11:7], uimm from bits[12|6:4|3:2]

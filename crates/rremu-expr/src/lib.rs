@@ -298,14 +298,16 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             let text = &src[start..i];
-            let (radix, digits) = if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            let (radix, raw_digits) = if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
                 (16u32, rest)
             } else if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
                 (2, rest)
             } else {
                 (10, text)
             };
-            let v = u32::from_str_radix(digits, radix)
+            // 允许视觉分隔下划线：解析前剥离
+            let digits: String = raw_digits.chars().filter(|&c| c != '_').collect();
+            let v = u32::from_str_radix(&digits, radix)
                 .map_err(|_| ParseError { pos, msg: format!("invalid number literal `{text}`") })?;
             toks.push(Tok { kind: TokKind::Num(v), pos });
             continue;
@@ -769,6 +771,13 @@ mod tests {
         assert_eq!(eval("0b1010", &mut Ctx::new()), 10);
         assert_eq!(eval("42", &mut Ctx::new()), 42);
         assert_eq!(eval("0X10", &mut Ctx::new()), 16);
+    }
+
+    #[test]
+    fn underscores_are_visual_separators() {
+        assert_eq!(eval("1_0", &mut Ctx::new()), 10);
+        assert_eq!(eval("0x1_0", &mut Ctx::new()), 16);
+        assert_eq!(eval("0b1_0", &mut Ctx::new()), 2);
     }
 
     #[test]

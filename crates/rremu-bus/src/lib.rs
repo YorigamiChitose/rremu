@@ -51,8 +51,6 @@ pub enum BusError {
     Misaligned { addr: u32, size: AccessSize },
     #[error("device error at {addr:#x}: {msg}")]
     Device { addr: u32, msg: String },
-    #[error("peek unsupported at {addr:#x}")]
-    PeekUnsupported { addr: u32 },
     /// 注册地址区间与既有设备重叠（builder 阶段）。
     #[error("device range {start:#x}..{end:#x} overlaps existing mapping")]
     Overlap { start: u32, end: u32 },
@@ -206,6 +204,14 @@ impl BusRouter {
         Ok(())
     }
 
+    /// 定位地址所在区域；未映射统一返 `Unmapped`。
+    fn region_index(&self, addr: u32) -> Result<usize, BusError> {
+        self.regions
+            .iter()
+            .position(|r| r.contains(addr))
+            .ok_or(BusError::Unmapped { addr })
+    }
+
     /// 路由 + 设备读 + 发 `MemAccess{kind}` 事件（公开方法 inst_read/data_read 共用）。
     fn route_read(
         &mut self,
@@ -216,11 +222,7 @@ impl BusRouter {
     ) -> Result<u32, BusError> {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::Unmapped { addr })?;
+        let idx = self.region_index(addr)?;
         let region = &mut self.regions[idx];
         let value = region.device.read(addr, size, sink)?;
         sink.emit(EmuEvent::MemAccess {
@@ -245,11 +247,7 @@ impl BusRouter {
     ) -> Result<(), BusError> {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::Unmapped { addr })?;
+        let idx = self.region_index(addr)?;
         let region = &mut self.regions[idx];
         region.device.write(addr, size, data, sink)?;
         sink.emit(EmuEvent::MemAccess {
@@ -290,20 +288,12 @@ impl Bus for BusRouter {
 
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError> {
         Self::check_align(addr, size)?;
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::PeekUnsupported { addr })?;
+        let idx = self.region_index(addr)?;
         self.regions[idx].device.peek_read(addr, size)
     }
 
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError> {
-        let idx = self
-            .regions
-            .iter()
-            .position(|r| r.contains(addr))
-            .ok_or(BusError::Unmapped { addr })?;
+        let idx = self.region_index(addr)?;
         let region = &mut self.regions[idx];
         // 区间截断检查：不允许跨越设备边界写入
         let off = addr - region.range.start;

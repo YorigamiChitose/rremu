@@ -81,6 +81,17 @@ impl Framebuffer {
         let rgb565 = u16::from(lo) | (u16::from(hi) << 8);
         self.frame[pixel_idx] = rgb565_to_u32(rgb565);
     }
+
+    /// 拷贝字节到 off、重建受影响像素并置 dirty；调用方保证范围合法。
+    fn apply(&mut self, off: usize, bytes: &[u8]) {
+        self.pixels[off..off + bytes.len()].copy_from_slice(bytes);
+        let start = off / 2;
+        let end = (off + bytes.len()).div_ceil(2);
+        for idx in start..end {
+            self.update_pixel(idx);
+        }
+        self.dirty = true;
+    }
 }
 
 impl BusDevice for Framebuffer {
@@ -103,16 +114,11 @@ impl BusDevice for Framebuffer {
         if off + n > self.pixels.len() {
             return Ok(()); // 越界写忽略
         }
+        let mut buf = [0u8; 4];
         for i in 0..n {
-            self.pixels[off + i] = ((data >> (8 * i)) & 0xff) as u8;
+            buf[i] = ((data >> (8 * i)) & 0xff) as u8;
         }
-        // 更新受影响的像素
-        let start = off / 2;
-        let end = (off + n).div_ceil(2);
-        for idx in start..end {
-            self.update_pixel(idx);
-        }
-        self.dirty = true;
+        self.apply(off, &buf[..n]);
         Ok(())
     }
 
@@ -129,13 +135,7 @@ impl BusDevice for Framebuffer {
                 msg: "bulk write out of framebuffer range".to_owned(),
             });
         }
-        self.pixels[off..off + data.len()].copy_from_slice(data);
-        let start = off / 2;
-        let end = (off + data.len()).div_ceil(2);
-        for idx in start..end.min(self.frame.len()) {
-            self.update_pixel(idx);
-        }
-        self.dirty = true;
+        self.apply(off, data);
         Ok(())
     }
 

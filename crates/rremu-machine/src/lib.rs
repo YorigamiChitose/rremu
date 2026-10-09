@@ -122,11 +122,17 @@ impl RingCollector {
     pub fn drain_uart(&mut self) -> Vec<u8> {
         self.uart
             .drain(..)
-            .filter_map(|ev| match ev {
-                EmuEvent::UartOutput { byte } => Some(byte),
-                _ => None,
-            })
+            .filter_map(|ev| Self::as_uart_output(&ev))
             .collect()
+    }
+
+    /// 从事件提取 UART 输出字节（输入事件与其他事件不算输出）。
+    fn as_uart_output(ev: &EmuEvent) -> Option<u8> {
+        if let EmuEvent::UartOutput { byte } = ev {
+            Some(*byte)
+        } else {
+            None
+        }
     }
 
     pub fn clear(&mut self) {
@@ -516,17 +522,15 @@ impl Machine {
                 .collector
                 .uart_ring()
                 .iter()
-                .filter_map(|e| match e {
-                    EmuEvent::UartOutput { byte } => Some(*byte),
-                    _ => None,
-                })
+                .filter_map(RingCollector::as_uart_output)
                 .collect(),
         }
     }
 
     /// 调试 peek：无副作用读一个 Word（表达式/x 命令用，D12）。
+    /// 调试器语义：支持非对齐地址（拼字），取指路径的严格对齐不受影响。
     pub fn peek(&mut self, addr: u32) -> Result<u32, BusError> {
-        self.bus.peek(addr, AccessSize::Word)
+        self.peek_word_maybe_unaligned(addr)
     }
 
     /// 反汇编指定地址的指令（TUI 用，内部走无副作用 peek）。

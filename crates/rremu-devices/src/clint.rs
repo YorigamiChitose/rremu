@@ -66,6 +66,17 @@ impl Clint {
             AccessSize::Word => val,
         }
     }
+
+    /// 部分写合并：按 reg 内字节偏移与宽度，把 data 的对应字节并入 old。
+    fn merge_reg(old: u32, byte_idx: usize, size: AccessSize, data: u32) -> u32 {
+        let shift = 8 * byte_idx;
+        let mask = match size {
+            AccessSize::Byte => 0xff_u32 << shift,
+            AccessSize::Half => 0xffff << shift,
+            AccessSize::Word => 0xffff_ffff,
+        };
+        (old & !mask) | ((data << shift) & mask)
+    }
 }
 
 impl BusDevice for Clint {
@@ -79,24 +90,10 @@ impl BusDevice for Clint {
         let off = self.offset(addr);
         if off < REG_MSIP_END {
             let byte_idx = (off - REG_MSIP) as usize;
-            let shift = 8 * byte_idx;
-            let mask = match size {
-                AccessSize::Byte => 0xff_u32 << shift,
-                AccessSize::Half => 0xffff << shift,
-                AccessSize::Word => 0xffff_ffff,
-            };
-            let shifted = (data << shift) & mask;
-            self.msip = ((self.msip & !mask) | shifted) & 1;
+            self.msip = Self::merge_reg(self.msip, byte_idx, size, data) & 1;
         } else if (REG_MTIMECMP..REG_MTIMECMP_END).contains(&off) {
             let byte_idx = (off - REG_MTIMECMP) as usize;
-            let shift = 8 * byte_idx;
-            let mask = match size {
-                AccessSize::Byte => 0xff_u32 << shift,
-                AccessSize::Half => 0xffff << shift,
-                AccessSize::Word => 0xffff_ffff,
-            };
-            let shifted = (data << shift) & mask;
-            self.mtimecmp = (self.mtimecmp & !mask) | shifted;
+            self.mtimecmp = Self::merge_reg(self.mtimecmp, byte_idx, size, data);
         }
         // mtime 和未知偏移：写忽略
         Ok(())
