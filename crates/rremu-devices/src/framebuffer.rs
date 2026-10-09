@@ -114,11 +114,8 @@ impl BusDevice for Framebuffer {
         if off + n > self.pixels.len() {
             return Ok(()); // 越界写忽略
         }
-        let mut buf = [0u8; 4];
-        for i in 0..n {
-            buf[i] = ((data >> (8 * i)) & 0xff) as u8;
-        }
-        self.apply(off, &buf[..n]);
+        let bytes = data.to_le_bytes();
+        self.apply(off, &bytes[..n]);
         Ok(())
     }
 
