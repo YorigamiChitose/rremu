@@ -1,7 +1,9 @@
 //! rremu-devices：可插拔设备模型（ram / uart / clint / framebuffer）。不依赖 cpu。
 
+pub mod clint;
 pub mod ram;
 pub mod uart;
 
+pub use clint::Clint;
 pub use ram::Ram;
 pub use uart::Uart;
