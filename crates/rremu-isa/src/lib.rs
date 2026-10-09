@@ -325,10 +325,21 @@ pub mod csr {
     pub const MSTATUS_MPP_MASK: u32 = 0b11 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_U: u32 = 0b00 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_M: u32 = 0b11 << MSTATUS_MPP_SHIFT;
+
+    // mie 使能位
+    pub const MIE_MSIE: u32 = 1 << 3;  // Machine Software Interrupt Enable
+    pub const MIE_MTIE: u32 = 1 << 7;  // Machine Timer Interrupt Enable
+    pub const MIE_MEIE: u32 = 1 << 11; // Machine External Interrupt Enable
+
+    // mip pending 位（硬件只读，反映设备 pending 状态）
+    pub const MIP_MSIP: u32 = 1 << 3;
+    pub const MIP_MTIP: u32 = 1 << 7;
+    pub const MIP_MEIP: u32 = 1 << 11;
 }
 
-/// 异常/中断 cause 值（M1 用到的异常码）。
+/// 异常/中断 cause 值。
 pub mod cause {
+    // 异常（bit31=0）
     pub const INSTR_MISALIGNED: u32 = 0;
     pub const INSTR_ACCESS_FAULT: u32 = 1;
     pub const ILLEGAL_INSTR: u32 = 2;
@@ -339,6 +350,11 @@ pub mod cause {
     pub const STORE_ACCESS_FAULT: u32 = 7;
     pub const ECALL_FROM_U: u32 = 8;
     pub const ECALL_FROM_M: u32 = 11;
+
+    // 中断（bit31=1）
+    pub const M_SI: u32 = 0x8000_0003; // Machine Software Interrupt
+    pub const M_TI: u32 = 0x8000_0007; // Machine Timer Interrupt
+    pub const M_EI: u32 = 0x8000_000b; // Machine External Interrupt
 }
 
 #[cfg(test)]

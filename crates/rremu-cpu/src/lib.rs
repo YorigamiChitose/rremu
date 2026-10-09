@@ -136,9 +136,23 @@ impl Cpu {
     }
 
     /// 取指 → 解码 → 执行 → 写回；错误路径统一走 trap。
+    ///
+    /// 中断检查在取指**之前**：三层 AND 门控 ——
+    /// mstatus.MIE（全局使能）& mie 对应位（单独使能）& bus.pending_interrupt()（硬件 pending）。
+    /// 中断命中时 mepc = 当前 pc（未执行的下一条指令），mret 后重新执行。
     pub fn step<B: Bus, E: EventSink>(&mut self, bus: &mut B, sink: &mut E) -> Result<StepOutcome, CpuError> {
         bus.set_cycle(self.cycle);
         let pc = self.pc;
+
+        // 中断检查（取指前）
+        if (self.csr.mstatus & csr::MSTATUS_MIE) != 0 {
+            if let Some(irq_cause) = bus.pending_interrupt() {
+                let int_id = irq_cause & 0x7fff_ffff;
+                if (self.csr.mie >> int_id) & 1 == 1 {
+                    return self.trap(sink, irq_cause);
+                }
+            }
+        }
 
         // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）
         if pc & 0x1 != 0 {
@@ -1251,5 +1265,137 @@ mod tests {
         h.run(2);
         assert_eq!(h.cpu.reg(1), 42);
         assert_eq!(h.cpu.pc(), BASE + 6);
+    }
+
+    // ---- interrupt tests (M3.3) ----
+
+    /// 测试 IRQ 设备：返回可配置的中断 cause。
+    struct MockIrq {
+        cause: Option<u32>,
+    }
+
+    impl MockIrq {
+        fn new(cause: u32) -> Self {
+            Self { cause: Some(cause) }
+        }
+    }
+
+    impl BusDevice for MockIrq {
+        fn read(&mut self, _addr: u32, _size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+            Ok(0)
+        }
+        fn write(&mut self, _addr: u32, _size: AccessSize, _data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+            Ok(())
+        }
+        fn peek_read(&mut self, _addr: u32, _size: AccessSize) -> Result<u32, BusError> {
+            Ok(0)
+        }
+        fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
+            Ok(())
+        }
+        fn device_name(&self) -> &str {
+            "mock-irq"
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn check_interrupt(&self) -> Option<u32> {
+            self.cause
+        }
+    }
+
+    #[test]
+    fn interrupt_taken_when_mie_and_mtie_enabled() {
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+
+        let mut cpu = Cpu::new(BASE);
+        cpu.csr.mstatus = csr::MSTATUS_MIE | csr::MSTATUS_MPP_M;
+        cpu.csr.mie = csr::MIE_MTIE;
+        cpu.csr.mtvec = BASE + 0x800;
+
+        let mut sink = Sink(Vec::new());
+        let outcome = cpu.step(&mut bus, &mut sink).unwrap();
+        assert_eq!(outcome, StepOutcome::Trapped { cause: cause::M_TI });
+        assert_eq!(cpu.csr_state().mepc, BASE); // mepc = 旧 pc（未执行的指令）
+        assert_eq!(cpu.pc(), BASE + 0x800); // pc = mtvec
+        // trap 后 MIE=0（防嵌套），MPIE=旧MIE=1，MPP=M
+        let ms = cpu.csr_state().mstatus;
+        assert_eq!((ms >> csr::MSTATUS_MIE.trailing_zeros()) & 1, 0);
+        assert_eq!((ms >> csr::MSTATUS_MPIE.trailing_zeros()) & 1, 1);
+        assert_eq!((ms >> csr::MSTATUS_MPP_SHIFT) & 0b11, 0b11);
+    }
+
+    #[test]
+    fn interrupt_not_taken_when_mstatus_mie_disabled() {
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+
+        let mut cpu = Cpu::new(BASE);
+        cpu.csr.mstatus = csr::MSTATUS_MPP_M; // MIE=0
+        cpu.csr.mie = csr::MIE_MTIE;
+        cpu.csr.mtvec = BASE + 0x800;
+        // 放一条 NOP
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        h.load(BASE, &[0x0000_0013]); // addi x0, x0, 0 (NOP)
+        let outcome = h.step();
+        // 中断未取，NOP 正常执行
+        assert!(matches!(outcome, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), BASE + 4);
+    }
+
+    #[test]
+    fn interrupt_not_taken_when_mie_mtie_disabled() {
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+
+        let mut cpu = Cpu::new(BASE);
+        cpu.csr.mstatus = csr::MSTATUS_MIE | csr::MSTATUS_MPP_M; // MIE=1
+        cpu.csr.mie = 0; // MTIE=0
+        cpu.csr.mtvec = BASE + 0x800;
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        h.load(BASE, &[0x0000_0013]); // NOP
+        let outcome = h.step();
+        assert!(matches!(outcome, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), BASE + 4);
+    }
+
+    #[test]
+    fn interrupt_mret_restores_mie_and_resumes() {
+        // 中断 → trap → handler 第一条 mret → 恢复 MIE → pc = mepc
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+
+        let handler = BASE + 0x800;
+        let mut cpu = Cpu::new(BASE);
+        cpu.csr.mstatus = csr::MSTATUS_MIE | csr::MSTATUS_MPP_M;
+        cpu.csr.mie = csr::MIE_MTIE;
+        cpu.csr.mtvec = handler;
+
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        // 主程序放 NOP；handler 放 mret
+        h.load(BASE, &[0x0000_0013]); // NOP at BASE
+        h.load(handler, &[0x3020_0073]); // mret at handler
+
+        // 第 1 步：中断触发，trap 到 handler
+        let out1 = h.step();
+        assert_eq!(out1, StepOutcome::Trapped { cause: cause::M_TI });
+        assert_eq!(h.cpu.pc(), handler);
+        assert_eq!(h.cpu.csr_state().mepc, BASE);
+
+        // 第 2 步：执行 mret → pc = mepc = BASE，MIE 恢复为 1
+        let out2 = h.step();
+        assert!(matches!(out2, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), BASE);
+        let ms = h.cpu.csr_state().mstatus;
+        assert_eq!((ms >> csr::MSTATUS_MIE.trailing_zeros()) & 1, 1);
+
+        // 第 3 步：中断再次 pending → 再次 trap（MockIrq 恒 pending）
+        let out3 = h.step();
+        assert_eq!(out3, StepOutcome::Trapped { cause: cause::M_TI });
     }
 }
