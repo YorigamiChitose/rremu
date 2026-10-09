@@ -62,6 +62,17 @@ pub struct FramebufferSnapshot {
     pub pixels: Vec<u32>,
 }
 
+/// 帧缓冲零拷贝引用（窗口前端 dirty 驱动刷新用）。
+///
+/// `pixels` 生命周期绑定到 `&mut Machine`，调用方需在再次修改 machine 前
+/// 用完（如 `Window::update` 完成像素拷贝/上屏）。dirty 标志由本方法消费一次。
+#[derive(Debug)]
+pub struct FramebufferFrame<'a> {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: &'a [u32],
+}
+
 #[derive(Debug, Error)]
 pub enum MachineError {
     #[error("segment {addr:#x}+{len} out of RAM range {ram_base:#x}..{ram_end:#x}")]
@@ -621,6 +632,30 @@ impl Machine {
         })
     }
 
+    /// 帧缓冲 dirty 驱动零拷贝访问（独立窗口前端用）。
+    ///
+    /// - 无 framebuffer 或自上次刷新以来未写入（dirty=false）→ 返回 `None`；
+    /// - dirty=true → 清 dirty 标志并返回 `Some(FramebufferFrame { width, height, pixels })`，
+    ///   `pixels` 直接指向设备内部 `frame()` 缓冲，无 1.2MB clone。
+    ///
+    /// 生命周期约束：`pixels` 借用 `&mut self`，调用方必须先 `Window::update(pixels)`
+    /// 完成上屏拷贝，再调用下一个会修改 machine 的方法。
+    pub fn framebuffer_dirty_frame(&mut self) -> Option<FramebufferFrame<'_>> {
+        let addr = self.fb_base?;
+        let dev = self.bus.device_mut(addr)?;
+        let fb = dev.as_any_mut().downcast_mut::<Framebuffer>()?;
+        if !fb.is_dirty() {
+            return None;
+        }
+        // 消费 dirty 标志：本调用方负责把这一帧上屏。
+        fb.clear_dirty();
+        Some(FramebufferFrame {
+            width: fb.width(),
+            height: fb.height(),
+            pixels: fb.frame(),
+        })
+    }
+
     /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek，D12）。
     pub fn eval(&mut self, expr: &Expr) -> Result<u32, EvalError> {
         let mut ctx = MachineCtx(self);
@@ -988,6 +1023,34 @@ mod tests {
         assert_eq!(fb.height(), 480);
         assert_eq!(fb.frame().len(), 640 * 480);
         assert!(!fb.is_dirty(), "framebuffer should start clean");
+    }
+
+    #[test]
+    fn framebuffer_dirty_frame_returns_none_when_clean() {
+        // M5.2 验收：无写入时 dirty=false，dirty_frame() 返回 None。
+        let mut m = hello_machine();
+        assert!(m.framebuffer_dirty_frame().is_none(), "clean fb should return None");
+    }
+
+    #[test]
+    fn framebuffer_dirty_frame_returns_some_after_write_and_clears_dirty() {
+        // M5.2 验收：写入后 dirty=true → 返回 Some(零拷贝引用)，消费一次后再次 None。
+        let mut m = hello_machine();
+        let base = m.framebuffer_base().expect("framebuffer mounted");
+        // 通过 device_mut 拿到 fb 设备句柄，直接 write_bytes 触发 dirty
+        let dev = m.device_mut(base).expect("fb mapped");
+        let fb = dev.as_any_mut().downcast_mut::<Framebuffer>().expect("fb downcast");
+        fb.write_bytes(base, &[0x00, 0xF8]).expect("write red pixel bytes"); // RGB565=0xF800（红）
+
+        let frame = m.framebuffer_dirty_frame().expect("dirty fb should return Some");
+        assert_eq!(frame.width, 640);
+        assert_eq!(frame.height, 480);
+        assert_eq!(frame.pixels.len(), 640 * 480);
+        // 红像素 0xF800 → 0x00FF0000（framebuffer.rs rgb565_to_u32 已锁定）
+        assert_eq!(frame.pixels[0], 0x00FF_0000);
+
+        // dirty 标志已被本调用消费 → 再次 None
+        assert!(m.framebuffer_dirty_frame().is_none(), "dirty cleared after read");
     }
 
     #[test]
