@@ -47,6 +47,8 @@ ctrlc = "3.5"
 # M4 (TUI)
 ratatui = "0.30"
 crossterm = "0.29"
+# M5 (Window)
+minifb = "0.29"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

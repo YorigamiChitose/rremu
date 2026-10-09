@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
-# minifb 按 PLAN §9 于 M5 引入，M1 保持零依赖占位
+[dependencies]
+minifb.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

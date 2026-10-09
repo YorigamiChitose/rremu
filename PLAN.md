@@ -77,7 +77,7 @@
 bin → cli, tui*, window*, machine, loader, expr(间接), clap, anyhow, ctrlc, tracing-subscriber
 cli → machine, expr, rustyline, tracing
 tui* → machine, ratatui, crossterm
-window* → machine, minifb
+window* → minifb, thiserror
 machine → cpu, bus, devices, loader, expr, thiserror, tracing
 devices → bus, thiserror, tracing
 cpu → isa, decode, bus, thiserror, tracing
