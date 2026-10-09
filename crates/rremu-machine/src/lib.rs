@@ -3,9 +3,9 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rremu_bus::{AccessSize, Bus, BusError, BusRouter, EmuEvent, EventSink};
+use rremu_bus::{AccessSize, Bus, BusError, BusDevice, BusRouter, EmuEvent, EventSink};
 use rremu_cpu::{Cpu, StepOutcome};
-use rremu_devices::{Ram, Uart};
+use rremu_devices::{Clint, Framebuffer, Ram, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::{csr, Address, Word};
 use rremu_loader::Image;
@@ -166,6 +166,10 @@ pub struct MachineBuilder {
     ram_base: u32,
     ram_size: u32,
     uart_base: Option<u32>,
+    clint_base: Option<u32>,
+    fb_base: Option<u32>,
+    fb_width: u32,
+    fb_height: u32,
     entry: Option<u32>,
     image: Option<Image>,
 }
@@ -183,6 +187,18 @@ impl MachineBuilder {
 
     pub fn uart(mut self, base: u32) -> Self {
         self.uart_base = Some(base);
+        self
+    }
+
+    pub fn clint(mut self, base: u32) -> Self {
+        self.clint_base = Some(base);
+        self
+    }
+
+    pub fn framebuffer(mut self, base: u32, width: u32, height: u32) -> Self {
+        self.fb_base = Some(base);
+        self.fb_width = width;
+        self.fb_height = height;
         self
     }
 
@@ -209,6 +225,24 @@ impl MachineBuilder {
         bus.map(self.ram_base..ram_end, Box::new(Ram::new(self.ram_base, self.ram_size)))?;
         if let Some(ub) = self.uart_base {
             bus.map(ub..ub + 8, Box::new(Uart::new(ub)))?;
+        }
+        if let Some(cb) = self.clint_base {
+            // CLINT 标准范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
+            bus.map(cb..cb + 0xC000, Box::new(Clint::new(cb)))?;
+        }
+        if let Some(fb) = self.fb_base {
+            if self.fb_width == 0 || self.fb_height == 0 {
+                return Err(MachineError::InvalidConfig("framebuffer dimensions must be non-zero".into()));
+            }
+            let fb_size = self
+                .fb_width
+                .checked_mul(self.fb_height)
+                .and_then(|n| n.checked_mul(2))
+                .ok_or_else(|| MachineError::InvalidConfig("framebuffer size overflow".into()))?;
+            bus.map(
+                fb..fb + fb_size,
+                Box::new(Framebuffer::new(fb, self.fb_width, self.fb_height)),
+            )?;
         }
 
         let image = self.image;
@@ -248,6 +282,8 @@ impl MachineBuilder {
             image,
             ram_base: self.ram_base,
             uart_base: self.uart_base,
+            clint_base: self.clint_base,
+            fb_base: self.fb_base,
             entry,
             state: RunState::Idle,
             last_instr: None,
@@ -268,6 +304,8 @@ pub struct Machine {
     image: Option<Image>,
     ram_base: u32,
     uart_base: Option<u32>,
+    clint_base: Option<u32>,
+    fb_base: Option<u32>,
     entry: u32,
     state: RunState,
     last_instr: Option<(u32, Instruction)>,
@@ -518,6 +556,19 @@ impl Machine {
         self.entry
     }
 
+    pub fn clint_base(&self) -> Option<u32> {
+        self.clint_base
+    }
+
+    pub fn framebuffer_base(&self) -> Option<u32> {
+        self.fb_base
+    }
+
+    /// 经地址定位总线设备（downcast 用，如访问 CLINT/FB 内部状态）。
+    pub fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice> {
+        self.bus.device_mut(addr)
+    }
+
     pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
         self.collector.mem_ring()
     }
@@ -551,7 +602,14 @@ mod tests {
         let bytes = std::fs::read(HELLO_ELF)
             .unwrap_or_else(|e| panic!("缺少 {HELLO_ELF}（先运行 tools/build-firmware.sh）：{e}"));
         let image = rremu_loader::load_elf(&bytes).unwrap();
-        MachineBuilder::new().ram(0x8000_0000, 16 * 1024 * 1024).uart(0x1000_0000).load(image).build().unwrap()
+        MachineBuilder::new()
+            .ram(0x8000_0000, 16 * 1024 * 1024)
+            .uart(0x1000_0000)
+            .clint(0x0200_0000)
+            .framebuffer(0x2000_0000, 640, 480)
+            .load(image)
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -788,5 +846,55 @@ mod tests {
         assert_eq!(snap.gprs.len(), 32);
         let out = String::from_utf8_lossy(&snap.uart_out);
         assert!(out.contains("hello"), "uart_out should contain 'hello': {out}");
+    }
+
+    // ---- M3.5：MachineBuilder 集成 CLINT/Framebuffer ----
+
+    #[test]
+    fn clint_accessible_via_device_mut() {
+        // builder.clint() 后可经 device_mut 定位 CLINT 并 downcast；
+        // 经 BusDevice trait 方法验证寄存器与中断行为。
+        let mut m = hello_machine();
+        let base = m.clint_base().expect("clint mounted");
+        let dev = m.device_mut(base).expect("clint mapped in bus");
+        assert!(dev.as_any_mut().downcast_ref::<Clint>().is_some(), "downcast to Clint");
+        // 初始 mtime=0、mtimecmp=0 → mtime>=mtimecmp 视为 timer pending？
+        // Clint::check_interrupt 用 mtime >= mtimecmp，二者均 0 时 pending。
+        // 但 MIE/MSTATUS_MIE 关闭，CPU 不会真陷入；这里只测设备侧。
+        assert_eq!(dev.check_interrupt(), Some(0x8000_0007), "mtime>=mtimecmp pending MTI");
+        // peek mtime（=0，cycle 未推进）
+        assert_eq!(dev.peek_read(base + 0xBFF8, AccessSize::Word).unwrap(), 0);
+    }
+
+    #[test]
+    fn framebuffer_accessible_via_device_mut() {
+        // builder.framebuffer() 后可经 device_mut 定位 FB 并 downcast；
+        // 验证维度、帧缓冲容量、初始 dirty 状态。
+        let mut m = hello_machine();
+        let base = m.framebuffer_base().expect("framebuffer mounted");
+        let dev = m.device_mut(base).expect("framebuffer mapped in bus");
+        let fb = dev
+            .as_any_mut()
+            .downcast_ref::<Framebuffer>()
+            .expect("downcast to Framebuffer");
+        assert_eq!(fb.width(), 640);
+        assert_eq!(fb.height(), 480);
+        assert_eq!(fb.frame().len(), 640 * 480);
+        assert!(!fb.is_dirty(), "framebuffer should start clean");
+    }
+
+    #[test]
+    fn mem_ring_records_fetch_after_single_step() {
+        // M3.5 验收：单步后 mem_ring 非空，且至少含一条 MemAccess 事件
+        // （取指即触发 Fetch 类访问）。
+        let mut m = hello_machine();
+        assert!(m.mem_ring().is_empty(), "mem_ring starts empty");
+        m.step_n(1);
+        let ring = m.mem_ring();
+        assert!(!ring.is_empty(), "mem_ring non-empty after step");
+        assert!(
+            ring.iter().any(|ev| matches!(ev, EmuEvent::MemAccess { .. })),
+            "mem_ring should contain MemAccess events: {ring:?}",
+        );
     }
 }

@@ -76,6 +76,8 @@ fn try_main() -> anyhow::Result<i32> {
     let mut builder = MachineBuilder::new()
         .ram(args.base, mem_size)
         .uart(0x1000_0000)
+        .clint(0x0200_0000)
+        .framebuffer(0x2000_0000, 640, 480)
         .load(image);
     if let Some(entry) = args.entry {
         builder = builder.entry(entry);
