@@ -595,6 +595,7 @@ impl EvalContext for MachineCtx<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
+    use rremu_bus::MemKind;
 
     const HELLO_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/hello.elf");
 
@@ -895,6 +896,82 @@ mod tests {
         assert!(
             ring.iter().any(|ev| matches!(ev, EmuEvent::MemAccess { .. })),
             "mem_ring should contain MemAccess events: {ring:?}",
+        );
+    }
+
+    // ---- M3.6：定时器中断端到端 + MemAccess ring 验证 ----
+
+    const TIMER_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/timer.elf");
+
+    fn timer_machine() -> Machine {
+        let bytes = std::fs::read(TIMER_ELF)
+            .unwrap_or_else(|e| panic!("缺少 {TIMER_ELF}（先运行 tools/build-firmware.sh）：{e}"));
+        let image = rremu_loader::load_elf(&bytes).unwrap();
+        MachineBuilder::new()
+            .ram(0x8000_0000, 16 * 1024 * 1024)
+            .uart(0x1000_0000)
+            .clint(0x0200_0000)
+            .framebuffer(0x2000_0000, 640, 480)
+            .load(image)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn timer_firmware_fires_interrupts_and_exits_zero() {
+        // 自编定时器固件：mtvec→handler→mtimecmp 重置→count→mret→tohost 退出。
+        // 验证 CLINT mtime/mtimecmp 驱动的机器定时器中断完整路径。
+        let mut m = timer_machine();
+        let pause = AtomicBool::new(false);
+        let rr = m.run(&pause);
+        assert_eq!(rr, RunResult::Exited { code: 0 }, "timer firmware should exit 0");
+        assert_eq!(m.snapshot().state, RunState::Exited(0));
+        // 中断 handler 应执行过至少 3 次 → cycle 推进超过单次 handler 指令数
+        assert!(
+            m.snapshot().cycle > 50,
+            "cycle should reflect multiple interrupt rounds: {}",
+            m.snapshot().cycle,
+        );
+    }
+
+    #[test]
+    fn timer_mem_ring_contains_clint_accesses() {
+        // MemAccess ring 验证：CLINT 的 mtime 读 + mtimecmp 写应留下事件记录，
+        // device 名为 "clint"，且同时存在 Read 和 Write 类访问。
+        // 默认 ring 容量 16 不足以覆盖全部 CLINT 访问，这里扩容后再跑。
+        let mut m = timer_machine();
+        m.set_event_ring_capacity(4096, 1024);
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+        let ring = m.mem_ring();
+        assert!(!ring.is_empty(), "mem_ring non-empty after timer run");
+        let clint_reads = ring.iter().filter(|ev| {
+            matches!(
+                ev,
+                EmuEvent::MemAccess {
+                    kind: MemKind::Read,
+                    device,
+                    ..
+                } if device == "clint"
+            )
+        });
+        let clint_writes = ring.iter().filter(|ev| {
+            matches!(
+                ev,
+                EmuEvent::MemAccess {
+                    kind: MemKind::Write,
+                    device,
+                    ..
+                } if device == "clint"
+            )
+        });
+        assert!(
+            clint_reads.clone().count() > 0,
+            "mem_ring should contain CLINT Read events (mtime reads): {ring:?}",
+        );
+        assert!(
+            clint_writes.clone().count() > 0,
+            "mem_ring should contain CLINT Write events (mtimecmp writes): {ring:?}",
         );
     }
 }

@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
-# 编译 hello world 固件 → tests/data/hello.elf（M1.7，产物 gitignore）
+# 编译固件 → tests/data/*.elf（产物 gitignore）
+#   hello.elf  — hello world（M1.7）
+#   timer.elf  — 定时器中断（M3.6）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FW="$ROOT/tests/firmware"
 OUT="$ROOT/tests/data"
+LD="$FW/hello.ld"  # 共用同一链接脚本（RAM 布局一致）
+
+CFLAGS="-march=rv32imc_zicsr -mabi=ilp32 -nostdlib -static -T $LD"
+CC="${RISCV_CC:-riscv64-unknown-elf-gcc}"
 
 mkdir -p "$OUT"
 
-riscv64-unknown-elf-gcc \
-    -march=rv32imc_zicsr -mabi=ilp32 \
-    -nostdlib -static \
-    -T "$FW/hello.ld" \
-    -o "$OUT/hello.elf" \
-    "$FW/hello.S"
+build() {
+    local name="$1"
+    "$CC" $CFLAGS -o "$OUT/$name.elf" "$FW/$name.S"
+    echo "OK: $OUT/$name.elf"
+}
 
-echo "OK: $OUT/hello.elf"
+build hello
+build timer
