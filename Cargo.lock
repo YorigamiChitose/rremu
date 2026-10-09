@@ -1553,6 +1553,7 @@ dependencies = [
  "rremu-loader",
  "rremu-machine",
  "rremu-tui",
+ "rremu-window",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1570,6 +1571,7 @@ version = "0.1.0"
 dependencies = [
  "rremu-expr",
  "rremu-machine",
+ "rremu-window",
  "rustyline",
  "tracing",
 ]

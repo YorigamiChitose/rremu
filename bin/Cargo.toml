@@ -12,6 +12,7 @@ path = "src/main.rs"
 rremu-cli.workspace = true
 rremu-tui.workspace = true
 rremu-machine.workspace = true
+rremu-window.workspace = true
 rremu-loader.workspace = true
 clap.workspace = true
 anyhow.workspace = true

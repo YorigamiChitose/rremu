@@ -70,6 +70,25 @@ impl Window {
         !self.closed && self.inner.is_open()
     }
 
+    /// 仅处理 OS 事件、检测关窗，不刷新像素（fb 未 dirty 时用）。
+    ///
+    /// 返回 `false` 表示用户已关闭窗口。即使窗口已关闭，调用也安全。
+    pub fn poll(&mut self) -> bool {
+        if self.closed {
+            return false;
+        }
+        if !self.inner.is_open() {
+            self.closed = true;
+            return false;
+        }
+        self.inner.update();
+        if !self.inner.is_open() {
+            self.closed = true;
+            return false;
+        }
+        true
+    }
+
     /// 用新像素缓冲刷新窗口。
     ///
     /// - `buffer` 长度必须等于 `width * height`；

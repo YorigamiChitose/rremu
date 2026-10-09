@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use rremu_expr::{parse as parse_expr, Expr};
 use rremu_machine::{reg_name, Machine, RunResult, RunState};
+use rremu_window::Window;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -16,6 +17,9 @@ use rustyline::DefaultEditor;
 pub struct Repl {
     machine: Machine,
     pause_flag: Arc<AtomicBool>,
+    /// 可选独立显示窗（CLI 模式 + fb 配置时由 bin 创建并注入）；
+    /// None 表示无窗（TUI 路径、或用户已关窗、或 fb 未配置）。
+    window: Option<Window>,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -25,9 +29,12 @@ enum Outcome {
     ProgramExited(i32),
 }
 
+/// 有窗时 cmd_continue 的步进批量：在每批之后泵窗（dirty 上屏 / 否则 poll 关窗）。
+const WINDOW_BATCH: u64 = 1024;
+
 impl Repl {
-    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>) -> Self {
-        Self { machine, pause_flag }
+    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, window: Option<Window>) -> Self {
+        Self { machine, pause_flag, window }
     }
 
     /// 交互式 REPL（无 `-c` 时）。
@@ -133,7 +140,52 @@ impl Repl {
             return Outcome::Continue;
         }
         self.pause_flag.store(false, Ordering::Relaxed);
-        let result = self.machine.run(&self.pause_flag);
+
+        // 有窗时自行跑 step_n 循环，每批泵窗（dirty 上屏 / 否则 poll 关窗）；
+        // 无窗时走 machine.run 全速循环（仅靠 pause_flag 停机）。
+        let mut window_died = false;
+        let result = match &mut self.window {
+            Some(win) => {
+                // 初始 poll：让窗口出现并处理一次 OS 事件
+                if !win.poll() {
+                    window_died = true;
+                    RunResult::Paused
+                } else {
+                    loop {
+                        if self.pause_flag.load(Ordering::Relaxed) {
+                            break RunResult::Paused;
+                        }
+                        let step_rr = self.machine.step_n(WINDOW_BATCH);
+                        // 泵窗：dirty → 上屏（拷贝 frame.pixels）；否则仅 poll 检测关窗
+                        let open = if let Some(frame) = self.machine.framebuffer_dirty_frame() {
+                            win.update(frame.pixels)
+                        } else {
+                            win.poll()
+                        };
+                        if !open {
+                            window_died = true;
+                            break RunResult::Paused;
+                        }
+                        match step_rr {
+                            RunResult::Exited { code } => break RunResult::Exited { code },
+                            RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
+                            RunResult::HitWatchpoint { id, pc, old, new } => {
+                                break RunResult::HitWatchpoint { id, pc, old, new };
+                            }
+                            RunResult::Paused | RunResult::Trapped { .. } => {}
+                        }
+                    }
+                }
+            }
+            None => self.machine.run(&self.pause_flag),
+        };
+
+        if window_died {
+            // 窗已关：丢弃以免后续 c 试图再次使用已关闭的窗
+            self.window = None;
+            println!("Framebuffer window closed; paused. Subsequent 'c' runs without window.");
+        }
+
         self.flush_uart();
         match result {
             RunResult::Exited { code } => {
@@ -170,6 +222,18 @@ impl Repl {
                 println!("0x{pc:08x}:  {instr}");
             }
             self.flush_uart();
+            // 有窗时单步也泵窗：让用户能逐指令看 fb 变化
+            if let Some(win) = self.window.as_mut() {
+                let open = if let Some(frame) = self.machine.framebuffer_dirty_frame() {
+                    win.update(frame.pixels)
+                } else {
+                    win.poll()
+                };
+                if !open {
+                    self.window = None;
+                    println!("Framebuffer window closed.");
+                }
+            }
             match result {
                 RunResult::Exited { code } => {
                     println!("Program exited with code {code}.");

@@ -12,6 +12,7 @@ use clap::Parser;
 use rremu_cli::Repl;
 use rremu_loader::load_elf;
 use rremu_machine::MachineBuilder;
+use rremu_window::Window;
 
 #[derive(Parser)]
 #[command(name = "rremu", version, about = "RISC-V RV32IMC 模拟器与调试器")]
@@ -38,6 +39,10 @@ struct Args {
     /// 覆盖 ELF 入口地址
     #[arg(long, value_name = "ADDR", value_parser = parse_addr)]
     entry: Option<u32>,
+
+    /// 禁用 Framebuffer 设备（不映射 fb，CLI 模式不自动开窗）
+    #[arg(long)]
+    no_fb: bool,
 
     /// 日志详细度（-v info / -vv debug / -vvv trace）
     #[arg(short, long, action = clap::ArgAction::Count)]
@@ -73,12 +78,18 @@ fn try_main() -> anyhow::Result<i32> {
     let mut builder = MachineBuilder::new()
         .ram(args.base, mem_size)
         .uart(0x1000_0000)
-        .clint(0x0200_0000)
-        .framebuffer(0x2000_0000, 640, 480)
-        .load(image);
-    if let Some(entry) = args.entry {
-        builder = builder.entry(entry);
+        .clint(0x0200_0000);
+    // 默认映射 fb 设备；--no-fb 时跳过（CLI 不会自动开窗，TUI 也无内嵌视图）
+    if !args.no_fb {
+        builder = builder.framebuffer(0x2000_0000, 640, 480);
     }
+    let builder = builder.load(image);
+    let entry = args.entry;
+    let builder = if let Some(entry) = entry {
+        builder.entry(entry)
+    } else {
+        builder
+    };
     let machine = builder.build().context("failed to build machine")?;
 
     if args.tui {
@@ -93,7 +104,21 @@ fn try_main() -> anyhow::Result<i32> {
     })
     .context("failed to set Ctrl+C handler")?;
 
-    let mut repl = Repl::new(machine, pause_flag);
+    // CLI 模式 + fb 已配置 → 自动开 minifb 窗口（PLAN §11 M5）。
+    // 开窗失败（无 X11/Wayland）→ 降级为无窗模式继续运行，仅打印警告。
+    let window = if !args.no_fb {
+        match Window::new(640, 480, "rremu framebuffer") {
+            Ok(w) => Some(w),
+            Err(e) => {
+                eprintln!("rremu: warning: could not open framebuffer window ({e}); continuing without window");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut repl = Repl::new(machine, pause_flag, window);
     let code = if args.cmds.is_empty() {
         repl.run_interactive()
     } else {
