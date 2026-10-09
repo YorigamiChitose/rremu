@@ -154,14 +154,17 @@ impl Cpu {
             }
         }
 
-        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）
+        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）。inst_read 内部也会查，
+        // 这里先查可让 trap 路径与本文件历史一致；inst_read 拿到的奇数地址
+        // 会返 Misaligned{size:Half}，CPU 侧一并映射到 INSTR_MISALIGNED。
         if pc & 0x1 != 0 {
             return self.trap(sink, cause::INSTR_MISALIGNED);
         }
 
-        // 读取首个半字判定指令长度
-        let lo = match bus.read(pc, AccessSize::Half, sink) {
-            Ok(v) => v as u16,
+        // 取指：一次 inst_read 拿全 4 字节（4 字节对齐时单次对齐 Word 读；
+        // 2 字节对齐时 bus 内部读两个对齐字拼合并发一条 IF W 合成事件）。
+        let word = match bus.inst_read(pc, sink) {
+            Ok(w) => w,
             Err(e) => {
                 let c = if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
                     cause::INSTR_MISALIGNED
@@ -171,6 +174,7 @@ impl Cpu {
                 return self.trap(sink, c);
             }
         };
+        let lo = word as u16;
 
         let (instr, len) = if instr_len(lo) == 2 {
             // 16 位压缩指令
@@ -181,19 +185,7 @@ impl Cpu {
                 }
             }
         } else {
-            // 32 位指令：读取高半字（可能跨边界），拼接成完整 word
-            let hi = match bus.read(pc.wrapping_add(2), AccessSize::Half, sink) {
-                Ok(v) => v as u16,
-                Err(e) => {
-                    let c = if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
-                        cause::INSTR_MISALIGNED
-                    } else {
-                        cause::INSTR_ACCESS_FAULT
-                    };
-                    return self.trap(sink, c);
-                }
-            };
-            let word = lo as u32 | ((hi as u32) << 16);
+            // 32 位指令：word 已包含完整 4 字节，直接解码
             match decode32(word, pc) {
                 Ok(i) => (i, 4u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
@@ -499,7 +491,7 @@ impl Cpu {
         addr: u32,
         size: AccessSize,
     ) -> Result<u32, TrapErr> {
-        bus.read(addr, size, sink).map_err(|e| TrapErr {
+        bus.data_read(addr, size, sink).map_err(|e| TrapErr {
             cause: if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
                 match size {
                     AccessSize::Half => cause::LOAD_MISALIGNED,
@@ -520,7 +512,7 @@ impl Cpu {
         size: AccessSize,
         data: u32,
     ) -> Result<(), TrapErr> {
-        bus.write(addr, size, data, sink).map_err(|e| TrapErr {
+        bus.data_write(addr, size, data, sink).map_err(|e| TrapErr {
             cause: if matches!(e, rremu_bus::BusError::Misaligned { .. }) {
                 cause::STORE_MISALIGNED
             } else {
