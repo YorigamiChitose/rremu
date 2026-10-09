@@ -1,4 +1,4 @@
-//! rremu-bus：总线抽象 —— BusDevice/Bus trait、地址路由、IrqLine、模拟事件。
+//! rremu-bus：总线抽象 —— BusDevice/Bus trait、地址路由、模拟事件。
 
 use core::any::Any;
 use core::fmt;
@@ -338,27 +338,6 @@ impl Bus for BusRouter {
     }
 }
 
-/// 中断线（M3 CLINT 使用；M1 先提供基础设施）。
-#[derive(Debug, Default)]
-pub struct IrqLine {
-    pending: bool,
-}
-
-impl IrqLine {
-    pub fn new() -> Self {
-        Self { pending: false }
-    }
-    pub fn raise(&mut self) {
-        self.pending = true;
-    }
-    pub fn clear(&mut self) {
-        self.pending = false;
-    }
-    pub fn is_pending(&self) -> bool {
-        self.pending
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
@@ -584,16 +563,6 @@ mod tests {
         // watch 地址外的写不触发
         bus.data_write(0x8000_0200, AccessSize::Word, 1, &mut sink).unwrap();
         assert_eq!(sink.0.iter().filter(|e| matches!(e, EmuEvent::Halt { .. })).count(), 1);
-    }
-
-    #[test]
-    fn irq_line() {
-        let mut irq = IrqLine::new();
-        assert!(!irq.is_pending());
-        irq.raise();
-        assert!(irq.is_pending());
-        irq.clear();
-        assert!(!irq.is_pending());
     }
 
     /// 测试设备：可配置返回一个中断 cause，并记录 tick 收到的 cycle。
