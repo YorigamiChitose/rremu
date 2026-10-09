@@ -43,6 +43,7 @@ pub struct Watchpoint {
     pub id: usize,
     pub expr: Expr,
     pub last_value: u32,
+    pub hit_count: u32,
 }
 
 /// 反汇编行（TUI 前端用）。
@@ -189,6 +190,7 @@ pub struct MachineSnapshot {
     pub mem_ring: VecDeque<EmuEvent>,
     pub uart_out: Vec<u8>,
     pub uart_in_len: usize,
+    pub watchpoints: Vec<Watchpoint>,
 }
 
 #[derive(Debug, Default)]
@@ -424,7 +426,7 @@ impl Machine {
     }
 
     /// 检查所有监视点：求值表达式得到当前值，与上次值比较。
-    /// 变化则返回 HitWatchpoint（pc 为引起变化的指令）并更新 last_value。
+    /// 变化则返回 HitWatchpoint（pc 为引起变化的指令）并更新 last_value / hit_count。
     fn check_watchpoints(&mut self, pc: u32) -> Option<RunResult> {
         for i in 0..self.watchpoints.len() {
             // 值语义：EXPR 求值结果就是被监视的值（如 *ADDR 解引用、x5 寄存器）。
@@ -436,6 +438,7 @@ impl Machine {
             if new != self.watchpoints[i].last_value {
                 let (id, old) = (self.watchpoints[i].id, self.watchpoints[i].last_value);
                 self.watchpoints[i].last_value = new;
+                self.watchpoints[i].hit_count += 1;
                 return Some(RunResult::HitWatchpoint { id, pc, old, new });
             }
         }
@@ -462,7 +465,7 @@ impl Machine {
         self.next_wp_id += 1;
         // 值语义：EXPR 求值即初值；求值失败（如地址未映射）先记 0，随步进重试
         let last_value = self.eval(&expr).unwrap_or(0);
-        self.watchpoints.push(Watchpoint { id, expr, last_value });
+        self.watchpoints.push(Watchpoint { id, expr, last_value, hit_count: 0 });
         id
     }
 
@@ -537,6 +540,7 @@ impl Machine {
                 })
                 .collect(),
             uart_in_len: self.uart_in_len,
+            watchpoints: self.watchpoints.clone(),
         }
     }
 

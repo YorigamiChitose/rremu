@@ -417,7 +417,7 @@ pub struct Args {
 | M1 | ctrlc | 3.5 | 默认 | bin |
 | M4 | ratatui | 0.30 | 默认 | tui |
 | M4 | crossterm | 0.29 | 默认 | tui |
-| M5 | minifb | 0.29 | 默认 | window |
+| M5 | minifb | 0.29 | default-features=false; x11 only | window |
 
 \* goblin 0.10.x 上游缺陷：仅开 elf32 无法编译（0.10.7 实测），故同时启用 elf64；解析路径仍只走 elf32。
 
@@ -513,7 +513,7 @@ pub struct Args {
 
 ## 13. 全局逐项检查清单（最终验收）
 
-- [ ] workspace 11 crate 结构与 §4 一致，依赖方向符合 §3.1，红线 §3.2 无违反
+- [ ] workspace 12 crate 结构与 §4 一致，依赖方向符合 §3.1，红线 §3.2 无违反
 - [ ] RV32IMC_Zicsr 全量指令可解码、可执行；非法指令正确 trap
 - [ ] 最简 M-mode：ecall/ebreak/mret/mstatus/mtvec/mepc/mcause/mie/mip 行为符合 §5.4
 - [ ] 3 个代表性测试 PASS：rv32ui-p-add / rv32um-p-mul / rv32uc-p-rvc

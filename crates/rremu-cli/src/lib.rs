@@ -369,7 +369,7 @@ impl Repl {
                 Expr::Num(v) => format!("0x{v:08x}"),
                 e => format!("{e:?}"),
             };
-            println!("watchpoint {}: expr={desc}", wp.id);
+            println!("watchpoint {}: expr={} value=0x{:08x} hits={}", wp.id, desc, wp.last_value, wp.hit_count);
         }
     }
 
