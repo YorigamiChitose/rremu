@@ -397,8 +397,9 @@ pub struct Args {
 }
 ```
 - `parse_size()`：`16M → 0x1000000`，非法后缀报错
-- 预留（M3+ 不实现）：`--no-uart` `--no-fb` `--window` `--trace`
-- 示例：`rremu hello.elf` / `rremu hello.elf -c c` / `rremu hello.elf -c "b 0x80000100" -c c -c "info r"` / `rremu hello.elf -t -m 64M -v`
+- 预留（M3+ 不实现）：`--no-uart` `--window` `--trace`
+- M5 实现：`--no-fb`（禁用 fb 设备映射 + 不自动开窗）
+- 示例：`rremu hello.elf` / `rremu hello.elf -c c` / `rremu hello.elf -c "b 0x80000100" -c c -c "info r"` / `rremu hello.elf -t -m 64M -v` / `rremu hello.elf --no-fb -c c`
 
 ## 9. 外部依赖规格
 
@@ -488,11 +489,15 @@ pub struct Args {
 
 ### M5 —— 独立窗口 + 打磨
 
+**设计原则（2026-10-09 敲定）**：Framebuffer 设备是纯设备（M3 已实现，无任何调试按键或脱离 fb 的功能）；rremu-window 是纯 minifb 显示窗，仅做"按 fb 输出更新像素 + 检测用户关窗"两件事，无任何调试按键、无运行/暂停/调速/单步等控制逻辑（控制仍在 CLI REPL）；CLI 模式 + fb 已配置 → bin 自动开窗（无需 `--window` 旗标）；TUI 模式不开窗，沿用 M4 的 `b` 键内嵌渲染。`--no-fb` 旗标用于完全禁用 fb 设备（既不映射设备也不开窗）。
+
 | 步 | 任务 | 验收 |
 |---|---|---|
-| 5.1 | rremu-window（minifb，FrameSink） | fb 画面在原生窗口显示，dirty 驱动刷新 |
-| 5.2 | CLI/参数打磨（parse_size、冲突提示、错误文案） | --help 完整；非法参数文案清晰 |
-| 5.3 | 发布准备 | `cargo build --release`；README（需求方要求时再写） |
+| 5.1 | rremu-window（minifb 纯显示窗，dirty 驱动刷新） | Window::new/update/is_open 三 API；无键盘绑定；fb 画面在原生窗口显示 |
+| 5.2 | machine: `framebuffer_dirty_frame()` dirty 驱动 API | 返回 `(w,h,&[u32])` 仅在 dirty 时；调用清 dirty；避免每帧 clone 1.2MB |
+| 5.3 | bin + Repl 集成：CLI + fb 配置自动开窗；cmd_continue 改 step_n 循环泵窗；窗关 = pause | hello.elf CLI 模式弹窗并显示初始黑屏；用户关窗 → 暂停回提示符 |
+| 5.4 | CLI/参数打磨：`--no-fb` 旗标；`--help` 完整；非法参数文案清晰 | `--no-fb` 跳过 fb 设备映射与开窗；`-c`/`--tui` 冲突报错 |
+| 5.5 | 发布准备：`cargo build --release` 通过；clippy 0 warning；test 全绿；窗手测清单（沙箱无 X11，需用户手测） | release 二进制可执行；workspace clippy/test 全绿；手测清单交付 |
 
 ## 12. 风险与对策
 
