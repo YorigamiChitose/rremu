@@ -47,8 +47,9 @@ ctrlc = "3.5"
 # M4 (TUI)
 ratatui = "0.30"
 crossterm = "0.29"
-# M5 (Window)
-minifb = "0.29"
+# M5 (Window) — 仅启用 x11 后端：Wayland xdg-decoration 缺失会导致无边框窗口
+# 无法鼠标拖动；X11 经 XWayland 在大多数桌面可用且提供完整装饰
+minifb = { version = "0.29", default-features = false, features = ["x11"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

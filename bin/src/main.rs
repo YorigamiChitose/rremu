@@ -105,7 +105,10 @@ fn try_main() -> anyhow::Result<i32> {
     .context("failed to set Ctrl+C handler")?;
 
     // CLI 模式 + fb 已配置 → 自动开 minifb 窗口（PLAN §11 M5）。
-    // 开窗失败（无 X11/Wayland）→ 降级为无窗模式继续运行，仅打印警告。
+    // 开窗失败（无 X11）→ 降级为无窗模式继续运行，仅打印警告。
+    // 注：minifb 在 workspace 依赖中禁用 wayland 后端、仅启用 x11，
+    // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因
+    // xdg-decoration 协议缺失会导致无边框窗口无法移动。
     let window = if !args.no_fb {
         match Window::new(640, 480, "rremu framebuffer") {
             Ok(w) => Some(w),
