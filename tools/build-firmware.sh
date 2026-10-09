@@ -22,3 +22,4 @@ build() {
 
 build hello
 build timer
+build fb
