@@ -101,7 +101,8 @@ impl TuiApp {
             RunResult::Exited { code } => {
                 self.running = false;
                 self.exit_code = code;
-                self.should_quit = true;
+                // 不设 should_quit：程序结束后 TUI 保持打开，让用户查看
+                // 最终寄存器/内存状态，按 q 退出。
             }
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {
                 self.running = false;
@@ -174,7 +175,7 @@ impl TuiApp {
         match rr {
             RunResult::Exited { code } => {
                 self.exit_code = code;
-                self.should_quit = true;
+                // 同 tick_machine：保持 TUI 打开，用户按 q 退出
             }
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {}
             RunResult::Paused | RunResult::Trapped { .. } => {}
