@@ -56,9 +56,6 @@ fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedT
             RunState::Exited(c) => return draw_bar(f, area, vec![
                 span(format!(" rremu │ cycle={} │ speed={} │ EXITED({})", snap.cycle, speed.label(), c), Color::Yellow),
             ]),
-            RunState::Trapped(c) => return draw_bar(f, area, vec![
-                span(format!(" rremu │ cycle={} │ speed={} │ TRAPPED(cause={})", snap.cycle, speed.label(), c), Color::Red),
-            ]),
         }
     };
     draw_bar(f, area, vec![

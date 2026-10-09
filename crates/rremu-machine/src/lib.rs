@@ -24,14 +24,12 @@ pub enum RunState {
     Running,
     Paused,
     Exited(i32),
-    Trapped(u32),
 }
 
 /// 运行控制结果（含断点/监视点命中）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunResult {
     Exited { code: i32 },
-    Trapped { cause: u32 },
     Paused,
     HitBreakpoint { addr: u32 },
     HitWatchpoint { id: usize, pc: u32, old: u32, new: u32 },
@@ -147,7 +145,8 @@ impl Default for RingCollector {
 impl EventSink for RingCollector {
     fn emit(&mut self, ev: EmuEvent) {
         match ev {
-            EmuEvent::MemAccess { .. } => {
+            EmuEvent::MemAccess { .. } | EmuEvent::Trap { .. } => {
+                // Trap 与存储访问同在 mem 环展示（受同一容量约束）
                 if self.mem.len() == self.mem_cap {
                     self.mem.pop_front();
                 }
@@ -160,7 +159,6 @@ impl EventSink for RingCollector {
                 self.uart.push_back(ev);
             }
             EmuEvent::Halt { code } => self.halt = Some(code),
-            EmuEvent::Trap { .. } => {}
         }
     }
 }
@@ -189,8 +187,6 @@ pub struct MachineSnapshot {
     pub state: RunState,
     pub mem_ring: VecDeque<EmuEvent>,
     pub uart_out: Vec<u8>,
-    pub uart_in_len: usize,
-    pub watchpoints: Vec<Watchpoint>,
 }
 
 #[derive(Debug, Default)]
@@ -319,7 +315,6 @@ impl MachineBuilder {
             entry,
             state: RunState::Idle,
             last_instr: None,
-            uart_in_len: 0,
             breakpoints: BTreeSet::new(),
             watchpoints: Vec::new(),
             next_wp_id: 1,
@@ -341,8 +336,6 @@ pub struct Machine {
     entry: u32,
     state: RunState,
     last_instr: Option<(u32, Instruction)>,
-    /// UART 输入 FIFO 待读字节数（push 时 +1；每步后经 LSR peek 校正）
-    uart_in_len: usize,
     breakpoints: BTreeSet<u32>,
     watchpoints: Vec<Watchpoint>,
     next_wp_id: usize,
@@ -383,16 +376,16 @@ impl Machine {
                     self.state = RunState::Paused;
                     return rr;
                 }
-                Some(RunResult::Trapped { .. }) | Some(RunResult::Paused) | None => {}
+                Some(RunResult::Paused) | None => {}
             }
         }
     }
 
     /// 执行一条指令；需要停止时返回 Some(RunResult)。
     /// 断点在取指前检查（命中则不执行该指令）；监视点在执行后检查。
-    /// 注意：陷入（ecall/ebreak/misaligned）是非致命的 —— CPU 已将 pc 重定向
-    /// 至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持 Running，
-    /// 以便前端可继续 c/si；RunResult::Trapped 仅供 si 单步时报告。
+    /// 注意：陷入（ecall/ebreak/misaligned/中断）是非致命的 —— CPU 已将 pc
+    /// 重定向至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持
+    /// Running，以便前端可继续 c/si；陷入信息经 EmuEvent::Trap 进入 mem 环。
     fn step_once(&mut self) -> Option<RunResult> {
         self.bus.set_cycle(self.cpu.cycle());
         let pc_before = self.cpu.pc();
@@ -407,7 +400,6 @@ impl Machine {
         match self.cpu.step(&mut self.bus, &mut self.collector) {
             Ok(StepOutcome::Executed { instr, .. }) => {
                 self.last_instr = Some((pc_before, instr));
-                self.sync_uart_in_len();
                 if let Some(code) = self.collector.take_halt() {
                     self.state = RunState::Exited(code);
                     return Some(RunResult::Exited { code });
@@ -415,12 +407,12 @@ impl Machine {
                 // 监视点：检查每个被跟踪表达式的值是否变化
                 self.check_watchpoints(pc_before)
             }
-            Ok(StepOutcome::Trapped { cause }) => Some(RunResult::Trapped { cause }),
+            // 非致命陷入：CPU 已重定向 pc 至 mtvec，本步无停止结果
+            Ok(StepOutcome::Trapped { .. }) => None,
             Err(e) => {
-                // 唯一错误路径：vectored mtvec 未实现；按陷入处理
-                let cause = self.cpu.csr_state().mcause;
+                // 唯一错误路径：vectored mtvec 未实现；记录后按继续处理
                 tracing::error!("cpu error: {e}");
-                Some(RunResult::Trapped { cause })
+                None
             }
         }
     }
@@ -481,15 +473,6 @@ impl Machine {
     }
 
 
-    /// 经无副作用 LSR 读校正输入 FIFO 计数（0 或 1）。
-    fn sync_uart_in_len(&mut self) {
-        if let Some(ub) = self.uart_base
-            && let Ok(lsr) = self.bus.peek(ub + 5, AccessSize::Byte)
-        {
-            self.uart_in_len = usize::from(lsr & 0x01 != 0);
-        }
-    }
-
     /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
     pub fn reset(&mut self) -> Result<(), MachineError> {
         self.cpu.reset(self.entry);
@@ -506,7 +489,6 @@ impl Machine {
         self.collector.clear();
         self.state = RunState::Idle;
         self.last_instr = None;
-        self.uart_in_len = 0;
         self.bp_suppress = None;
         Ok(())
     }
@@ -539,8 +521,6 @@ impl Machine {
                     _ => None,
                 })
                 .collect(),
-            uart_in_len: self.uart_in_len,
-            watchpoints: self.watchpoints.clone(),
         }
     }
 
@@ -673,7 +653,6 @@ impl Machine {
             && let Some(uart) = dev.as_any_mut().downcast_mut::<Uart>()
         {
             uart.push_input(byte);
-            self.uart_in_len += 1;
             self.collector.emit(EmuEvent::UartInput { byte });
         }
     }
@@ -691,6 +670,11 @@ impl Machine {
     /// 最近一条已执行指令（si 回显用）：pc 与指令。
     pub fn last_instruction(&self) -> Option<(u32, Instruction)> {
         self.last_instr
+    }
+
+    /// 当前运行状态（轻量查询，避免为读状态做整快照）。
+    pub fn state(&self) -> RunState {
+        self.state
     }
 
     pub fn tohost_addr(&self) -> Option<u32> {
@@ -903,11 +887,16 @@ mod tests {
     fn uart_input_reaches_fifo() {
         let mut m = hello_machine();
         m.uart_push_input(b'Z');
-        assert_eq!(m.snapshot().uart_in_len, 1);
+        // 输入经 UartInput 事件进入 uart 环
+        assert!(m
+            .collector
+            .uart_ring()
+            .iter()
+            .any(|ev| matches!(ev, EmuEvent::UartInput { byte: b'Z' })));
         // peek RDR 不消耗（D12 一致性）
         let rdr = 0x1000_0000;
         assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
-        assert_eq!(m.snapshot().uart_in_len, 1);
+        assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
     }
 
     #[test]

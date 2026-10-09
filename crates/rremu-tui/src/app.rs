@@ -110,7 +110,7 @@ impl TuiApp {
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {
                 self.running = false;
             }
-            RunResult::Paused | RunResult::Trapped { .. } => {}
+            RunResult::Paused => {}
         }
     }
 
@@ -184,7 +184,7 @@ impl TuiApp {
                 // 同 tick_machine：保持 TUI 打开，用户按 q 退出
             }
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {}
-            RunResult::Paused | RunResult::Trapped { .. } => {}
+            RunResult::Paused => {}
         }
     }
 

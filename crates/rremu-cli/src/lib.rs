@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use rremu_expr::{parse as parse_expr, Expr};
-use rremu_machine::{reg_name, Machine, RunResult, RunState};
+use rremu_machine::{reg_name, EmuEvent, Machine, RunResult, RunState};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -175,7 +175,7 @@ impl Repl {
                         RunResult::HitWatchpoint { id, pc, old, new } => {
                             break RunResult::HitWatchpoint { id, pc, old, new };
                         }
-                        RunResult::Paused | RunResult::Trapped { .. } => {}
+                        RunResult::Paused => {}
                     }
                 }
             }
@@ -205,6 +205,12 @@ impl Repl {
             // 有显示后端时单步也泵：让用户能逐指令看 fb 变化
             if self.display.is_some() && !self.pump_display() {
                 println!("Framebuffer window closed.");
+            }
+            // 陷入非致命：CPU 已跳转 mtvec，Trap 是本步最后一个事件；
+            // si 在陷入处停止并报告
+            if let Some(EmuEvent::Trap { cause, pc }) = self.machine.mem_ring().back() {
+                println!("Trap: cause=0x{cause:08x} at 0x{pc:08x}");
+                return Outcome::Continue;
             }
             // Paused（Ctrl+C）：保持原行为，静默继续剩余步数；
             // 其余结果统一报告并结束本批。
@@ -365,10 +371,6 @@ impl Repl {
                 println!("Program exited with code {code}.");
                 Outcome::ProgramExited(code)
             }
-            RunResult::Trapped { cause } => {
-                println!("Trap: cause=0x{cause:08x}");
-                Outcome::Continue
-            }
             RunResult::HitBreakpoint { addr } => {
                 println!("Breakpoint hit at 0x{addr:08x}.");
                 Outcome::Continue
@@ -385,7 +387,7 @@ impl Repl {
     }
 
     fn is_dead(&self) -> bool {
-        matches!(self.machine.snapshot().state, RunState::Exited(_) | RunState::Trapped(_))
+        matches!(self.machine.state(), RunState::Exited(_))
     }
 }
 
