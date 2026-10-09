@@ -411,4 +411,21 @@ mod tests {
         assert_eq!(reg_name(10), "a0");
         assert_eq!(reg_name(31), "t6");
     }
+
+    #[test]
+    fn display_m_c_zicsr_instructions() {
+        // M 扩展（代表性变体：mul / div / remu）
+        assert_eq!(Instruction::Mul { rd: 10, rs1: 11, rs2: 12 }.to_string(), "mul a0, a1, a2");
+        assert_eq!(Instruction::Div { rd: 10, rs1: 11, rs2: 12 }.to_string(), "div a0, a1, a2");
+        assert_eq!(Instruction::Remu { rd: 10, rs1: 11, rs2: 12 }.to_string(), "remu a0, a1, a2");
+        // C 扩展
+        assert_eq!(Instruction::CLw { rd: 10, rs1: 11, imm: 4 }.to_string(), "c.lw a0, 4(a1)");
+        assert_eq!(Instruction::CJ { imm: 100 }.to_string(), "c.j 100");
+        assert_eq!(Instruction::CAddi { rd: 2, imm: 16 }.to_string(), "c.addi sp, 16");
+        assert_eq!(Instruction::CBeqz { rs1: 10, imm: 8 }.to_string(), "c.beqz a0, 8");
+        assert_eq!(Instruction::CSwsp { rs2: 1, imm: 4 }.to_string(), "c.swsp ra, 4(sp)");
+        // Zicsr（csrrw 用寄存器源；csrrsi 用 zimm）
+        assert_eq!(Instruction::Csrrw { rd: 10, csr: 0x300, rs1: 11 }.to_string(), "csrrw a0, 0x300, a1");
+        assert_eq!(Instruction::Csrrsi { rd: 10, csr: 0x340, zimm: 5 }.to_string(), "csrrsi a0, 0x340, 5");
+    }
 }

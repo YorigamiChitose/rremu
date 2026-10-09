@@ -948,6 +948,110 @@ mod tests {
         assert_eq!(h.cpu.reg(4), 42);
     }
 
+    #[test]
+    fn exec_csrrs_readonly_and_set() {
+        // csrrs with rs1=x0 (read-only, no write) and csrrs with non-zero mask
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, 0xAB),                          // li x5, 0xAB
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSCRATCH as i32),       // csrrw x0, mscratch, x5 → mscratch=0xAB
+            i_enc(0b1110011, 1, 0b010, 0, csr::MSCRATCH as i32),       // csrrs x1, mscratch, x0 → x1=0xAB, mscratch unchanged
+            i_enc(OP_IMM, 3, 0b000, 0, 0x100),                        // li x3, 0x100
+            i_enc(0b1110011, 2, 0b010, 3, csr::MSCRATCH as i32),       // csrrs x2, mscratch, x3 → mscratch=0x1AB, x2=0xAB
+        ]);
+        h.run(5);
+        assert_eq!(h.cpu.reg(1), 0xAB);
+        assert_eq!(h.cpu.reg(2), 0xAB);
+        assert_eq!(h.cpu.csr_state().mscratch, 0x1AB);
+    }
+
+    #[test]
+    fn exec_csrrc_clears_bits() {
+        // csrrc clears bits: mscratch=0xFF, mask=0x0F → mscratch=0xF0
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, 0xFF),                          // li x5, 0xFF
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSCRATCH as i32),       // csrrw x0, mscratch, x5 → mscratch=0xFF
+            i_enc(OP_IMM, 2, 0b000, 0, 0x0F),                         // li x2, 0x0F
+            i_enc(0b1110011, 1, 0b011, 2, csr::MSCRATCH as i32),       // csrrc x1, mscratch, x2 → x1=0xFF, mscratch=0xF0
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(1), 0xFF);
+        assert_eq!(h.cpu.csr_state().mscratch, 0xF0);
+    }
+
+    #[test]
+    fn exec_csrrwi_csrrsi_csrrci() {
+        // Immediate variants of CSR instructions
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            // csrrwi x1, mscratch, 5 → mscratch=5, x1=old(0)
+            i_enc(0b1110011, 1, 0b101, 5, csr::MSCRATCH as i32),
+            // set mscratch=0xF0 via csrrw (zimm only 5 bits, so use register)
+            i_enc(OP_IMM, 5, 0b000, 0, 0xF0),                          // li x5, 0xF0
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSCRATCH as i32),       // csrrw x0, mscratch, x5 → mscratch=0xF0
+            // csrrsi x2, mscratch, 0x0F → mscratch=0xF0|0x0F=0xFF, x2=0xF0
+            i_enc(0b1110011, 2, 0b110, 0x0F, csr::MSCRATCH as i32),
+            // csrrci x3, mscratch, 0x0F → mscratch=0xFF & !0x0F=0xF0, x3=0xFF
+            i_enc(0b1110011, 3, 0b111, 0x0F, csr::MSCRATCH as i32),
+        ]);
+        h.run(5);
+        assert_eq!(h.cpu.reg(1), 0);    // old mscratch was 0
+        assert_eq!(h.cpu.reg(2), 0xF0); // mscratch was 0xF0 before csrrsi
+        assert_eq!(h.cpu.reg(3), 0xFF); // mscratch was 0xFF before csrrci
+        assert_eq!(h.cpu.csr_state().mscratch, 0xF0); // after csrrci
+    }
+
+    #[test]
+    fn exec_signed_div_by_zero() {
+        // Signed division by zero: div returns -1, rem returns dividend
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 1, 0b000, 0, 7),                          // li x1, 7
+            i_enc(OP_IMM, 2, 0b000, 0, 0),                          // li x2, 0
+            r_enc(3, 0b100, 1, 2, 0b0000001), // div x3, x1, x2 → 0xFFFFFFFF (-1)
+            r_enc(4, 0b110, 1, 2, 0b0000001), // rem x4, x1, x2 → 7
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.reg(3), 0xFFFF_FFFF);
+        assert_eq!(h.cpu.reg(4), 7);
+    }
+
+    #[test]
+    fn exec_c_lui() {
+        // c.lui: NZimm is 6-bit sign-extended, imm = NZimm << 12
+        let mut h = Harness::new();
+        c_load(&mut h, BASE, &[
+            Instruction::CLui { rd: 8, imm: 0x10000 },      // NZimm=0x10, x8=0x10000
+            Instruction::CLui { rd: 9, imm: 0xFFFF_F000 },   // NZimm=-1, x9=0xFFFFF000
+        ]);
+        h.run(2);
+        assert_eq!(h.cpu.reg(8), 0x10000);
+        assert_eq!(h.cpu.reg(9), 0xFFFF_F000);
+    }
+
+    #[test]
+    fn exec_c_jalr() {
+        // c.jalr x8 → ra = pc+2, pc = x8 (clear bit0)
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            u_enc(OP_LUI, 8, 0x80000),               // lui x8, 0x80000 → x8 = BASE
+            i_enc(OP_IMM, 8, 0b000, 8, 0x100),       // addi x8, x8, 0x100 → x8 = BASE+0x100
+        ]);
+        h.run(2);
+        c_load(&mut h, BASE + 8, &[
+            Instruction::CJalr { rs1: 8 },
+        ]);
+        c_load(&mut h, BASE + 0x100, &[
+            Instruction::CAddi { rd: 7, imm: 1 },
+        ]);
+        h.step(); // c.jalr x8 → ra = BASE+0xA, pc = BASE+0x100
+        assert_eq!(h.cpu.reg(1), BASE + 0xA); // ra = pc of c.jalr + 2
+        assert_eq!(h.cpu.pc(), BASE + 0x100);
+        h.step(); // c.addi x7, 1
+        assert_eq!(h.cpu.reg(7), 1);
+    }
+
     // ---- C extension tests ----
 
     fn c_load(h: &mut Harness, addr: u32, instrs: &[Instruction]) {

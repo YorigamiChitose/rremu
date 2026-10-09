@@ -728,4 +728,65 @@ mod tests {
         assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
         assert_eq!(m.eval(&expr).unwrap(), 1);
     }
+
+    #[test]
+    fn exit_code_nonzero_via_tohost() {
+        // riscv-tests htif 约定：tohost 写值 bit0==1 表示退出，
+        // exit code = (value >> 1)。hello.elf 写 1 → exit 0；
+        // 这里手动经总线写 (42 << 1) | 1 = 85，期望 exit code 42。
+        let mut m = hello_machine();
+        let tohost = m.tohost_addr().expect("hello.elf has tohost");
+        let value: u32 = (42 << 1) | 1;
+        // 直接经 Bus::write 写 tohost：私有字段本模块内可访问；
+        // bus 与 collector 分离借用，避免对 self 整体借用。
+        {
+            let bus = &mut m.bus;
+            let collector = &mut m.collector;
+            bus.write(tohost, AccessSize::Word, value, collector).unwrap();
+        }
+        let pause = AtomicBool::new(false);
+        let rr = m.run(&pause);
+        assert_eq!(rr, RunResult::Exited { code: 42 });
+        assert_eq!(m.snapshot().state, RunState::Exited(42));
+        // tohost 内存值已更新为 85
+        assert_eq!(m.peek(tohost).unwrap(), value);
+    }
+
+    #[test]
+    fn multiple_breakpoints_hit_in_order() {
+        // hello.S：0x80000000 第一条指令；0x80000008 第三条指令（auipc）。
+        // 两个断点应按地址顺序依次命中：第一次停在 0x80000000；
+        // 继续放行后越过 0x80000000、执行若干指令，停在 0x80000008。
+        let mut m = hello_machine();
+        m.add_breakpoint(0x8000_0000);
+        m.add_breakpoint(0x8000_0008);
+        let pause = AtomicBool::new(false);
+        let rr1 = m.run(&pause);
+        assert_eq!(rr1, RunResult::HitBreakpoint { addr: 0x8000_0000 });
+        assert_eq!(m.snapshot().pc, 0x8000_0000);
+        let rr2 = m.run(&pause);
+        assert_eq!(rr2, RunResult::HitBreakpoint { addr: 0x8000_0008 });
+        assert_eq!(m.snapshot().pc, 0x8000_0008);
+    }
+
+    #[test]
+    fn snapshot_contains_all_fields() {
+        // 跑到退出后校验快照所有字段：cycle/pc 推进、状态为 Exited、
+        // gprs 为 [u32;32]、uart_out 含 "hello"。
+        const BASE: u32 = 0x8000_0000;
+        let mut m = hello_machine();
+        let pause = AtomicBool::new(false);
+        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
+        let snap = m.snapshot();
+        assert!(snap.cycle > 0, "cycle should advance: {}", snap.cycle);
+        assert!(snap.pc > BASE, "pc should advance past BASE: {:#x}", snap.pc);
+        assert!(
+            matches!(snap.state, RunState::Exited(_) | RunState::Running),
+            "state should be Exited or Running: {:?}",
+            snap.state,
+        );
+        assert_eq!(snap.gprs.len(), 32);
+        let out = String::from_utf8_lossy(&snap.uart_out);
+        assert!(out.contains("hello"), "uart_out should contain 'hello': {out}");
+    }
 }
