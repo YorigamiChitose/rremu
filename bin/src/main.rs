@@ -19,7 +19,7 @@ struct Args {
     /// ELF 文件路径
     elf: String,
 
-    /// 启动 TUI 界面（M4，当前未实现）
+    /// 启动 TUI 界面
     #[arg(short, long)]
     tui: bool,
 
@@ -63,9 +63,6 @@ fn try_main() -> anyhow::Result<i32> {
     if args.tui && !args.cmds.is_empty() {
         anyhow::bail!("--tui and --cmd are mutually exclusive");
     }
-    if args.tui {
-        anyhow::bail!("TUI not yet implemented (planned for M4)");
-    }
 
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
@@ -83,6 +80,11 @@ fn try_main() -> anyhow::Result<i32> {
         builder = builder.entry(entry);
     }
     let machine = builder.build().context("failed to build machine")?;
+
+    if args.tui {
+        // TUI 使用 crossterm raw 模式，Ctrl+C 作为 KeyEvent 处理，不走 ctrlc crate
+        return Ok(rremu_tui::run(machine));
+    }
 
     let pause_flag = Arc::new(AtomicBool::new(false));
     let pf = pause_flag.clone();
