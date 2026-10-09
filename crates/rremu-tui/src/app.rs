@@ -3,7 +3,7 @@
 use std::io::{self, stdout, Stdout};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -110,14 +110,65 @@ impl TuiApp {
             self.handle_input_mode_key(key);
             return;
         }
-        if let KeyCode::Char('q') = key.code {
+        // Ctrl+C always quits (safety valve in raw mode)
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char(' ') => {
+                // Space: toggle run/pause
+                self.running = !self.running;
+            }
+            KeyCode::Char('s') => {
+                // Single step: pause + one instruction
+                self.running = false;
+                self.single_step();
+            }
+            KeyCode::Char('f') => {
+                // Direct to full speed
+                self.speed = SpeedTier::Full;
+                self.running = true;
+            }
+            KeyCode::Char('i') => {
+                // Enter UART input mode
+                self.input_mode = true;
+            }
+            KeyCode::Char('r') => {
+                // Reset machine
+                let _ = self.machine.reset();
+                self.running = false;
+            }
+            KeyCode::Left => {
+                // Speed down
+                self.speed = self.speed.prev();
+            }
+            KeyCode::Right => {
+                // Speed up
+                self.speed = self.speed.next();
+            }
+            _ => {}
+        }
+    }
+
+    /// Execute a single instruction (for `s` key).
+    fn single_step(&mut self) {
+        let rr = self.machine.step_n(1);
+        match rr {
+            RunResult::Exited { code } => {
+                self.exit_code = code;
+                self.should_quit = true;
+            }
+            RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {}
+            RunResult::Paused | RunResult::Trapped { .. } => {}
         }
     }
 
     fn handle_input_mode_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.input_mode = false,
+            KeyCode::Enter => self.machine.uart_push_input(b'\n'),
             KeyCode::Char(c) => self.machine.uart_push_input(c as u8),
             _ => {}
         }
