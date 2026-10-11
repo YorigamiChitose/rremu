@@ -6,6 +6,7 @@
 > v1 规划文档已整体作废删除，其中被证伪的设计结论收录在 §2，防止后续开发沿用错误假设。
 > 修订（v2.1，人工审核）：tests/data 已删除，golden 基线导出任务作废；否决 in-crate 内联硬编码测试方案，耦合测试直接删除、职责移交新测试项目。
 > 修订（v2.2，新任务）：学习 NEMU（~/ysyx-workbench/nemu）的 ebreak 利用办法，新增 C5 ebreak-as-host-trap 测试退出通道。
+> 修订（v2.2 终审，逐项核对代码后更正）：更正 C4 描述（trap 已实现 MPP ← 陷前 priv，非"巧合"）；补记 bin/tests 两处耦合与根 tests/ 残留；澄清 §2.2-1 否决边界；修正 A3/R2 行号。
 
 ---
 
@@ -45,7 +46,7 @@ isa · decode · expr（三叶 crate）
    **新结论：优先级裁剪不得发生在设备侧；CPU 拿到全部 pending cause 后按 spec 序遍历、跳过未使能者。**
 2. **退出约定**：v1 声称 "tohost + ecall"。实际仅 tohost 有实现（machine 仅响应 Halt 事件）；ecall 非致命陷入后继续执行。无 tohost 且依赖 ecall 退出的固件会永久运行。**新结论：退出条件 = tohost 写入，或（v2.2 起可选）ebreak-as-host-trap（§3.1-C5）；ecall 仅在固件 handler 内写 tohost 间接退出。**
 3. **执行模型**：v1 §11 写"machine 独立线程"，§5.10 写"单线程协作式"，自相矛盾。**实际采用单线程协作式（TUI 事件轮询 + 档位批量 tick + 30fps 帧限），本阶段维持不变。**
-4. **U→M 陷阱的 mstatus.MPP 写入规则**：v1 未定义，实现"一律 priv ← Machine"对 U-mode ecall 恰好正确属巧合。**新结论：MPP 写入规则须显式写入本文档 §3（trap 时 MPP ← 陷前 priv）。**
+4. **U→M 陷阱的 mstatus.MPP 写入规则**：v1 未定义该规则。**新结论（v2.2 终审更正）：实现已按 spec 处理——cpu `trap()` 中 MPP ← 陷前 priv（`update_mstatus(mpp, 0, old_mie)`，cpu 557-575）；v2.0 审计时"一律 Machine、属巧合"的判断有误。剩余缺口仅为规则未成文、无 U-mode 单测锁定（§3.1-C4）。**
 
 ---
 
@@ -57,24 +58,29 @@ isa · decode · expr（三叶 crate）
 
 ### 2.1 隐藏耦合（已触发：tests/data 已删除，下列测试当前红）
 
-`tests/data/*.elf` 被 gitignore、由 tools 脚本生成，但被库 crate 的 **in-crate 单测**引用，且无跳过机制：
+`tests/data/*.elf` 被 gitignore、由 tools 脚本生成，但被库 crate 的 **in-crate 单测**与 bin 的**集成测试**引用，且无跳过机制：
 
 | 位置 | 引用 | 影响测试数 |
 |---|---|---|
 | machine/src/lib.rs:739 `HELLO_ELF`（panic 提示"先运行 tools/build-firmware.sh"） | ../../tests/data/hello.elf | ~12 个（tohost 退出/断点/监视点/快照/reset/CLINT timer） |
 | machine/src/lib.rs:1076 `TIMER_ELF` | ../../tests/data/timer.elf | timer 中断链路 |
 | loader/src/lib.rs:136 | ../../tests/data/hello.elf | 真实 ELF 解析 |
+| bin/tests/hello_e2e.rs:10 | ../tests/data/hello.elf | bin 集成测试（e2e，当前红） |
+| bin/tests/rv32ui_p_add.rs:12 | ../tests/data/rv32ui-p-add.elf | bin 集成测试（riscv-tests，当前红） |
+
+另：根 `tests/` 仍残留 `tests/firmware/`（hello.S/timer.S/fb.S/hello.ld 汇编源与链接脚本），构建产物目录 tests/data 已删；残留源随 M2 一并移除。
 
 ### 2.2 执行顺序（严格按序，禁止跳步）
 
-1. **P0 · 删除依赖 tests/data 的 in-crate 测试（不修复、不重写）**：machine 的 HELLO_ELF/TIMER_ELF 固件测试族与 loader 的 hello ELF 测试直接删除，in-crate 测试恢复全绿。
+1. **P0 · 删除依赖 tests/data 的测试（不修复、不重写）**：machine 的 HELLO_ELF/TIMER_ELF 固件测试族、loader 的 hello ELF 测试、bin/tests 的两个集成测试直接删除，全仓库测试恢复全绿。
    > 决策记录：曾提出的"in-crate 内联硬编码最小固件"方案经评审否决——与被测生产代码同仓库同源，无法提供独立校验视角，且手写指令字节维护成本高、表达力差；固件级验证职责整体移交新测试项目（§2.3）。
+   > 边界澄清（v2.2 终审）：本条否决的是**固件级验证职责内移**；指令级机制单测不受此限——为锁定单条指令语义（如 C5 的 `mv a0, 0; ebreak` 两条指令序列）允许极小内联序列，但不承担固件级验证职责。
 2. **P0 · 保活三个纯内存单测**（与新测试项目互补、零依赖）：
    - machine/src/lib.rs:913 `expr_alias_table_matches_isa`（ABI 别名双表漂移的唯一防线）；
    - UART RDR 读副作用 / peek 无副作用对比；
    - peek_read 各设备覆盖。
 3. **P1 · 修订本文档**（后续变更继续走此流程）。
-4. **P1 · 删除 `bin/tests/` 与 `tools/`**；同步删除 workspace 中仅服务测试的引用。
+4. **P1 · 删除根 `tests/`（含残留 tests/firmware 汇编源）、`bin/tests/`（M1 删空后收尾）与 `tools/`**；同步删除 workspace 中仅服务测试的引用。
 
 ### 2.3 移除后新增义务
 
@@ -96,7 +102,7 @@ isa · decode · expr（三叶 crate）
 | C1 | P0 | 中断优先级聚合在设备侧（max-cause）先裁剪、后查 mie，高优先级未使能时饿死已使能低优先级（如 MTI 未使能而 MSI 使能 → MSI 永不服务） | bus `pending_interrupt()` 323-328；cpu 173-180 | `check_interrupt()` 返回全部 pending cause（`Vec<u32>` 或迭代器）；CPU 按 spec 序 MEI>MSI>MTI 遍历、跳过未使能者。旧 timer 固件单测只开 MTIE，从未暴露；新测试项目须补"MSI+MTI 并存 + 差异使能"用例 |
 | C2 | P1 | vectored mtvec 未实现 → `trap()` 返回 Unimplemented，machine 仅 log 后继续；mepc/mcause 已写而 pc 未动，下一轮重陷同一指令，静默死循环 | cpu 572-574；machine 415-419 | machine 收到 Unimplemented 进入 `RunState::Faulted(String)`（新增终态），run/step_n 立即返回，禁止静默 spin |
 | C3 | P1 | ecall 无退出路径：无 tohost 固件永久运行 | machine run/step_n | 本阶段不做 ecall 退出（见 §1.3-2）；在 CLI/tui 文档与 help 中明示"退出依赖 tohost" |
-| C4 | P2 | mstatus.MPP 写入规则未成文，现实现依赖巧合 | cpu trap | 显式实现：trap 时 MPP ← 陷前 priv；补 U-mode ecall 单测锁定 |
+| C4 | P2 | mstatus.MPP 写入规则未成文、无单测锁定（v2.2 终审更正：行为已正确实现，非"依赖巧合"） | cpu trap 557-575 | 行为已实现（trap 时 MPP ← 陷前 priv，`update_mstatus(mpp, 0, old_mie)`）；剩余：本文档成文该规则 + 补 U-mode ecall 单测锁定 |
 | C5 | P1 | ebreak 退出通道缺失：tohost 依赖 ELF 符号与内存布局约定，无该布局的固件无法优雅退出（C3 的结构性缓解） | cpu `Instruction::Ebreak` 分支；machine run/step_n | 仿 NEMU nemu_trap 协议：`MachineBuilder` 新增 `ebreak_as_host_trap(bool)`（默认 false，保持 spec 的 Breakpoint 陷阱语义，不破坏现有行为与调试器断点模型）。开启时 ebreak 不进入陷阱流程，立即 `Exited { code: a0 }` 终止并发出 Halt 事件，与 tohost 通道互不干扰。NEMU 参考（~/ysyx-workbench/nemu）：`src/isa/riscv32/inst.c` 中 `INSTPAT(..., ebreak, N, NEMUTRAP(s->pc, R(10)))`（退出码取 a0/x10）；`include/cpu/cpu.h` 的 `NEMUTRAP(pc, code) = set_nemu_state(NEMU_END, pc, code)`；`src/cpu/cpu-exec.c` 按 `halt_ret==0` 判定 GOOD/BAD TRAP；`src/isa/riscv32/init.c` 内置 4 指令自检镜像以 ebreak 收尾。固件侧约定 `halt(code)` ≡ `mv a0, code; ebreak` |
 
 ### 3.2 架构
@@ -105,7 +111,7 @@ isa · decode · expr（三叶 crate）
 |---|---|---|---|---|
 | A1 | P1 | `as_any_mut` + downcast 使 BusDevice 抽象失效；machine 耦合 Ram/Uart/Fb/Clint 四具体类型；reset downcast 失败静默跳过 RAM 清零 | bus 117；machine 4 处 downcast | 拆分类 trait：`Resetable`/`InputSink`/`FrameSource`，或 trait 提供 `as_ram_mut() -> Option<&mut Ram>` 等类型化下取；reset 失败必须报错 |
 | A2 | P1 | Machine 上帝对象（17 字段：调度/断点/监视点/快照/反汇编/注入/镜像），且自本阶段兼任测试契约 | machine 328-348 | 拆 `DebugController`/`Disassembler`/`FramebufferAccessor`；**对外契约方法签名保持稳定（§2.3）** |
-| A3 | P2 | ABI 别名表 expr:194 / isa:283 双份，靠 machine 测试锁定 | 两处 | 抽 zero-dep 常量 crate `rremu-abi`，双 crate 共享，删除一致性测试对漂移的依赖（测试仍保留） |
+| A3 | P2 | ABI 别名表 expr:195 / isa:284 双份，靠 machine 测试锁定 | 两处 | 抽 zero-dep 常量 crate `rremu-abi`，双 crate 共享，删除一致性测试对漂移的依赖（测试仍保留） |
 | A4 | P2 | Instruction 扁平枚举 80+ 变体，扩展 F/D/A 需四处同步改 | isa 29-123 | 本阶段不动；F/D/A 立项时再按扩展分组重构 |
 
 ### 3.3 性能
@@ -121,7 +127,7 @@ isa · decode · expr（三叶 crate）
 | # | 级 | 问题 | 位置 | 修法 |
 |---|---|---|---|---|
 | R1 | P2 | 设备 read/write/write_bytes 无内部边界检查，信任总线路由；三设备越界行为不一致（Device 错误 / panic / 部分检查） | ram 27-42、uart、clint、fb | 设备内部校验返回 `BusError`，统一语义 |
-| R2 | P2 | `Cpu::reg(i)` 无边界检查（u8 可达 255） | cpu 100-102 | `assert!(i < 32)` 或改 `debug_assert` + 文档标注不变量 |
+| R2 | P2 | `Cpu::reg(i)` 无边界检查（u8 可达 255） | cpu 97-102 | `assert!(i < 32)` 或改 `debug_assert` + 文档标注不变量 |
 | R3 | P2 | `usize as u32` 截断（builder 校验段地址） | machine 278 | `u32::try_from` |
 
 ### 3.5 工程基建
@@ -138,8 +144,8 @@ isa · decode · expr（三叶 crate）
 
 | 顺序 | 交付 | 含工作项 |
 |---|---|---|
-| M1 | 删除依赖 tests/data 的红测试（不重写）+ 保留单测点名保活，in-crate 全绿 | §2.2-1/2 |
-| M2 | 删除 bin/tests 与 tools；PLAN v2 生效 | §2.2-3/4、B1 |
+| M1 | 删除全部依赖 tests/data 的红测试（in-crate + bin 集成测试，不重写）+ 保留单测点名保活，全仓库测试恢复全绿 | §2.2-1/2 |
+| M2 | 删除根 tests/、bin/tests/ 与 tools/；PLAN v2 生效 | §2.2-3/4、B1 |
 | M3 | 中断重构（check_interrupt 多值返回 + CPU 侧 spec 序裁决） | C1 |
 | M4 | Faulted 终态 + MPP 规则成文 + ebreak-as-host-trap 退出通道 | C2、C4、C5 |
 | M5 | 抽象收敛（类 trait 拆分、Machine 拆分、契约章节维护） | A1、A2、§2.3 |
