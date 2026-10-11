@@ -1,9 +1,10 @@
 # rremu 第二阶段：问题修正与测试外置规划
 
-> 版本 v2.0 · 定稿日期 2026-10-11
+> 版本 v2.1 · 定稿日期 2026-10-11
 > 来源：对 v1 代码库的独立软件工程审计（未经 v1 PLAN 预设），并对照 v1 PLAN 逐项核对后定稿。
 > 性质：本文档是下一阶段优化修改的唯一依据；任何变更先改本文档再改代码（沿用 v1 治理规则）。
 > v1 规划文档已整体作废删除，其中被证伪的设计结论收录在 §2，防止后续开发沿用错误假设。
+> 修订（v2.1，人工审核）：tests/data 已删除，golden 基线导出任务作废；否决 in-crate 内联硬编码测试方案，耦合测试直接删除、职责移交新测试项目。
 
 ---
 
@@ -51,7 +52,9 @@ isa · decode · expr（三叶 crate）
 
 决策：本仓库移除 `bin/tests/` 与 `tools/`，rremu 的测试改由独立新项目承担。
 
-### 2.1 隐藏耦合（直接删除会红）
+状态（2026-10-11）：`tests/data/*.elf` 已人工删除，下方耦合测试当前为红，按 §2.2 处置。
+
+### 2.1 隐藏耦合（已触发：tests/data 已删除，下列测试当前红）
 
 `tests/data/*.elf` 被 gitignore、由 tools 脚本生成，但被库 crate 的 **in-crate 单测**引用，且无跳过机制：
 
@@ -63,19 +66,19 @@ isa · decode · expr（三叶 crate）
 
 ### 2.2 执行顺序（严格按序，禁止跳步）
 
-1. **P0 · 固化 golden 基线**：趁 rv32ui-p-add / rv32um-p-mul / rv32uc-p-rvc 三个集成测试仍可构建，导出各测试的指令 trace 摘要、最终 GPR/CSR 状态、UART 输出为 fixtures（JSON/文本），提交至新测试项目仓库。官方 riscv-tests 对照基准一旦删除，重建需整装工具链。
-2. **P0 · 解除 in-crate 测试对 tests/data 的耦合**：machine/loader 的固件依赖测试改用内联字节构造最小 ELF（loader 已有手写最小 ELF 单测可复用思路），或整体迁往新测试项目；不得留红。
-3. **P0 · 保活三个纯内存单测**（与新测试项目互补、零依赖）：
+1. **P0 · 删除依赖 tests/data 的 in-crate 测试（不修复、不重写）**：machine 的 HELLO_ELF/TIMER_ELF 固件测试族与 loader 的 hello ELF 测试直接删除，in-crate 测试恢复全绿。
+   > 决策记录：曾提出的"in-crate 内联硬编码最小固件"方案经评审否决——与被测生产代码同仓库同源，无法提供独立校验视角，且手写指令字节维护成本高、表达力差；固件级验证职责整体移交新测试项目（§2.3）。
+2. **P0 · 保活三个纯内存单测**（与新测试项目互补、零依赖）：
    - machine/src/lib.rs:913 `expr_alias_table_matches_isa`（ABI 别名双表漂移的唯一防线）；
    - UART RDR 读副作用 / peek 无副作用对比；
    - peek_read 各设备覆盖。
-4. **P1 · 修订本文档**（本节已随 v2.0 完成，后续变更继续走此流程）。
-5. **P1 · 删除 `bin/tests/` 与 `tools/`**；同步删除 workspace 中仅服务测试的引用。
+3. **P1 · 修订本文档**（后续变更继续走此流程）。
+4. **P1 · 删除 `bin/tests/` 与 `tools/`**；同步删除 workspace 中仅服务测试的引用。
 
 ### 2.3 移除后新增义务
 
 - **契约化**：machine 公开 API（`Machine`/`MachineSnapshot`/`RunResult`）+ `EmuEvent` 流 + loader 公共类型（`Image`/`LoaderError`）自本阶段起是新测试项目的跨仓库契约。对这些公共类型的破坏性变更视为接口变更，须先改本文档并知会测试项目。
-- **tohost 机制进入无验证状态**：loader 的符号提取、bus 的 watch、machine 的 Exited 编码（`(code<<1)|1`）在生产代码中保留，验证责任移交新测试项目（列为首批用例）。
+- **tohost 机制进入无验证状态**：loader 的符号提取、bus 的 watch、machine 的 Exited 编码（`(code<<1)|1`）在生产代码中保留，验证责任完全移交新测试项目（列为首批用例）；in-crate 不引入任何临时替代验证（含内联硬编码固件，见 §2.2-1 决策记录）。
 - `encode_c`（decode）被 decode/cpu 的 in-crate 测试使用，**保留**，加 `#[doc(hidden)]` 标注测试专用。
 
 ---
@@ -88,7 +91,7 @@ isa · decode · expr（三叶 crate）
 
 | # | 级 | 问题 | 位置 | 修法 |
 |---|---|---|---|---|
-| C1 | P0 | 中断优先级聚合在设备侧（max-cause）先裁剪、后查 mie，高优先级未使能时饿死已使能低优先级（如 MTI 未使能而 MSI 使能 → MSI 永不服务） | bus `pending_interrupt()` 323-328；cpu 173-180 | `check_interrupt()` 返回全部 pending cause（`Vec<u32>` 或迭代器）；CPU 按 spec 序 MEI>MSI>MTI 遍历、跳过未使能者。timer.elf 类单测只开 MTIE，从未暴露；新测试项目须补"MSI+MTI 并存 + 差异使能"用例 |
+| C1 | P0 | 中断优先级聚合在设备侧（max-cause）先裁剪、后查 mie，高优先级未使能时饿死已使能低优先级（如 MTI 未使能而 MSI 使能 → MSI 永不服务） | bus `pending_interrupt()` 323-328；cpu 173-180 | `check_interrupt()` 返回全部 pending cause（`Vec<u32>` 或迭代器）；CPU 按 spec 序 MEI>MSI>MTI 遍历、跳过未使能者。旧 timer 固件单测只开 MTIE，从未暴露；新测试项目须补"MSI+MTI 并存 + 差异使能"用例 |
 | C2 | P1 | vectored mtvec 未实现 → `trap()` 返回 Unimplemented，machine 仅 log 后继续；mepc/mcause 已写而 pc 未动，下一轮重陷同一指令，静默死循环 | cpu 572-574；machine 415-419 | machine 收到 Unimplemented 进入 `RunState::Faulted(String)`（新增终态），run/step_n 立即返回，禁止静默 spin |
 | C3 | P1 | ecall 无退出路径：无 tohost 固件永久运行 | machine run/step_n | 本阶段不做 ecall 退出（见 §1.3-2）；在 CLI/tui 文档与 help 中明示"退出依赖 tohost" |
 | C4 | P2 | mstatus.MPP 写入规则未成文，现实现依赖巧合 | cpu trap | 显式实现：trap 时 MPP ← 陷前 priv；补 U-mode ecall 单测锁定 |
@@ -132,13 +135,13 @@ isa · decode · expr（三叶 crate）
 
 | 顺序 | 交付 | 含工作项 |
 |---|---|---|
-| M1 | golden 基线导出 + in-crate 测试解耦 + 保留单测点名保活 | §2.2-1/2/3 |
-| M2 | 删除 bin/tests 与 tools；PLAN v2 生效 | §2.2-4/5、B1 |
+| M1 | 删除依赖 tests/data 的红测试（不重写）+ 保留单测点名保活，in-crate 全绿 | §2.2-1/2 |
+| M2 | 删除 bin/tests 与 tools；PLAN v2 生效 | §2.2-3/4、B1 |
 | M3 | 中断重构（check_interrupt 多值返回 + CPU 侧 spec 序裁决） | C1 |
 | M4 | Faulted 终态 + MPP 规则成文 | C2、C4 |
 | M5 | 抽象收敛（类 trait 拆分、Machine 拆分、契约章节维护） | A1、A2、§2.3 |
 | M6 | 性能与健壮性清理 | F1-F3、R1-R3 |
-| （外部） | 新测试项目：首批用例 = golden 重放、tohost 链路、MSI+MTI 差异使能、U-mode ecall | §2.2-1、C1、C3、C4 |
+| （外部） | 新测试项目：自建官方 riscv-tests 集成；首批用例 = tohost 链路、UART 输出、CLINT timer 链路、MSI+MTI 差异使能、U-mode ecall | C1、C3、C4、§2.3 |
 
 ## 5. 验收口径
 
