@@ -1,10 +1,11 @@
 # rremu 第二阶段：问题修正与测试外置规划
 
-> 版本 v2.1 · 定稿日期 2026-10-11
+> 版本 v2.2 · 定稿日期 2026-10-11
 > 来源：对 v1 代码库的独立软件工程审计（未经 v1 PLAN 预设），并对照 v1 PLAN 逐项核对后定稿。
 > 性质：本文档是下一阶段优化修改的唯一依据；任何变更先改本文档再改代码（沿用 v1 治理规则）。
 > v1 规划文档已整体作废删除，其中被证伪的设计结论收录在 §2，防止后续开发沿用错误假设。
 > 修订（v2.1，人工审核）：tests/data 已删除，golden 基线导出任务作废；否决 in-crate 内联硬编码测试方案，耦合测试直接删除、职责移交新测试项目。
+> 修订（v2.2，新任务）：学习 NEMU（~/ysyx-workbench/nemu）的 ebreak 利用办法，新增 C5 ebreak-as-host-trap 测试退出通道。
 
 ---
 
@@ -42,7 +43,7 @@ isa · decode · expr（三叶 crate）
    - v1 文字与自身"cause 降序"算法矛盾（MSI=1 < MEI=3 < MTI=7，排不出 MEI>MTI>MSI）；
    - 算法本身导致 §3.1 的使能位饿死 bug。
    **新结论：优先级裁剪不得发生在设备侧；CPU 拿到全部 pending cause 后按 spec 序遍历、跳过未使能者。**
-2. **退出约定**：v1 声称 "tohost + ecall"。实际仅 tohost 有实现（machine 仅响应 Halt 事件）；ecall 非致命陷入后继续执行。无 tohost 且依赖 ecall 退出的固件会永久运行。**新结论：退出条件 = tohost 写入，ecall 仅在固件 handler 内写 tohost 间接退出；文档按此表述。**
+2. **退出约定**：v1 声称 "tohost + ecall"。实际仅 tohost 有实现（machine 仅响应 Halt 事件）；ecall 非致命陷入后继续执行。无 tohost 且依赖 ecall 退出的固件会永久运行。**新结论：退出条件 = tohost 写入，或（v2.2 起可选）ebreak-as-host-trap（§3.1-C5）；ecall 仅在固件 handler 内写 tohost 间接退出。**
 3. **执行模型**：v1 §11 写"machine 独立线程"，§5.10 写"单线程协作式"，自相矛盾。**实际采用单线程协作式（TUI 事件轮询 + 档位批量 tick + 30fps 帧限），本阶段维持不变。**
 4. **U→M 陷阱的 mstatus.MPP 写入规则**：v1 未定义，实现"一律 priv ← Machine"对 U-mode ecall 恰好正确属巧合。**新结论：MPP 写入规则须显式写入本文档 §3（trap 时 MPP ← 陷前 priv）。**
 
@@ -79,6 +80,7 @@ isa · decode · expr（三叶 crate）
 
 - **契约化**：machine 公开 API（`Machine`/`MachineSnapshot`/`RunResult`）+ `EmuEvent` 流 + loader 公共类型（`Image`/`LoaderError`）自本阶段起是新测试项目的跨仓库契约。对这些公共类型的破坏性变更视为接口变更，须先改本文档并知会测试项目。
 - **tohost 机制进入无验证状态**：loader 的符号提取、bus 的 watch、machine 的 Exited 编码（`(code<<1)|1`）在生产代码中保留，验证责任完全移交新测试项目（列为首批用例）；in-crate 不引入任何临时替代验证（含内联硬编码固件，见 §2.2-1 决策记录）。
+- **契约扩展（C5）**：`MachineBuilder::ebreak_as_host_trap(bool)` 为对测试项目公开的新契约方法；新增而非修改既有签名，符合本节契约治理。
 - `encode_c`（decode）被 decode/cpu 的 in-crate 测试使用，**保留**，加 `#[doc(hidden)]` 标注测试专用。
 
 ---
@@ -95,6 +97,7 @@ isa · decode · expr（三叶 crate）
 | C2 | P1 | vectored mtvec 未实现 → `trap()` 返回 Unimplemented，machine 仅 log 后继续；mepc/mcause 已写而 pc 未动，下一轮重陷同一指令，静默死循环 | cpu 572-574；machine 415-419 | machine 收到 Unimplemented 进入 `RunState::Faulted(String)`（新增终态），run/step_n 立即返回，禁止静默 spin |
 | C3 | P1 | ecall 无退出路径：无 tohost 固件永久运行 | machine run/step_n | 本阶段不做 ecall 退出（见 §1.3-2）；在 CLI/tui 文档与 help 中明示"退出依赖 tohost" |
 | C4 | P2 | mstatus.MPP 写入规则未成文，现实现依赖巧合 | cpu trap | 显式实现：trap 时 MPP ← 陷前 priv；补 U-mode ecall 单测锁定 |
+| C5 | P1 | ebreak 退出通道缺失：tohost 依赖 ELF 符号与内存布局约定，无该布局的固件无法优雅退出（C3 的结构性缓解） | cpu `Instruction::Ebreak` 分支；machine run/step_n | 仿 NEMU nemu_trap 协议：`MachineBuilder` 新增 `ebreak_as_host_trap(bool)`（默认 false，保持 spec 的 Breakpoint 陷阱语义，不破坏现有行为与调试器断点模型）。开启时 ebreak 不进入陷阱流程，立即 `Exited { code: a0 }` 终止并发出 Halt 事件，与 tohost 通道互不干扰。NEMU 参考（~/ysyx-workbench/nemu）：`src/isa/riscv32/inst.c` 中 `INSTPAT(..., ebreak, N, NEMUTRAP(s->pc, R(10)))`（退出码取 a0/x10）；`include/cpu/cpu.h` 的 `NEMUTRAP(pc, code) = set_nemu_state(NEMU_END, pc, code)`；`src/cpu/cpu-exec.c` 按 `halt_ret==0` 判定 GOOD/BAD TRAP；`src/isa/riscv32/init.c` 内置 4 指令自检镜像以 ebreak 收尾。固件侧约定 `halt(code)` ≡ `mv a0, code; ebreak` |
 
 ### 3.2 架构
 
@@ -138,10 +141,10 @@ isa · decode · expr（三叶 crate）
 | M1 | 删除依赖 tests/data 的红测试（不重写）+ 保留单测点名保活，in-crate 全绿 | §2.2-1/2 |
 | M2 | 删除 bin/tests 与 tools；PLAN v2 生效 | §2.2-3/4、B1 |
 | M3 | 中断重构（check_interrupt 多值返回 + CPU 侧 spec 序裁决） | C1 |
-| M4 | Faulted 终态 + MPP 规则成文 | C2、C4 |
+| M4 | Faulted 终态 + MPP 规则成文 + ebreak-as-host-trap 退出通道 | C2、C4、C5 |
 | M5 | 抽象收敛（类 trait 拆分、Machine 拆分、契约章节维护） | A1、A2、§2.3 |
 | M6 | 性能与健壮性清理 | F1-F3、R1-R3 |
-| （外部） | 新测试项目：自建官方 riscv-tests 集成；首批用例 = tohost 链路、UART 输出、CLINT timer 链路、MSI+MTI 差异使能、U-mode ecall | C1、C3、C4、§2.3 |
+| （外部） | 新测试项目：自建官方 riscv-tests 集成；首批用例 = tohost 链路、ebreak 退出（无需 tohost 符号）、UART 输出、CLINT timer 链路、MSI+MTI 差异使能、U-mode ecall | C1、C3、C4、C5、§2.3 |
 
 ## 5. 验收口径
 
@@ -149,4 +152,5 @@ isa · decode · expr（三叶 crate）
 - `cargo clippy` 无 error（维持 unwrap_used=deny 基线）；
 - C1 修复后：MSI 使能 + MTI 未使能 + 两者同时 pending → 必须进入 MSI handler；
 - C2 修复后：vectored mtvec 场景 machine 进入 Faulted 终态，进程可感知退出；
+- C5 落地后：`ebreak_as_host_trap(true)` 时 `mv a0, 0; ebreak` 最小固件 → `Exited { code: 0 }`，a0 非 0 → 对应退出码并发出 Halt 事件；默认 false 时 ebreak 仍为 Breakpoint 陷阱（行为不回退）；
 - §1.2 红线项逐条复查不回退（依赖方向、0 unsafe、peek_read 无默认实现、单一事件流）。
