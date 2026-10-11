@@ -9,8 +9,7 @@
 //! | 5      | LSR         | 恒 `0x60`；输入 FIFO 非空置 bit0 |
 //! | 其余   | —           | 读 0，写忽略 |
 
-use core::any::Any;
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, EmuEvent};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, EmuEvent, InputSink};
 
 const REG_THR_RDR: u32 = 0;
 const REG_IER: u32 = 1;
@@ -90,8 +89,14 @@ impl BusDevice for Uart {
         "uart"
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    fn as_input_sink(&mut self) -> Option<&mut dyn InputSink> {
+        Some(self)
+    }
+}
+
+impl InputSink for Uart {
+    fn push_input(&mut self, byte: u8) {
+        Uart::push_input(self, byte);
     }
 }
 

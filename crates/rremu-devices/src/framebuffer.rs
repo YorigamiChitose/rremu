@@ -8,8 +8,7 @@
 //! `frame()` 返回 `&[u32]`，每个 u32 由 RGB565 扩展为 `0x00RRGGBB`。
 //! 任何写置 `dirty` 标志；`peek_read` 无副作用（不置 dirty）。
 
-use core::any::Any;
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, FrameSource};
 
 /// RGB565 → 0x00RRGGBB（R5→8位、G6→8位、B5→8位，高位填充低位副本）。
 fn rgb565_to_u32(rgb565: u16) -> u32 {
@@ -140,8 +139,26 @@ impl BusDevice for Framebuffer {
         "framebuffer"
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    fn as_frame_source(&mut self) -> Option<&mut dyn FrameSource> {
+        Some(self)
+    }
+}
+
+impl FrameSource for Framebuffer {
+    fn width(&self) -> u32 {
+        Framebuffer::width(self)
+    }
+    fn height(&self) -> u32 {
+        Framebuffer::height(self)
+    }
+    fn frame(&self) -> &[u32] {
+        Framebuffer::frame(self)
+    }
+    fn is_dirty(&self) -> bool {
+        Framebuffer::is_dirty(self)
+    }
+    fn clear_dirty(&mut self) {
+        Framebuffer::clear_dirty(self);
     }
 }
 

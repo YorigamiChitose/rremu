@@ -1,6 +1,5 @@
 //! rremu-bus：总线抽象 —— BusDevice/Bus trait、地址路由、模拟事件。
 
-use core::any::Any;
 use core::fmt;
 use core::ops::Range;
 use thiserror::Error;
@@ -98,6 +97,25 @@ impl EventSink for NullSink {
     fn emit(&mut self, _ev: EmuEvent) {}
 }
 
+/// 可复位设备：machine reset 时清零内部状态（如 RAM）。
+pub trait Resetable {
+    fn reset(&mut self);
+}
+
+/// 输入接收设备：注入外部输入字节（如 UART）。
+pub trait InputSink {
+    fn push_input(&mut self, byte: u8);
+}
+
+/// 帧源设备：提供只读帧缓冲访问与 dirty 管理（如 Framebuffer）。
+pub trait FrameSource {
+    fn width(&self) -> u32;
+    fn height(&self) -> u32;
+    fn frame(&self) -> &[u32];
+    fn is_dirty(&self) -> bool;
+    fn clear_dirty(&mut self);
+}
+
 /// 总线设备 trait。地址为**绝对地址**，设备内部自行换算偏移。
 pub trait BusDevice {
     /// 有副作用读（如弹 UART FIFO）。
@@ -113,8 +131,13 @@ pub trait BusDevice {
     /// 批量写入（镜像加载用，无事件上报）。不支持时返回 `Device` 错误。
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
     fn device_name(&self) -> &str;
-    /// 供 machine 层安全下取具体设备（如 uart 注入输入、ram 复位）。
-    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// 能力下取：返回可复位视图（仅 RAM 等覆写）。
+    fn as_resetable(&mut self) -> Option<&mut dyn Resetable> { None }
+    /// 能力下取：返回输入接收视图（仅 UART 等覆写）。
+    fn as_input_sink(&mut self) -> Option<&mut dyn InputSink> { None }
+    /// 能力下取：返回帧源视图（仅 Framebuffer 等覆写）。
+    fn as_frame_source(&mut self) -> Option<&mut dyn FrameSource> { None }
 
     /// 检查设备的全部 pending 中断（返回 cause 码列表，每个含 bit31）。
     /// 默认空；CLINT 等中断源设备覆写此方法。
@@ -368,9 +391,6 @@ mod tests {
         fn device_name(&self) -> &str {
             &self.name
         }
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
     }
 
     #[derive(Default)]
@@ -531,15 +551,15 @@ mod tests {
     /// 测试设备：可配置返回一个中断 cause，并记录 tick 收到的 cycle。
     struct MockIrq {
         causes: Vec<u32>,
-        ticked_cycle: u64,
+        ticked_cycle: std::rc::Rc<std::cell::Cell<u64>>,
     }
 
     impl MockIrq {
         fn new(cause: u32) -> Self {
-            Self { causes: vec![cause], ticked_cycle: 0 }
+            Self { causes: vec![cause], ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)) }
         }
         fn none() -> Self {
-            Self { causes: Vec::new(), ticked_cycle: 0 }
+            Self { causes: Vec::new(), ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)) }
         }
     }
 
@@ -559,14 +579,11 @@ mod tests {
         fn device_name(&self) -> &str {
             "mock-irq"
         }
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
-        }
         fn check_interrupt(&self) -> Vec<u32> {
             self.causes.clone()
         }
         fn tick(&mut self, cycle: u64) {
-            self.ticked_cycle = cycle;
+            self.ticked_cycle.set(cycle);
         }
     }
 
@@ -595,14 +612,13 @@ mod tests {
         let mut bus = BusRouter::new();
         let dev1 = MockIrq::new(0x8000_0007);
         let dev2 = MockIrq::new(0x8000_0003);
+        let tick1 = dev1.ticked_cycle.clone();
+        let tick2 = dev2.ticked_cycle.clone();
         bus.map(0x1000_0000..0x1000_0010, Box::new(dev1)).unwrap();
         bus.map(0x2000_0000..0x2000_0010, Box::new(dev2)).unwrap();
         bus.set_cycle(42);
         // tick 应被 dispatch 到所有设备
-        // 直接 downcast 检查 ticked_cycle
-        let d1 = bus.device_mut(0x1000_0000).unwrap().as_any_mut().downcast_ref::<MockIrq>().unwrap();
-        assert_eq!(d1.ticked_cycle, 42);
-        let d2 = bus.device_mut(0x2000_0000).unwrap().as_any_mut().downcast_ref::<MockIrq>().unwrap();
-        assert_eq!(d2.ticked_cycle, 42);
+        assert_eq!(tick1.get(), 42);
+        assert_eq!(tick2.get(), 42);
     }
 }

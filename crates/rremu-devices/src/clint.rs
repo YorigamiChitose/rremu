@@ -11,7 +11,6 @@
 //! | mtime >= mtimecmp → MTI (0x8000_0007)
 //! | 同时 pending 时两者都返回（不裁剪），由 CPU 按 spec 序裁决
 
-use core::any::Any;
 use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
 
 const REG_MSIP: u32 = 0x0000;
@@ -110,10 +109,6 @@ impl BusDevice for Clint {
 
     fn device_name(&self) -> &str {
         "clint"
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
     }
 
     fn check_interrupt(&self) -> Vec<u32> {

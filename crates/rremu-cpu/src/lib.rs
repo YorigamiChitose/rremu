@@ -602,7 +602,6 @@ struct TrapErr {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
-    use core::any::Any;
     use rremu_bus::{BusDevice, BusRouter};
     use rremu_decode::encode_c;
     use rremu_isa::Word;
@@ -646,9 +645,6 @@ mod tests {
         }
         fn device_name(&self) -> &str {
             "ram"
-        }
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
         }
     }
 
@@ -1392,9 +1388,6 @@ mod tests {
         }
         fn device_name(&self) -> &str {
             "mock-irq"
-        }
-        fn as_any_mut(&mut self) -> &mut dyn Any {
-            self
         }
         fn check_interrupt(&self) -> Vec<u32> {
             self.causes.clone()

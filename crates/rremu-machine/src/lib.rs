@@ -48,6 +48,139 @@ pub struct Watchpoint {
     pub hit_count: u32,
 }
 
+/// 调试控制器：管理断点、监视点及其命中/放行逻辑。
+///
+/// 断点在取指前检查；监视点在指令执行后检查。`bp_suppress` 使刚命中的断点
+/// 地址在下一次放行一次（经典调试器越过断点语义）。
+pub struct DebugController {
+    breakpoints: BTreeSet<u32>,
+    watchpoints: Vec<Watchpoint>,
+    next_wp_id: usize,
+    bp_suppress: Option<u32>,
+}
+
+impl DebugController {
+    fn new() -> Self {
+        Self {
+            breakpoints: BTreeSet::new(),
+            watchpoints: Vec::new(),
+            next_wp_id: 1,
+            bp_suppress: None,
+        }
+    }
+
+    /// 取指前断点检查：命中且未被 suppress 则返回 `HitBreakpoint` 并置 suppress。
+    fn check_breakpoint(&mut self, pc: u32) -> Option<RunResult> {
+        if self.breakpoints.contains(&pc) && self.bp_suppress != Some(pc) {
+            self.bp_suppress = Some(pc);
+            Some(RunResult::HitBreakpoint { addr: pc })
+        } else {
+            None
+        }
+    }
+
+    /// 执行后清除一次 suppress（无论是否命中，每步至多放行一次）。
+    fn clear_suppress(&mut self) {
+        self.bp_suppress = None;
+    }
+
+    /// 更新某监视点的值；若变化则返回 `(old, new)`，否则 `None`。
+    fn update_if_changed(&mut self, id: usize, new: u32) -> Option<(u32, u32)> {
+        let wp = self.watchpoints.iter_mut().find(|w| w.id == id)?;
+        if new != wp.last_value {
+            let old = wp.last_value;
+            wp.last_value = new;
+            wp.hit_count += 1;
+            Some((old, new))
+        } else {
+            None
+        }
+    }
+
+    /// 所有监视点的 (id, expr) 快照：调用方求值后再回调 update_if_changed。
+    fn watchpoint_entries(&self) -> Vec<(usize, Expr)> {
+        self.watchpoints.iter().map(|w| (w.id, w.expr.clone())).collect()
+    }
+
+    fn add_breakpoint(&mut self, addr: u32) -> bool {
+        self.breakpoints.insert(addr)
+    }
+
+    fn remove_breakpoint(&mut self, addr: u32) -> bool {
+        self.breakpoints.remove(&addr)
+    }
+
+    fn breakpoints(&self) -> &BTreeSet<u32> {
+        &self.breakpoints
+    }
+
+    fn add_watchpoint(&mut self, expr: Expr, initial: u32) -> usize {
+        let id = self.next_wp_id;
+        self.next_wp_id += 1;
+        self.watchpoints.push(Watchpoint { id, expr, last_value: initial, hit_count: 0 });
+        id
+    }
+
+    fn remove_watchpoint(&mut self, id: usize) -> bool {
+        let before = self.watchpoints.len();
+        self.watchpoints.retain(|w| w.id != id);
+        self.watchpoints.len() != before
+    }
+
+    fn watchpoints(&self) -> &[Watchpoint] {
+        &self.watchpoints
+    }
+
+    fn reset(&mut self) {
+        self.bp_suppress = None;
+    }
+}
+
+/// 帧缓冲访问器：持有帧缓冲配置（基址/尺寸），封装对总线帧源设备的访问。
+pub struct FramebufferAccessor {
+    base: Option<u32>,
+    width: u32,
+    height: u32,
+}
+
+impl FramebufferAccessor {
+    fn new(base: Option<u32>, width: u32, height: u32) -> Self {
+        Self { base, width, height }
+    }
+
+    fn dimensions(&self) -> Option<(u32, u32)> {
+        self.base.map(|_| (self.width, self.height))
+    }
+
+    fn base(&self) -> Option<u32> {
+        self.base
+    }
+
+    /// 全帧只读访问（不清 dirty）。
+    fn full_frame<'a>(&self, bus: &'a mut BusRouter) -> Option<FramebufferFrame<'a>> {
+        let fb = bus.device_mut(self.base?)?.as_frame_source()?;
+        Some(FramebufferFrame {
+            width: fb.width(),
+            height: fb.height(),
+            pixels: fb.frame(),
+        })
+    }
+
+    /// dirty 驱动零拷贝访问：dirty 时清标志并返回帧，否则 None。
+    fn dirty_frame<'a>(&self, bus: &'a mut BusRouter) -> Option<FramebufferFrame<'a>> {
+        let fb = bus.device_mut(self.base?)?.as_frame_source()?;
+        if !fb.is_dirty() {
+            return None;
+        }
+        fb.clear_dirty();
+        Some(FramebufferFrame {
+            width: fb.width(),
+            height: fb.height(),
+            pixels: fb.frame(),
+        })
+    }
+}
+
 /// 反汇编行（TUI 前端用）。
 #[derive(Debug, Clone)]
 pub struct DisasmLine {
@@ -79,6 +212,8 @@ pub enum MachineError {
     Bus(#[from] BusError),
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
+    #[error("reset failed: {0}")]
+    ResetFailed(String),
 }
 
 /// 事件环形收集器：machine 持有，前端经快照读取。
@@ -312,16 +447,11 @@ impl MachineBuilder {
             ram_base: self.ram_base,
             uart_base: self.uart_base,
             clint_base: self.clint_base,
-            fb_base: self.fb_base,
-            fb_width: self.fb_width,
-            fb_height: self.fb_height,
             entry,
             state: RunState::Idle,
             last_instr: None,
-            breakpoints: BTreeSet::new(),
-            watchpoints: Vec::new(),
-            next_wp_id: 1,
-            bp_suppress: None,
+            dbg: DebugController::new(),
+            fb: FramebufferAccessor::new(self.fb_base, self.fb_width, self.fb_height),
         })
     }
 }
@@ -331,22 +461,15 @@ pub struct Machine {
     cpu: Cpu,
     bus: BusRouter,
     collector: RingCollector,
+    dbg: DebugController,
+    fb: FramebufferAccessor,
     image: Option<Image>,
     ram_base: u32,
     uart_base: Option<u32>,
     clint_base: Option<u32>,
-    fb_base: Option<u32>,
-    fb_width: u32,
-    fb_height: u32,
     entry: u32,
     state: RunState,
     last_instr: Option<(u32, Instruction)>,
-    breakpoints: BTreeSet<u32>,
-    watchpoints: Vec<Watchpoint>,
-    next_wp_id: usize,
-    /// 刚命中过的断点地址：下一次 step_once 对该地址放行一次，
-    /// 使 `c`/`si` 能越过当前断点（经典调试器语义），后续命中照常。
-    bp_suppress: Option<u32>,
 }
 
 impl Machine {
@@ -399,11 +522,10 @@ impl Machine {
         let pc_before = self.cpu.pc();
 
         // 断点：命中则不执行，直接返回；刚命中过的地址放行一次（越过断点）
-        if self.breakpoints.contains(&pc_before) && self.bp_suppress != Some(pc_before) {
-            self.bp_suppress = Some(pc_before);
-            return Some(RunResult::HitBreakpoint { addr: pc_before });
+        if let Some(rr) = self.dbg.check_breakpoint(pc_before) {
+            return Some(rr);
         }
-        self.bp_suppress = None;
+        self.dbg.clear_suppress();
 
         match self.cpu.step(&mut self.bus, &mut self.collector) {
             Ok(StepOutcome::Executed { instr, .. }) => {
@@ -435,17 +557,15 @@ impl Machine {
     /// 检查所有监视点：求值表达式得到当前值，与上次值比较。
     /// 变化则返回 HitWatchpoint（pc 为引起变化的指令）并更新 last_value / hit_count。
     fn check_watchpoints(&mut self, pc: u32) -> Option<RunResult> {
-        for i in 0..self.watchpoints.len() {
+        let entries = self.dbg.watchpoint_entries();
+        for (id, expr) in entries {
             // 值语义：EXPR 求值结果就是被监视的值（如 *ADDR 解引用、x5 寄存器）。
             // 求值失败（如解引用未映射地址）则跳过，下一步重试。
-            let new = match self.eval(&self.watchpoints[i].expr.clone()) {
+            let new = match self.eval(&expr) {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if new != self.watchpoints[i].last_value {
-                let (id, old) = (self.watchpoints[i].id, self.watchpoints[i].last_value);
-                self.watchpoints[i].last_value = new;
-                self.watchpoints[i].hit_count += 1;
+            if let Some((old, new)) = self.dbg.update_if_changed(id, new) {
                 return Some(RunResult::HitWatchpoint { id, pc, old, new });
             }
         }
@@ -454,48 +574,44 @@ impl Machine {
 
     /// 添加断点；返回是否为新增。
     pub fn add_breakpoint(&mut self, addr: u32) -> bool {
-        self.breakpoints.insert(addr)
+        self.dbg.add_breakpoint(addr)
     }
 
     /// 移除断点；返回是否存在。
     pub fn remove_breakpoint(&mut self, addr: u32) -> bool {
-        self.breakpoints.remove(&addr)
+        self.dbg.remove_breakpoint(addr)
     }
 
     pub fn breakpoints(&self) -> &BTreeSet<u32> {
-        &self.breakpoints
+        self.dbg.breakpoints()
     }
 
     /// 添加监视点，返回分配的 id（从 1 开始）。
     pub fn add_watchpoint(&mut self, expr: Expr) -> usize {
-        let id = self.next_wp_id;
-        self.next_wp_id += 1;
         // 值语义：EXPR 求值即初值；求值失败（如地址未映射）先记 0，随步进重试
         let last_value = self.eval(&expr).unwrap_or(0);
-        self.watchpoints.push(Watchpoint { id, expr, last_value, hit_count: 0 });
-        id
+        self.dbg.add_watchpoint(expr, last_value)
     }
 
     /// 按 id 移除监视点；返回是否存在。
     pub fn remove_watchpoint(&mut self, id: usize) -> bool {
-        let before = self.watchpoints.len();
-        self.watchpoints.retain(|w| w.id != id);
-        self.watchpoints.len() != before
+        self.dbg.remove_watchpoint(id)
     }
 
     pub fn watchpoints(&self) -> &[Watchpoint] {
-        &self.watchpoints
+        self.dbg.watchpoints()
     }
 
 
     /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
     pub fn reset(&mut self) -> Result<(), MachineError> {
         self.cpu.reset(self.entry);
-        if let Some(dev) = self.bus.device_mut(self.ram_base)
-            && let Some(ram) = dev.as_any_mut().downcast_mut::<Ram>()
-        {
-            ram.reset();
-        }
+        // 通过 Resetable 能力复位 RAM；找不到可复位设备视为配置错误。
+        let ram = self.bus.device_mut(self.ram_base)
+            .ok_or_else(|| MachineError::ResetFailed(format!("no device at RAM base {:#x}", self.ram_base)))?;
+        let resetable = ram.as_resetable()
+            .ok_or_else(|| MachineError::ResetFailed("device at RAM base does not support reset".to_owned()))?;
+        resetable.reset();
         if let Some(img) = &self.image {
             for seg in &img.segments {
                 self.bus.write_bytes(seg.addr, &seg.data)?;
@@ -504,7 +620,7 @@ impl Machine {
         self.collector.clear();
         self.state = RunState::Idle;
         self.last_instr = None;
-        self.bp_suppress = None;
+        self.dbg.reset();
         Ok(())
     }
 
@@ -619,23 +735,12 @@ impl Machine {
 
     /// 帧缓冲尺寸（无 framebuffer 返回 None）。
     pub fn framebuffer_dimensions(&self) -> Option<(u32, u32)> {
-        if self.fb_base.is_some() {
-            Some((self.fb_width, self.fb_height))
-        } else {
-            None
-        }
+        self.fb.dimensions()
     }
 
     /// 帧缓冲全帧只读访问（不清 dirty）：TUI 缓存首次填充/尺寸变化时用。
     pub fn framebuffer_full_frame(&mut self) -> Option<FramebufferFrame<'_>> {
-        let addr = self.fb_base?;
-        let dev = self.bus.device_mut(addr)?;
-        let fb = dev.as_any_mut().downcast_ref::<Framebuffer>()?;
-        Some(FramebufferFrame {
-            width: fb.width(),
-            height: fb.height(),
-            pixels: fb.frame(),
-        })
+        self.fb.full_frame(&mut self.bus)
     }
 
     /// 帧缓冲 dirty 驱动零拷贝访问（独立窗口前端用）。
@@ -647,19 +752,7 @@ impl Machine {
     /// 生命周期约束：`pixels` 借用 `&mut self`，调用方必须先 `Window::update(pixels)`
     /// 完成上屏拷贝，再调用下一个会修改 machine 的方法。
     pub fn framebuffer_dirty_frame(&mut self) -> Option<FramebufferFrame<'_>> {
-        let addr = self.fb_base?;
-        let dev = self.bus.device_mut(addr)?;
-        let fb = dev.as_any_mut().downcast_mut::<Framebuffer>()?;
-        if !fb.is_dirty() {
-            return None;
-        }
-        // 消费 dirty 标志：本调用方负责把这一帧上屏。
-        fb.clear_dirty();
-        Some(FramebufferFrame {
-            width: fb.width(),
-            height: fb.height(),
-            pixels: fb.frame(),
-        })
+        self.fb.dirty_frame(&mut self.bus)
     }
 
     /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek）。
@@ -671,10 +764,9 @@ impl Machine {
     /// 注入 UART 输入字节。
     pub fn uart_push_input(&mut self, byte: u8) {
         let Some(ub) = self.uart_base else { return };
-        if let Some(dev) = self.bus.device_mut(ub)
-            && let Some(uart) = dev.as_any_mut().downcast_mut::<Uart>()
+        if let Some(sink) = self.bus.device_mut(ub).and_then(|d| d.as_input_sink())
         {
-            uart.push_input(byte);
+            sink.push_input(byte);
             self.collector.emit(EmuEvent::UartInput { byte });
         }
     }
@@ -708,7 +800,7 @@ impl Machine {
     }
 
     pub fn framebuffer_base(&self) -> Option<u32> {
-        self.fb_base
+        self.fb.base()
     }
 
     /// 经地址定位总线设备（供前端直接访问设备能力，如 CLINT/FB）。

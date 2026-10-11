@@ -1,7 +1,6 @@
 //! RAM 设备：Vec<u8> 小端存储，全宽度读写，peek 等价 read。
 
-use core::any::Any;
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, Resetable};
 
 pub struct Ram {
     base: u32,
@@ -20,6 +19,12 @@ impl Ram {
 
     fn offset(&self, addr: u32) -> usize {
         (addr - self.base) as usize
+    }
+}
+
+impl Resetable for Ram {
+    fn reset(&mut self) {
+        Ram::reset(self);
     }
 }
 
@@ -57,8 +62,8 @@ impl BusDevice for Ram {
         "ram"
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
+    fn as_resetable(&mut self) -> Option<&mut dyn Resetable> {
+        Some(self)
     }
 }
 
