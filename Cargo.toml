@@ -34,7 +34,7 @@ rremu-cli = { path = "crates/rremu-cli" }
 rremu-tui = { path = "crates/rremu-tui" }
 rremu-window = { path = "crates/rremu-window" }
 
-# 外部依赖（PLAN §9，M1 阶段）
+# 外部依赖
 thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

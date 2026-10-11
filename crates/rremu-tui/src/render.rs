@@ -1,4 +1,4 @@
-//! 渲染：六面板布局（§5.10）。
+//! 渲染：六面板布局。
 //!
 //! 面板：顶栏 / 左栏寄存器 / 右上反汇编 / 右下存储访问 / 底部串口 / 状态栏。
 
@@ -49,12 +49,15 @@ fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedT
     let state_str = if running {
         "running"
     } else {
-        match snap.state {
+        match &snap.state {
             RunState::Idle => "idle",
             RunState::Running => "running",
             RunState::Paused => "paused",
             RunState::Exited(c) => return draw_bar(f, area, vec![
                 span(format!(" rremu │ cycle={} │ speed={} │ EXITED({})", snap.cycle, speed.label(), c), Color::Yellow),
+            ]),
+            RunState::Faulted(reason) => return draw_bar(f, area, vec![
+                span(format!(" rremu │ cycle={} │ speed={} │ FAULTED: {}", snap.cycle, speed.label(), reason), Color::Red),
             ]),
         }
     };

@@ -1,8 +1,7 @@
 # rremu
 
 > ⚠️ **本项目为 vibe coding 产物**：代码主要由 AI 在人工需求约束与审查下生成，
-> 仅供学习/实验用途，不保证工程质量与长期维护。请以 [PLAN.md](PLAN.md)
-> （架构决策依据）与源码为准。
+> 仅供学习/实验用途，不保证工程质量与长期维护。请以源码为准。
 
 一个 **RV32IMC_Zicsr（最简 M-mode）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
 提供 GDB 风格 CLI 调试器与 ratatui TUI 两种前端，设备经 trait 可插拔。
@@ -20,7 +19,7 @@
   Framebuffer（RGB565 → 0x00RRGGBB），均经 `BusDevice` trait 接入总线
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
   C 风格运算符）、无副作用内存 peek、事件环
-- **退出约定**：`tohost` 符号写入（riscv-tests 惯例）或 ecall
+- **退出约定**：`ebreak`/`c.ebreak` 为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`
 
 ## 架构
 
@@ -42,8 +41,6 @@ rremu-decode           解码（纯函数）
 rremu-expr             表达式词法/解析/求值（独立叶 crate）
 ```
 
-依赖红线等完整架构说明见 [PLAN.md](PLAN.md)。
-
 ## 构建要求
 
 - Rust **1.99+**，edition 2024
@@ -59,15 +56,14 @@ cargo build --release
 
 ```sh
 # 交互 REPL（启动暂停在入口）
-rremu tests/data/hello.elf
+rremu <ELF>
 rremu> c
-hello world
 
 # 批处理
-rremu tests/data/hello.elf -c c
+rremu <ELF> -c c
 
 # TUI
-rremu --tui tests/data/hello.elf
+rremu --tui <ELF>
 ```
 
 ### 命令行参数
@@ -129,12 +125,4 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-`tests/data/` 下的固件由 `tools/` 脚本生成（需 RISC-V 工具链）：
-
-- `tools/build-firmware.sh`：hello / timer / fb 固件
-- `tools/build-tests.sh`：官方 riscv-tests 的 3 个代表测试
-  （rv32ui-p-add / rv32um-p-mul / rv32uc-p-rvc）
-
-```sh
-rremu tests/data/rv32ui-p-add.elf -c c   # Program exited with code 0
-```
+仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ebreak 退出、UART 输出、CLINT 中断、riscv-tests 等）由独立的外部测试项目承担。

@@ -105,7 +105,7 @@ pub enum EvalError {
 // 求值上下文
 // ---------------------------------------------------------------------------
 
-/// 求值环境：由 machine 层实现（寄存器视图 + 无副作用总线 peek，D12）。
+/// 求值环境：由 machine 层实现（寄存器视图 + 无副作用总线 peek）。
 pub trait EvalContext {
     fn reg(&self, id: RegId) -> u32;
     fn pc(&self) -> u32;
