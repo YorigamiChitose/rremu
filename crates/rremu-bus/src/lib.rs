@@ -107,7 +107,7 @@ pub trait BusDevice {
     fn read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     /// 写（可有副作用）。
     fn write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
-    /// 无副作用读（peek_read，D12）。**强制每个设备显式实现**，不得有默认实现。
+    /// 无副作用读（peek_read）。**强制每个设备显式实现**，不得有默认实现。
     /// 对监视点/表达式求值/x 命令开放，不得消耗设备状态。
     fn peek_read(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
     /// 批量写入（镜像加载用，无事件上报）。不支持时返回 `Device` 错误。
@@ -116,9 +116,9 @@ pub trait BusDevice {
     /// 供 machine 层安全下取具体设备（如 uart 注入输入、ram 复位）。
     fn as_any_mut(&mut self) -> &mut dyn Any;
 
-    /// 检查设备是否有 pending 中断（返回中断 cause 码，含 bit31）。
-    /// 默认无中断；CLINT 等中断源设备覆写此方法。
-    fn check_interrupt(&self) -> Option<u32> { None }
+    /// 检查设备的全部 pending 中断（返回 cause 码列表，每个含 bit31）。
+    /// 默认空；CLINT 等中断源设备覆写此方法。
+    fn check_interrupt(&self) -> Vec<u32> { Vec::new() }
 
     /// 每步周期同步：设备按 cycle 更新内部时序状态（如 CLINT mtime）。
     /// 默认空操作。由 `BusRouter::set_cycle` 遍历调用。
@@ -145,7 +145,7 @@ pub trait Bus {
     fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
     /// 数据读（事件 kind = `MemKind::DataRead`）。
     fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
-    /// 数据写（事件 kind = `MemKind::DataWrite`；命中 watch 且 bit0==1 时发 `EmuEvent::Halt`）。
+    /// 数据写（事件 kind = `MemKind::DataWrite`）。
     fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
     /// 无副作用、无事件读（调试 peek）。
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
@@ -153,13 +153,11 @@ pub trait Bus {
     fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), BusError>;
     /// 定位地址所在设备（machine 层用）。
     fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice>;
-    /// 设置 tohost 监视地址（None 取消）。
-    fn set_watch(&mut self, addr: Option<u32>);
     /// CPU 每步开始前同步当前 cycle，供 MemAccess 事件携带，
     /// 并下发 tick 到所有设备（CLINT 等用此更新内部时序状态）。
     fn set_cycle(&mut self, cycle: u64);
-    /// 聚合所有设备的 pending 中断，返回最高优先级 cause（cause 码降序：MEI>MTI>MSI）。
-    fn pending_interrupt(&mut self) -> Option<u32>;
+    /// 聚合所有设备的全部 pending 中断 cause，由 CPU 侧按 spec 序裁决。
+    fn pending_interrupts(&mut self) -> Vec<u32>;
 }
 
 struct Region {
@@ -176,13 +174,12 @@ impl Region {
 /// 路由实现：按注册顺序线性查找（设备数量少，单周期模型足够）。
 pub struct BusRouter {
     regions: Vec<Region>,
-    watch: Option<u32>,
     cycle: u64,
 }
 
 impl BusRouter {
     pub fn new() -> Self {
-        Self { regions: Vec::new(), watch: None, cycle: 0 }
+        Self { regions: Vec::new(), cycle: 0 }
     }
 
     /// 注册设备区间（start..end，end 独占）。重叠返回 `BusError::Overlap`。
@@ -236,7 +233,7 @@ impl BusRouter {
         Ok(value)
     }
 
-    /// 路由 + 设备写 + 发 `MemAccess{kind}` 事件 + tohost 监视（data_write 用）。
+    /// 路由 + 设备写 + 发 `MemAccess{kind}` 事件（data_write 用）。
     fn route_write(
         &mut self,
         addr: u32,
@@ -258,10 +255,6 @@ impl BusRouter {
             value: data,
             device: region.device.device_name().to_owned(),
         });
-        // tohost 监视：写入值 bit0==1 表示进程退出（riscv-tests htif 约定）
-        if self.watch == Some(addr) && data & 1 == 1 {
-            sink.emit(EmuEvent::Halt { code: (data >> 1) as i32 });
-        }
         Ok(())
     }
 }
@@ -309,10 +302,6 @@ impl Bus for BusRouter {
         Some(self.regions[idx].device.as_mut())
     }
 
-    fn set_watch(&mut self, addr: Option<u32>) {
-        self.watch = addr;
-    }
-
     fn set_cycle(&mut self, cycle: u64) {
         self.cycle = cycle;
         for r in &mut self.regions {
@@ -320,11 +309,12 @@ impl Bus for BusRouter {
         }
     }
 
-    fn pending_interrupt(&mut self) -> Option<u32> {
-        self.regions
-            .iter()
-            .filter_map(|r| r.device.check_interrupt())
-            .max()
+    fn pending_interrupts(&mut self) -> Vec<u32> {
+        let mut causes = Vec::new();
+        for r in &self.regions {
+            causes.extend(r.device.check_interrupt());
+        }
+        causes
     }
 }
 
@@ -538,35 +528,18 @@ mod tests {
         assert_eq!(sink.0.len(), 3);
     }
 
-    #[test]
-    fn watch_halt_on_tohost_write() {
-        let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
-        bus.set_watch(Some(0x8000_0100));
-        let mut sink = Collector::default();
-        // bit0=0：非退出写
-        bus.data_write(0x8000_0100, AccessSize::Word, 2, &mut sink).unwrap();
-        assert!(!sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { .. })));
-        // bit0=1：退出，code = 3 >> 1 = 1
-        bus.data_write(0x8000_0100, AccessSize::Word, 3, &mut sink).unwrap();
-        assert!(sink.0.iter().any(|e| matches!(e, EmuEvent::Halt { code: 1 })));
-        // watch 地址外的写不触发
-        bus.data_write(0x8000_0200, AccessSize::Word, 1, &mut sink).unwrap();
-        assert_eq!(sink.0.iter().filter(|e| matches!(e, EmuEvent::Halt { .. })).count(), 1);
-    }
-
     /// 测试设备：可配置返回一个中断 cause，并记录 tick 收到的 cycle。
     struct MockIrq {
-        cause: Option<u32>,
+        causes: Vec<u32>,
         ticked_cycle: u64,
     }
 
     impl MockIrq {
         fn new(cause: u32) -> Self {
-            Self { cause: Some(cause), ticked_cycle: 0 }
+            Self { causes: vec![cause], ticked_cycle: 0 }
         }
         fn none() -> Self {
-            Self { cause: None, ticked_cycle: 0 }
+            Self { causes: Vec::new(), ticked_cycle: 0 }
         }
     }
 
@@ -589,8 +562,8 @@ mod tests {
         fn as_any_mut(&mut self) -> &mut dyn Any {
             self
         }
-        fn check_interrupt(&self) -> Option<u32> {
-            self.cause
+        fn check_interrupt(&self) -> Vec<u32> {
+            self.causes.clone()
         }
         fn tick(&mut self, cycle: u64) {
             self.ticked_cycle = cycle;
@@ -598,20 +571,23 @@ mod tests {
     }
 
     #[test]
-    fn pending_interrupt_aggregates_max() {
+    fn pending_interrupts_collects_all_causes() {
+        // 设备侧不裁剪：所有 pending cause 原样返回，CPU 侧按 spec 序裁决
         let mut bus = BusRouter::new();
-        // MSI=0x8000_0003 < MTI=0x8000_0007
+        // MSI=0x8000_0003, MTI=0x8000_0007
         bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::new(0x8000_0003))).unwrap();
         bus.map(0x2000_0000..0x2000_0010, Box::new(MockIrq::new(0x8000_0007))).unwrap();
-        assert_eq!(bus.pending_interrupt(), Some(0x8000_0007));
+        let causes = bus.pending_interrupts();
+        assert!(causes.contains(&0x8000_0003));
+        assert!(causes.contains(&0x8000_0007));
     }
 
     #[test]
-    fn pending_interrupt_none_when_no_device_has_irq() {
+    fn pending_interrupts_empty_when_no_device_has_irq() {
         let mut bus = BusRouter::new();
         bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::none())).unwrap();
         bus.map(0x2000_0000..0x2000_0010, Box::new(MockRam::new(0x2000_0000, 0x10, "ram"))).unwrap();
-        assert_eq!(bus.pending_interrupt(), None);
+        assert!(bus.pending_interrupts().is_empty());
     }
 
     #[test]
@@ -623,7 +599,6 @@ mod tests {
         bus.map(0x2000_0000..0x2000_0010, Box::new(dev2)).unwrap();
         bus.set_cycle(42);
         // tick 应被 dispatch 到所有设备
-        // 用 pending_interrupt 间接验证 tick 生效（MockIrq tick 只记录 cycle）
         // 直接 downcast 检查 ticked_cycle
         let d1 = bus.device_mut(0x1000_0000).unwrap().as_any_mut().downcast_ref::<MockIrq>().unwrap();
         assert_eq!(d1.ticked_cycle, 42);

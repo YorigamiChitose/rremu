@@ -41,6 +41,8 @@ enum Outcome {
     Continue,
     Quit,
     ProgramExited(i32),
+    /// 模拟遇到不可恢复错误。
+    Faulted(String),
 }
 
 /// 有窗时 cmd_continue 的步进批量：在每批之后泵窗（dirty 上屏 / 否则 poll 关窗）。
@@ -80,6 +82,9 @@ impl Repl {
                 Outcome::Quit => break 0,
                 // 交互模式下程序退出后仍保留 REPL 供检查，用户 q 退出。
                 Outcome::ProgramExited(_) => {}
+                Outcome::Faulted(reason) => {
+                    eprintln!("faulted: {reason}");
+                }
             }
         }
     }
@@ -93,6 +98,10 @@ impl Repl {
                 Outcome::Continue => {}
                 Outcome::Quit => return 0,
                 Outcome::ProgramExited(code) => return code,
+                Outcome::Faulted(reason) => {
+                    eprintln!("faulted: {reason}");
+                    return 1;
+                }
             }
         }
         0
@@ -173,6 +182,7 @@ impl Repl {
                 }
                 match step_rr {
                     RunResult::Exited { code } => break RunResult::Exited { code },
+                    RunResult::Faulted { reason } => break RunResult::Faulted { reason },
                     RunResult::HitBreakpoint { addr } => break RunResult::HitBreakpoint { addr },
                     RunResult::HitWatchpoint { id, pc, old, new } => {
                         break RunResult::HitWatchpoint { id, pc, old, new };
@@ -401,6 +411,10 @@ impl Repl {
                 println!("Program exited with code {code}.");
                 Outcome::ProgramExited(code)
             }
+            RunResult::Faulted { reason } => {
+                eprintln!("Emulation faulted: {reason}.");
+                Outcome::Faulted(reason)
+            }
             RunResult::HitBreakpoint { addr } => {
                 println!("Breakpoint hit at 0x{addr:08x}.");
                 Outcome::Continue
@@ -417,7 +431,7 @@ impl Repl {
     }
 
     fn is_dead(&self) -> bool {
-        matches!(self.machine.state(), RunState::Exited(_))
+        matches!(self.machine.state(), RunState::Exited(_) | RunState::Faulted(_))
     }
 }
 

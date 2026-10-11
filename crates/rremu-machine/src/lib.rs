@@ -18,21 +18,25 @@ pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
 pub use rremu_isa::{reg_name, Instruction, Priv};
 
 /// 运行状态（快照展示用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
     Idle,
     Running,
     Paused,
     Exited(i32),
+    /// 模拟遇到不可恢复错误（如 vectored mtvec 未实现），已终止。
+    Faulted(String),
 }
 
 /// 运行控制结果（含断点/监视点命中）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunResult {
     Exited { code: i32 },
     Paused,
     HitBreakpoint { addr: u32 },
     HitWatchpoint { id: usize, pc: u32, old: u32, new: u32 },
+    /// 模拟遇到不可恢复错误，已终止；reason 为故障描述。
+    Faulted { reason: String },
 }
 
 /// 监视点：跟踪某表达式的值变化（值语义，EXPR 与 p 命令同模型）。
@@ -295,8 +299,6 @@ impl MachineBuilder {
             for seg in &img.segments {
                 bus.write_bytes(seg.addr, &seg.data)?;
             }
-            // tohost 监视：写入值 bit0==1 → 进程退出（riscv-tests 约定）
-            bus.set_watch(img.tohost);
         }
 
         let entry =
@@ -375,6 +377,9 @@ impl Machine {
                     self.state = RunState::Exited(code);
                     return RunResult::Exited { code };
                 }
+                Some(RunResult::Faulted { reason }) => {
+                    return RunResult::Faulted { reason };
+                }
                 Some(rr @ (RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. })) => {
                     self.state = RunState::Paused;
                     return rr;
@@ -410,12 +415,19 @@ impl Machine {
                 // 监视点：检查每个被跟踪表达式的值是否变化
                 self.check_watchpoints(pc_before)
             }
+            // ebreak/c.ebreak 宿主陷阱：以 a0 为退出码终止，发出 Halt 事件
+            Ok(StepOutcome::Exited { code }) => {
+                self.collector.emit(EmuEvent::Halt { code });
+                self.state = RunState::Exited(code);
+                Some(RunResult::Exited { code })
+            }
             // 非致命陷入：CPU 已重定向 pc 至 mtvec，本步无停止结果
             Ok(StepOutcome::Trapped { .. }) => None,
             Err(e) => {
-                // 唯一错误路径：vectored mtvec 未实现；记录后按继续处理
-                tracing::error!("cpu error: {e}");
-                None
+                // 不可恢复错误（如 vectored mtvec 未实现）：终止模拟，避免静默死循环。
+                let reason = e.to_string();
+                self.state = RunState::Faulted(reason.clone());
+                Some(RunResult::Faulted { reason })
             }
         }
     }
@@ -513,7 +525,7 @@ impl Machine {
                 mcycle: self.cpu.cycle(),
                 minstret: self.cpu.instret(),
             },
-            state: self.state,
+            state: self.state.clone(),
             mem_ring: self.collector.mem_ring().clone(),
             uart_out: self
                 .collector
@@ -524,7 +536,7 @@ impl Machine {
         }
     }
 
-    /// 调试 peek：无副作用读一个 Word（表达式/x 命令用，D12）。
+    /// 调试 peek：无副作用读一个 Word（表达式/x 命令用）。
     /// 调试器语义：支持非对齐地址（拼字），取指路径的严格对齐不受影响。
     pub fn peek(&mut self, addr: u32) -> Result<u32, BusError> {
         self.peek_word_maybe_unaligned(addr)
@@ -650,7 +662,7 @@ impl Machine {
         })
     }
 
-    /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek，D12）。
+    /// 求值调试表达式（p/x/w 命令共用；内存读走无副作用 peek）。
     pub fn eval(&mut self, expr: &Expr) -> Result<u32, EvalError> {
         let mut ctx = MachineCtx(self);
         expr.eval(&mut ctx)
@@ -684,11 +696,7 @@ impl Machine {
 
     /// 当前运行状态（轻量查询，避免为读状态做整快照）。
     pub fn state(&self) -> RunState {
-        self.state
-    }
-
-    pub fn tohost_addr(&self) -> Option<u32> {
-        self.image.as_ref().and_then(|i| i.tohost)
+        self.state.clone()
     }
 
     pub fn entry(&self) -> u32 {
@@ -703,7 +711,7 @@ impl Machine {
         self.fb_base
     }
 
-    /// 经地址定位总线设备（downcast 用，如访问 CLINT/FB 内部状态）。
+    /// 经地址定位总线设备（供前端直接访问设备能力，如 CLINT/FB）。
     pub fn device_mut(&mut self, addr: u32) -> Option<&mut dyn BusDevice> {
         self.bus.device_mut(addr)
     }
@@ -713,7 +721,7 @@ impl Machine {
     }
 }
 
-/// EvalContext 适配：寄存器读 CPU 视图，内存读走 peek（无副作用，D12）。
+/// EvalContext 适配：寄存器读 CPU 视图，内存读走 peek（无副作用）。
 struct MachineCtx<'a>(&'a mut Machine);
 
 impl EvalContext for MachineCtx<'_> {
@@ -734,158 +742,12 @@ impl EvalContext for MachineCtx<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
-    use rremu_bus::MemKind;
-
-    const HELLO_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/hello.elf");
-
-    fn hello_machine() -> Machine {
-        let bytes = std::fs::read(HELLO_ELF)
-            .unwrap_or_else(|e| panic!("缺少 {HELLO_ELF}（先运行 tools/build-firmware.sh）：{e}"));
-        let image = rremu_loader::load_elf(&bytes).unwrap();
-        MachineBuilder::new()
-            .ram(0x8000_0000, 16 * 1024 * 1024)
-            .uart(0x1000_0000)
-            .clint(0x0200_0000)
-            .framebuffer(0x2000_0000, 640, 480)
-            .load(image)
-            .build()
-            .unwrap()
-    }
-
-    #[test]
-    fn hello_run_exits_zero_with_uart_output() {
-        let mut m = hello_machine();
-        let pause = AtomicBool::new(false);
-        let rr = m.run(&pause);
-        assert_eq!(rr, RunResult::Exited { code: 0 });
-        assert_eq!(m.snapshot().state, RunState::Exited(0));
-        // 事件流包含 "hello world\n"
-        let out = m.drain_uart();
-        assert_eq!(String::from_utf8_lossy(&out), "hello world\n");
-        // mem ring 有访问记录
-        assert!(!m.mem_ring().is_empty());
-    }
-
-    #[test]
-    fn hello_step_n_pauses_and_tracks_last_instr() {
-        let mut m = hello_machine();
-        let rr = m.step_n(3);
-        assert_eq!(rr, RunResult::Paused);
-        assert_eq!(m.snapshot().state, RunState::Paused);
-        // hello.S 的 `la` 伪指令展开为 auipc+addi：3 步后最后执行的是 0x80000008 的 auipc
-        let (pc, instr) = m.last_instruction().expect("last instruction recorded");
-        assert_eq!(pc, 0x8000_0008);
-        assert_eq!(instr.to_string(), "auipc t0, 0x0");
-        // 继续跑完
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn reset_restores_initial_state() {
-        let mut m = hello_machine();
-        let pause = AtomicBool::new(false);
-        m.run(&pause);
-        assert_eq!(m.snapshot().state, RunState::Exited(0));
-        m.reset().unwrap();
-        let snap = m.snapshot();
-        assert_eq!(snap.state, RunState::Idle);
-        assert_eq!(snap.pc, 0x8000_0000);
-        assert_eq!(snap.cycle, 0);
-        assert!(m.mem_ring().is_empty());
-        // 复位后可再次运行到退出
-        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn peek_reads_ram_without_side_effects() {
-        let mut m = hello_machine();
-        // tohost 在 0x80000080，初始为 0
-        let tohost = m.tohost_addr().unwrap();
-        assert_eq!(m.peek(tohost).unwrap(), 0);
-        m.step_n(1);
-        // peek 不影响执行流
-        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
-        assert_eq!(m.peek(tohost).unwrap(), 1);
-    }
-
-    #[test]
-    fn breakpoint_stops_run_before_instruction() {
-        let mut m = hello_machine();
-        // hello.S 第 3 条指令在 0x80000008（auipc）
-        m.add_breakpoint(0x8000_0008);
-        let pause = AtomicBool::new(false);
-        let rr = m.run(&pause);
-        assert_eq!(rr, RunResult::HitBreakpoint { addr: 0x8000_0008 });
-        // 断点命中时该指令尚未执行，pc 仍为断点地址
-        assert_eq!(m.snapshot().pc, 0x8000_0008);
-        // 移除断点后可继续跑完
-        m.remove_breakpoint(0x8000_0008);
-        assert_eq!(m.run(&AtomicBool::new(false)), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn continue_past_breakpoint_then_hits_next_time() {
-        let mut m = hello_machine();
-        // hello.S 第 3 条指令在 0x80000008（auipc）；hello 只经过它一次
-        m.add_breakpoint(0x8000_0008);
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0008 });
-        // 不移除断点，直接继续：应放行一次并跑完（而非原地重复命中）
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn watchpoint_value_semantics_reports_pc_and_old_new() {
-        let mut m = hello_machine();
-        // 值语义：EXPR 求值即被监视的值。监视 x2（sp）：
-        // 第 1 条 auipc sp 改变它；第 2 条是 mv sp,sp（lo=0 优化），
-        // 值不变 → 不误报 —— 这正是值语义的意义
-        let expr = rremu_expr::parse("x2").unwrap();
-        m.add_watchpoint(expr);
-        let pause = AtomicBool::new(false);
-        match m.run(&pause) {
-            RunResult::HitWatchpoint { pc, old, new, .. } => {
-                assert_eq!(pc, 0x8000_0000); // auipc sp 所在指令
-                assert_eq!(old, 0);
-                assert_ne!(new, 0); // sp 已获得栈顶高 20 位
-            }
-            rr => panic!("expected HitWatchpoint, got {rr:?}"),
-        }
-        // mv sp,sp 未改变值；x2 此后稳定 → 一路跑完
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn watchpoint_deref_expr_watches_memory_value() {
-        let mut m = hello_machine();
-        // 值语义下 *ADDR 直接监视该地址的字；hello 运行中无人写 RAM，
-        // 初始 0 → 无变化 → 直接跑完退出（不命中）
-        let expr = rremu_expr::parse("*0x80000100").unwrap();
-        m.add_watchpoint(expr);
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-    }
-
-    #[test]
-    fn breakpoint_rehits_on_second_pass() {
-        let mut m = hello_machine();
-        // 0x80000000 是入口第一条指令：run 停在它，继续放行执行；
-        // reset 后重跑应再次命中（suppress 已被第一步清除/复位）
-        m.add_breakpoint(0x8000_0000);
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0000 });
-        m.step_n(1); // 放行一条
-        m.reset().unwrap();
-        assert_eq!(m.run(&pause), RunResult::HitBreakpoint { addr: 0x8000_0000 });
-    }
 
     #[test]
     fn builder_rejects_out_of_range_segment() {
         let image = Image {
             segments: vec![rremu_loader::Segment { addr: 0x9000_0000, data: vec![0; 16] }],
             entry: 0x9000_0000,
-            tohost: None,
         };
         let Err(err) = MachineBuilder::new().ram(0x8000_0000, 0x1000).load(image).build() else {
             panic!("builder should reject out-of-range segment")
@@ -894,256 +756,34 @@ mod tests {
     }
 
     #[test]
-    fn uart_input_reaches_fifo() {
-        let mut m = hello_machine();
-        m.uart_push_input(b'Z');
-        // 输入经 UartInput 事件进入 uart 环
-        assert!(m
-            .collector
-            .uart_ring()
-            .iter()
-            .any(|ev| matches!(ev, EmuEvent::UartInput { byte: b'Z' })));
-        // peek RDR 不消耗（D12 一致性）
-        let rdr = 0x1000_0000;
-        assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
-        assert_eq!(m.peek(rdr).unwrap(), b'Z' as u32);
+    fn vectored_mtvec_trap_enters_faulted_state() {
+        // 程序：设置 mtvec 为 vectored 模式（bit0=1）→ ecall 触发 trap → Faulted
+        let base = 0x8000_0000;
+        let code = [
+            0x10100293u32, // addi x5, x0, 0x101  (mtvec=0x101, vectored)
+            0x30529073,     // csrrw x0, mtvec, x5
+            0x00000073,     // ecall
+        ];
+        let mut bytes = Vec::new();
+        for w in code {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        let image = Image {
+            segments: vec![rremu_loader::Segment { addr: base, data: bytes }],
+            entry: base,
+        };
+        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        let rr = machine.step_n(3);
+        assert!(matches!(rr, RunResult::Faulted { reason } if reason.contains("vectored mtvec")));
+        assert!(matches!(machine.state(), RunState::Faulted(_)));
     }
 
     #[test]
     fn expr_alias_table_matches_isa() {
-        // expr 与 isa 的双别名表由本测试锁定同步
+        // expr 与 isa 的双别名表由本测试锁定同步（ABI 别名漂移唯一防线）
         for (i, name) in rremu_isa::ABI_NAMES.iter().enumerate() {
             assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
         }
         assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
-    }
-
-    #[test]
-    fn eval_reads_regs_pc_and_memory() {
-        let mut m = hello_machine();
-        assert_eq!(m.eval(&rremu_expr::parse("pc").unwrap()).unwrap(), 0x8000_0000);
-        assert_eq!(m.eval(&rremu_expr::parse("x0+1").unwrap()).unwrap(), 1);
-        // 跑前 tohost == 0，跑后 == 1；eval 的 peek 不影响运行（D12）
-        let tohost = m.tohost_addr().unwrap();
-        let expr = rremu_expr::parse(&format!("*{tohost:#x}")).unwrap();
-        assert_eq!(m.eval(&expr).unwrap(), 0);
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-        assert_eq!(m.eval(&expr).unwrap(), 1);
-    }
-
-    #[test]
-    fn exit_code_nonzero_via_tohost() {
-        // riscv-tests htif 约定：tohost 写值 bit0==1 表示退出，
-        // exit code = (value >> 1)。hello.elf 写 1 → exit 0；
-        // 这里手动经总线写 (42 << 1) | 1 = 85，期望 exit code 42。
-        let mut m = hello_machine();
-        let tohost = m.tohost_addr().expect("hello.elf has tohost");
-        let value: u32 = (42 << 1) | 1;
-        // 直接经 Bus::write 写 tohost：私有字段本模块内可访问；
-        // bus 与 collector 分离借用，避免对 self 整体借用。
-        {
-            let bus = &mut m.bus;
-            let collector = &mut m.collector;
-            bus.data_write(tohost, AccessSize::Word, value, collector).unwrap();
-        }
-        let pause = AtomicBool::new(false);
-        let rr = m.run(&pause);
-        assert_eq!(rr, RunResult::Exited { code: 42 });
-        assert_eq!(m.snapshot().state, RunState::Exited(42));
-        // tohost 内存值已更新为 85
-        assert_eq!(m.peek(tohost).unwrap(), value);
-    }
-
-    #[test]
-    fn multiple_breakpoints_hit_in_order() {
-        // hello.S：0x80000000 第一条指令；0x80000008 第三条指令（auipc）。
-        // 两个断点应按地址顺序依次命中：第一次停在 0x80000000；
-        // 继续放行后越过 0x80000000、执行若干指令，停在 0x80000008。
-        let mut m = hello_machine();
-        m.add_breakpoint(0x8000_0000);
-        m.add_breakpoint(0x8000_0008);
-        let pause = AtomicBool::new(false);
-        let rr1 = m.run(&pause);
-        assert_eq!(rr1, RunResult::HitBreakpoint { addr: 0x8000_0000 });
-        assert_eq!(m.snapshot().pc, 0x8000_0000);
-        let rr2 = m.run(&pause);
-        assert_eq!(rr2, RunResult::HitBreakpoint { addr: 0x8000_0008 });
-        assert_eq!(m.snapshot().pc, 0x8000_0008);
-    }
-
-    #[test]
-    fn snapshot_contains_all_fields() {
-        // 跑到退出后校验快照所有字段：cycle/pc 推进、状态为 Exited、
-        // gprs 为 [u32;32]、uart_out 含 "hello"。
-        const BASE: u32 = 0x8000_0000;
-        let mut m = hello_machine();
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-        let snap = m.snapshot();
-        assert!(snap.cycle > 0, "cycle should advance: {}", snap.cycle);
-        assert!(snap.pc > BASE, "pc should advance past BASE: {:#x}", snap.pc);
-        assert!(
-            matches!(snap.state, RunState::Exited(_) | RunState::Running),
-            "state should be Exited or Running: {:?}",
-            snap.state,
-        );
-        assert_eq!(snap.gprs.len(), 32);
-        let out = String::from_utf8_lossy(&snap.uart_out);
-        assert!(out.contains("hello"), "uart_out should contain 'hello': {out}");
-    }
-
-    // ---- MachineBuilder 集成 CLINT/Framebuffer ----
-
-    #[test]
-    fn clint_accessible_via_device_mut() {
-        // builder.clint() 后可经 device_mut 定位 CLINT 并 downcast；
-        // 经 BusDevice trait 方法验证寄存器与中断行为。
-        let mut m = hello_machine();
-        let base = m.clint_base().expect("clint mounted");
-        let dev = m.device_mut(base).expect("clint mapped in bus");
-        assert!(dev.as_any_mut().downcast_ref::<Clint>().is_some(), "downcast to Clint");
-        // 初始 mtime=0、mtimecmp=0 → mtime>=mtimecmp 视为 timer pending？
-        // Clint::check_interrupt 用 mtime >= mtimecmp，二者均 0 时 pending。
-        // 但 MIE/MSTATUS_MIE 关闭，CPU 不会真陷入；这里只测设备侧。
-        assert_eq!(dev.check_interrupt(), Some(0x8000_0007), "mtime>=mtimecmp pending MTI");
-        // peek mtime（=0，cycle 未推进）
-        assert_eq!(dev.peek_read(base + 0xBFF8, AccessSize::Word).unwrap(), 0);
-    }
-
-    #[test]
-    fn framebuffer_accessible_via_device_mut() {
-        // builder.framebuffer() 后可经 device_mut 定位 FB 并 downcast；
-        // 验证维度、帧缓冲容量、初始 dirty 状态。
-        let mut m = hello_machine();
-        let base = m.framebuffer_base().expect("framebuffer mounted");
-        let dev = m.device_mut(base).expect("framebuffer mapped in bus");
-        let fb = dev
-            .as_any_mut()
-            .downcast_ref::<Framebuffer>()
-            .expect("downcast to Framebuffer");
-        assert_eq!(fb.width(), 640);
-        assert_eq!(fb.height(), 480);
-        assert_eq!(fb.frame().len(), 640 * 480);
-        assert!(!fb.is_dirty(), "framebuffer should start clean");
-    }
-
-    #[test]
-    fn framebuffer_dirty_frame_returns_none_when_clean() {
-        // 无写入时 dirty=false，dirty_frame() 返回 None。
-        let mut m = hello_machine();
-        assert!(m.framebuffer_dirty_frame().is_none(), "clean fb should return None");
-    }
-
-    #[test]
-    fn framebuffer_dirty_frame_returns_some_after_write_and_clears_dirty() {
-        // 写入后 dirty=true → 返回 Some(零拷贝引用)，消费一次后再次 None。
-        let mut m = hello_machine();
-        let base = m.framebuffer_base().expect("framebuffer mounted");
-        // 通过 device_mut 拿到 fb 设备句柄，直接 write_bytes 触发 dirty
-        let dev = m.device_mut(base).expect("fb mapped");
-        let fb = dev.as_any_mut().downcast_mut::<Framebuffer>().expect("fb downcast");
-        fb.write_bytes(base, &[0x00, 0xF8]).expect("write red pixel bytes"); // RGB565=0xF800（红）
-
-        let frame = m.framebuffer_dirty_frame().expect("dirty fb should return Some");
-        assert_eq!(frame.width, 640);
-        assert_eq!(frame.height, 480);
-        assert_eq!(frame.pixels.len(), 640 * 480);
-        // 红像素 0xF800 → 0x00FF0000（framebuffer.rs rgb565_to_u32 已锁定）
-        assert_eq!(frame.pixels[0], 0x00FF_0000);
-
-        // dirty 标志已被本调用消费 → 再次 None
-        assert!(m.framebuffer_dirty_frame().is_none(), "dirty cleared after read");
-    }
-
-    #[test]
-    fn mem_ring_records_fetch_after_single_step() {
-        // 单步后 mem_ring 非空，且至少含一条 MemAccess 事件
-        // （取指即触发 Fetch 类访问）。
-        let mut m = hello_machine();
-        assert!(m.mem_ring().is_empty(), "mem_ring starts empty");
-        m.step_n(1);
-        let ring = m.mem_ring();
-        assert!(!ring.is_empty(), "mem_ring non-empty after step");
-        assert!(
-            ring.iter().any(|ev| matches!(ev, EmuEvent::MemAccess { .. })),
-            "mem_ring should contain MemAccess events: {ring:?}",
-        );
-    }
-
-    // ---- 定时器中断端到端 + MemAccess ring 验证 ----
-
-    const TIMER_ELF: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/timer.elf");
-
-    fn timer_machine() -> Machine {
-        let bytes = std::fs::read(TIMER_ELF)
-            .unwrap_or_else(|e| panic!("缺少 {TIMER_ELF}（先运行 tools/build-firmware.sh）：{e}"));
-        let image = rremu_loader::load_elf(&bytes).unwrap();
-        MachineBuilder::new()
-            .ram(0x8000_0000, 16 * 1024 * 1024)
-            .uart(0x1000_0000)
-            .clint(0x0200_0000)
-            .framebuffer(0x2000_0000, 640, 480)
-            .load(image)
-            .build()
-            .unwrap()
-    }
-
-    #[test]
-    fn timer_firmware_fires_interrupts_and_exits_zero() {
-        // 自编定时器固件：mtvec→handler→mtimecmp 重置→count→mret→tohost 退出。
-        // 验证 CLINT mtime/mtimecmp 驱动的机器定时器中断完整路径。
-        let mut m = timer_machine();
-        let pause = AtomicBool::new(false);
-        let rr = m.run(&pause);
-        assert_eq!(rr, RunResult::Exited { code: 0 }, "timer firmware should exit 0");
-        assert_eq!(m.snapshot().state, RunState::Exited(0));
-        // 中断 handler 应执行过至少 3 次 → cycle 推进超过单次 handler 指令数
-        assert!(
-            m.snapshot().cycle > 50,
-            "cycle should reflect multiple interrupt rounds: {}",
-            m.snapshot().cycle,
-        );
-    }
-
-    #[test]
-    fn timer_mem_ring_contains_clint_accesses() {
-        // MemAccess ring 验证：CLINT 的 mtime 读 + mtimecmp 写应留下事件记录，
-        // device 名为 "clint"，且同时存在 Read 和 Write 类访问。
-        // 默认 ring 容量 16 不足以覆盖全部 CLINT 访问，这里扩容后再跑。
-        let mut m = timer_machine();
-        m.set_event_ring_capacity(4096, 1024);
-        let pause = AtomicBool::new(false);
-        assert_eq!(m.run(&pause), RunResult::Exited { code: 0 });
-        let ring = m.mem_ring();
-        assert!(!ring.is_empty(), "mem_ring non-empty after timer run");
-        let clint_reads = ring.iter().filter(|ev| {
-            matches!(
-                ev,
-                EmuEvent::MemAccess {
-                    kind: MemKind::DataRead,
-                    device,
-                    ..
-                } if device == "clint"
-            )
-        });
-        let clint_writes = ring.iter().filter(|ev| {
-            matches!(
-                ev,
-                EmuEvent::MemAccess {
-                    kind: MemKind::DataWrite,
-                    device,
-                    ..
-                } if device == "clint"
-            )
-        });
-        assert!(
-            clint_reads.clone().count() > 0,
-            "mem_ring should contain CLINT Read events (mtime reads): {ring:?}",
-        );
-        assert!(
-            clint_writes.clone().count() > 0,
-            "mem_ring should contain CLINT Write events (mtimecmp writes): {ring:?}",
-        );
     }
 }

@@ -28,6 +28,8 @@ pub struct TuiApp {
     fb_view: bool,
     should_quit: bool,
     exit_code: i32,
+    /// 模拟故障原因（不可恢复错误时设置）。
+    fault_reason: Option<String>,
     /// 帧缓冲缓存：仅当 dirty 时从设备拷入，render 读缓存。
     fb_cache: Vec<u32>,
     fb_dims: (u32, u32),
@@ -44,6 +46,7 @@ impl TuiApp {
             fb_view: false,
             should_quit: false,
             exit_code: 0,
+            fault_reason: None,
             fb_cache: Vec::new(),
             fb_dims: (0, 0),
         }
@@ -141,6 +144,10 @@ impl TuiApp {
                 // 不设 should_quit：程序结束后 TUI 保持打开，让用户查看
                 // 最终寄存器/内存状态，按 q 退出。
             }
+            RunResult::Faulted { reason } => {
+                self.running = false;
+                self.fault_reason = Some(reason);
+            }
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {
                 self.running = false;
             }
@@ -188,21 +195,21 @@ impl TuiApp {
         }
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char(' ') if !self.exited => {
-                // Space: toggle run/pause (程序已退出则忽略)
+            KeyCode::Char(' ') if !self.exited && self.fault_reason.is_none() => {
+                // Space: toggle run/pause (程序已退出或故障则忽略)
                 self.running = !self.running;
             }
-            KeyCode::Char('s') if !self.exited => {
+            KeyCode::Char('s') if !self.exited && self.fault_reason.is_none() => {
                 // Single step: pause + one instruction
                 self.running = false;
                 self.single_step();
             }
-            KeyCode::Char('f') if !self.exited => {
+            KeyCode::Char('f') if !self.exited && self.fault_reason.is_none() => {
                 // Direct to full speed
                 self.speed = SpeedTier::Full;
                 self.running = true;
             }
-            KeyCode::Char('i') if !self.exited => {
+            KeyCode::Char('i') if !self.exited && self.fault_reason.is_none() => {
                 // Enter UART input mode
                 self.input_mode = true;
             }
@@ -212,6 +219,7 @@ impl TuiApp {
                     self.exited = false;
                     self.running = false;
                     self.exit_code = 0;
+                    self.fault_reason = None;
                     self.input_mode = false;
                     // 缓存失效：下一帧按重置后的设备全量重填
                     self.fb_dims = (0, 0);

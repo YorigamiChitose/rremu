@@ -6,10 +6,10 @@
 //! | 0x4000  | mtimecmp  | 4B   | RW，定时器比较值（RV32 低 32 位模型） |
 //! | 0xBFF8  | mtime     | 4B   | RO，由 `tick(cycle)` 更新（= cycle as u32） |
 //!
-//! `check_interrupt()` 返回当前 pending 的最高优先级中断 cause：
-//! - msip != 0 → MSI (0x8000_0003)
-//! - mtime >= mtimecmp → MTI (0x8000_0007)
-//! - 同时 pending 时取 cause 码最大值（MTI > MSI）
+//! | `check_interrupt()` 返回当前全部 pending 的中断 cause 列表（含 bit31）：
+//! | msip != 0 → MSI (0x8000_0003)
+//! | mtime >= mtimecmp → MTI (0x8000_0007)
+//! | 同时 pending 时两者都返回（不裁剪），由 CPU 按 spec 序裁决
 
 use core::any::Any;
 use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
@@ -116,15 +116,15 @@ impl BusDevice for Clint {
         self
     }
 
-    fn check_interrupt(&self) -> Option<u32> {
-        let msip_pending = self.msip & 1 != 0;
-        let mtip_pending = self.mtime >= self.mtimecmp;
-        match (msip_pending, mtip_pending) {
-            (false, false) => None,
-            (true, false) => Some(CAUSE_MSI),
-            (false, true) => Some(CAUSE_MTI),
-            (true, true) => Some(CAUSE_MTI), // MTI cause 码 > MSI
+    fn check_interrupt(&self) -> Vec<u32> {
+        let mut causes = Vec::new();
+        if self.msip & 1 != 0 {
+            causes.push(CAUSE_MSI);
         }
+        if self.mtime >= self.mtimecmp {
+            causes.push(CAUSE_MTI);
+        }
+        causes
     }
 
     fn tick(&mut self, cycle: u64) {
@@ -144,7 +144,7 @@ mod tests {
         let mut clint = Clint::new(BASE);
         clint.mtimecmp = 100;
         clint.mtime = 50;
-        assert_eq!(clint.check_interrupt(), None);
+        assert!(clint.check_interrupt().is_empty());
     }
 
     #[test]
@@ -152,9 +152,9 @@ mod tests {
         let mut clint = Clint::new(BASE);
         clint.mtimecmp = 100;
         clint.mtime = 100; // >=
-        assert_eq!(clint.check_interrupt(), Some(0x8000_0007));
+        assert_eq!(clint.check_interrupt(), vec![0x8000_0007]);
         clint.mtime = 150;
-        assert_eq!(clint.check_interrupt(), Some(0x8000_0007));
+        assert_eq!(clint.check_interrupt(), vec![0x8000_0007]);
     }
 
     #[test]
@@ -163,16 +163,20 @@ mod tests {
         clint.msip = 1;
         clint.mtimecmp = u32::MAX; // 确保 timer 不 pending
         clint.mtime = 0;
-        assert_eq!(clint.check_interrupt(), Some(0x8000_0003));
+        assert_eq!(clint.check_interrupt(), vec![0x8000_0003]);
     }
 
     #[test]
-    fn both_pending_returns_higher_cause() {
+    fn both_pending_returns_both_causes() {
+        // 设备侧不裁剪：MSI + MTI 同时 pending 时两者都返回
         let mut clint = Clint::new(BASE);
         clint.msip = 1;
         clint.mtimecmp = 10;
         clint.mtime = 20;
-        assert_eq!(clint.check_interrupt(), Some(0x8000_0007)); // MTI > MSI
+        let causes = clint.check_interrupt();
+        assert!(causes.contains(&0x8000_0003)); // MSI
+        assert!(causes.contains(&0x8000_0007)); // MTI
+        assert_eq!(causes.len(), 2);
     }
 
     #[test]

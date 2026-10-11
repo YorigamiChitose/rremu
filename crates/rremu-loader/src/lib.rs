@@ -10,12 +10,11 @@ pub struct Segment {
     pub data: Vec<u8>,
 }
 
-/// 解析结果：加载段 + 入口 + tohost 符号地址（riscv-tests 必需）。
+/// 解析结果：加载段 + 入口。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub segments: Vec<Segment>,
     pub entry: u32,
-    pub tohost: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -30,7 +29,7 @@ pub enum LoaderError {
     NoSegments,
 }
 
-/// 解析 ELF32 小端 RISC-V 镜像。只取 PT_LOAD 段的文件内容；符号表中查找 `tohost`。
+/// 解析 ELF32 小端 RISC-V 镜像。只取 PT_LOAD 段的文件内容。
 pub fn load_elf(bytes: &[u8]) -> Result<Image, LoaderError> {
     let elf = Elf::parse(bytes).map_err(|e| LoaderError::Parse(e.to_string()))?;
 
@@ -58,14 +57,7 @@ pub fn load_elf(bytes: &[u8]) -> Result<Image, LoaderError> {
         return Err(LoaderError::NoSegments);
     }
 
-    // 符号表提取 tohost（.symtab；riscv-tests 与自研固件均带此符号）
-    let tohost = elf
-        .syms
-        .iter()
-        .find(|sym| elf.strtab.get_at(sym.st_name) == Some("tohost"))
-        .map(|sym| sym.st_value as u32);
-
-    Ok(Image { segments, entry: elf.entry as u32, tohost })
+    Ok(Image { segments, entry: elf.entry as u32 })
 }
 
 #[cfg(test)]
@@ -115,7 +107,6 @@ mod tests {
         assert_eq!(img.segments.len(), 1);
         assert_eq!(img.segments[0].addr, 0x8000_0000);
         assert_eq!(img.segments[0].data, code.to_vec());
-        assert_eq!(img.tohost, None);
     }
 
     #[test]
@@ -131,18 +122,4 @@ mod tests {
         assert!(matches!(load_elf(b"not an elf at all"), Err(LoaderError::Parse(_))));
     }
 
-    #[test]
-    fn hello_elf_parses_with_tohost() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/data/hello.elf");
-        let bytes = std::fs::read(path)
-            .unwrap_or_else(|e| panic!("缺少 {path}（先运行 tools/build-firmware.sh）：{e}"));
-        let img = load_elf(&bytes).unwrap();
-        assert_eq!(img.entry, 0x8000_0000);
-        assert!(!img.segments.is_empty());
-        // tohost 符号在 0x80000080（见 1.7 构建产物）
-        assert_eq!(img.tohost, Some(0x8000_0080));
-        // 代码段从入口地址开始，包含数据
-        let text = img.segments.iter().find(|s| s.addr == 0x8000_0000).expect("text segment");
-        assert!(text.data.len() >= 4);
-    }
 }
