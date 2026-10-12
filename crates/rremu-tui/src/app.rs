@@ -184,13 +184,14 @@ impl TuiApp {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        // Ctrl+C always quits (safety valve in raw mode) — 优先于输入模式。
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
-            return;
-        }
         if self.input_mode {
             self.handle_input_mode_key(key);
+            return;
+        }
+        // Ctrl+C quits (safety valve in raw mode) — 仅命令模式生效；
+        // input mode 下 Ctrl+C 由 handle_input_mode_key 映射为 0x03 传给程序。
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.should_quit = true;
             return;
         }
         match key.code {
@@ -249,12 +250,51 @@ impl TuiApp {
     }
 
     fn handle_input_mode_key(&mut self, key: KeyEvent) {
-        match key.code {
-            KeyCode::Esc => self.input_mode = false,
-            KeyCode::Enter => self.machine.uart_push_input(b'\n'),
-            KeyCode::Char(c) => self.machine.uart_push_input(c as u8),
-            _ => {}
+        if key.code == KeyCode::Esc {
+            self.input_mode = false;
+            return;
         }
+        if let Some(b) = key_to_byte(key) {
+            self.machine.uart_push_input(b);
+        }
+    }
+}
+
+/// crossterm KeyEvent → UART 字节映射（CLI 与 TUI 各持一份，刻意不抽公共 crate）。
+///
+/// 规则：
+/// - 可打印 ASCII 0x20..=0x7E（无 Alt）→ 该字节
+/// - Ctrl+A..Z（无 Alt，大小写不敏感）→ 0x01..=0x1A
+/// - Enter → 0x0A、Backspace → 0x7F、Tab → 0x09
+/// - Esc → None（由调用方当退出信号）
+/// - 其余（F1-F12、方向键、Alt 修饰、非 ASCII）→ None 忽略
+fn key_to_byte(key: KeyEvent) -> Option<u8> {
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return None;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Enter => Some(b'\n'),
+        KeyCode::Tab => Some(b'\t'),
+        KeyCode::Backspace => Some(0x7F),
+        KeyCode::Char(c) if ctrl => {
+            let lc = c.to_ascii_lowercase();
+            if lc.is_ascii_lowercase() {
+                Some((lc as u8) - b'a' + 1)
+            } else {
+                None
+            }
+        }
+        KeyCode::Char(c) => {
+            if c.is_ascii() {
+                let b = c as u8;
+                if (0x20..=0x7E).contains(&b) {
+                    return Some(b);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
