@@ -1,7 +1,8 @@
 //! rremu-cli：GDB 风格 REPL 调试器前端（rustyline）。只通过 machine 公开 API 交互。
 //!
 //! 命令集：`help` / `c` / `si [n]` / `x n m` / `p expr` / `info r` / `q`，
-//! 以及断点/监视点（`b` / `w` / `info w` / `d`）。
+//! 以及断点/监视点（`b` / `w` / `info w` / `d`），
+//! 以及 UART 输入（`uart`：进入 raw 模式逐键发给 UART RX，Esc 退出）。
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -138,6 +139,7 @@ impl Repl {
                 self.cmd_info_watchpoints();
                 Outcome::Continue
             }
+            Command::Uart => self.cmd_uart_input(),
             Command::Quit => Outcome::Quit,
         }
     }
@@ -154,6 +156,7 @@ impl Repl {
         println!("  d N           Delete watchpoint N, or breakpoint N (index from 'info w')");
         println!("  info r        Show registers and CSRs");
         println!("  info w        List breakpoints and watchpoints");
+        println!("  uart          Enter UART input mode (raw key→byte→UART RX, Esc to exit)");
         println!("  q             Quit");
     }
 
@@ -350,6 +353,48 @@ impl Repl {
         }
     }
 
+    /// 进入 UART 输入模式：切到 raw mode，逐键→字节→`uart_push_input`；
+    /// Esc 退出。期间不步进机器（字节入 FIFO，用户后续 `c` 时由程序 drain）。
+    /// 非 TTY（管道/批处理）拒绝执行。
+    fn cmd_uart_input(&mut self) -> Outcome {
+        use std::io::IsTerminal;
+
+        if !std::io::stdin().is_terminal() {
+            eprintln!("rremu: uart: stdin is not a terminal");
+            return Outcome::Continue;
+        }
+
+        // banner 先于 raw mode：raw 下 \n 不回列首，写起来要 \r\n，麻烦且无必要。
+        println!("[input mode — Esc 退出，按键发给 UART]");
+
+        if let Err(e) = crossterm::terminal::enable_raw_mode() {
+            eprintln!("rremu: failed to enable raw mode: {e}");
+            return Outcome::Continue;
+        }
+
+        loop {
+            match crossterm::event::read() {
+                Ok(crossterm::event::Event::Key(k)) => {
+                    if matches!(k.code, crossterm::event::KeyCode::Esc) {
+                        break;
+                    }
+                    if let Some(b) = key_to_byte(k) {
+                        self.machine.uart_push_input(b);
+                    }
+                }
+                Ok(_) => {} // mouse/resize/paste 暂忽略；paste 处理 TODO
+                Err(e) => {
+                    eprintln!("\r\nrremu: event read error: {e}");
+                    break;
+                }
+            }
+        }
+
+        let _ = crossterm::terminal::disable_raw_mode();
+        println!();
+        Outcome::Continue
+    }
+
     fn flush_uart(&mut self) {
         let bytes = self.machine.drain_uart();
         if !bytes.is_empty() {
@@ -446,6 +491,8 @@ enum Command {
     Watchpoint(Expr),
     Delete(usize),
     InfoWatchpoints,
+    /// 进入 UART 输入模式：raw mode 下逐键→字节→UART RX，Esc 退出。
+    Uart,
     Quit,
 }
 
@@ -512,7 +559,48 @@ fn parse_command(line: &str) -> Result<Command, String> {
             Ok(Command::Delete(n))
         }
         "q" | "quit" | "exit" => Ok(Command::Quit),
+        "uart" => Ok(Command::Uart),
         _ => Err(format!("unknown command: {cmd} (type 'help')")),
+    }
+}
+
+/// crossterm KeyEvent → UART 字节映射（CLI 与 TUI 各持一份，刻意不抽公共 crate）。
+///
+/// 规则：
+/// - 可打印 ASCII 0x20..=0x7E（无 Alt）→ 该字节
+/// - Ctrl+A..Z（无 Alt，大小写不敏感）→ 0x01..=0x1A
+/// - Enter → 0x0A、Backspace → 0x7F、Tab → 0x09
+/// - Esc → None（由调用方当退出信号）
+/// - 其余（F1-F12、方向键、Alt 修饰、非 ASCII）→ None 忽略
+fn key_to_byte(key: crossterm::event::KeyEvent) -> Option<u8> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return None;
+    }
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::Enter => Some(b'\n'),
+        KeyCode::Tab => Some(b'\t'),
+        KeyCode::Backspace => Some(0x7F),
+        KeyCode::Char(c) if ctrl => {
+            let lc = c.to_ascii_lowercase();
+            if lc.is_ascii_lowercase() {
+                Some((lc as u8) - b'a' + 1)
+            } else {
+                None
+            }
+        }
+        KeyCode::Char(c) => {
+            if c.is_ascii() {
+                let b = c as u8;
+                if (0x20..=0x7E).contains(&b) {
+                    return Some(b);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -548,5 +636,64 @@ mod tests {
         assert!(parse_command("info zzz").is_err());
         assert!(parse_command("x").is_err());
         assert!(parse_command("p").is_err());
+    }
+
+    #[test]
+    fn parse_uart_command() {
+        assert!(matches!(parse_command("uart").unwrap(), Command::Uart));
+    }
+
+    #[test]
+    fn key_to_byte_printable_ascii() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let nm = KeyModifiers::NONE;
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), nm)), Some(b'a'));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)), Some(b'A'));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char(' '), nm)), Some(b' '));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('~'), nm)), Some(b'~'));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('/'), nm)), Some(b'/'));
+    }
+
+    #[test]
+    fn key_to_byte_control_letters() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(0x03));
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
+            Some(0x03)
+        );
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)), Some(0x01));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)), Some(0x1A));
+        // Ctrl+1 等非字母不做映射
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL)), None);
+    }
+
+    #[test]
+    fn key_to_byte_special_keys() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let nm = KeyModifiers::NONE;
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Enter, nm)), Some(b'\n'));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Tab, nm)), Some(b'\t'));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Backspace, nm)), Some(0x7F));
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Esc, nm)), None);
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::F(1), nm)), None);
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Left, nm)), None);
+    }
+
+    #[test]
+    fn key_to_byte_alt_suppresses() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)), None);
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT | KeyModifiers::CONTROL)),
+            None
+        );
+    }
+
+    #[test]
+    fn key_to_byte_non_ascii_dropped() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        // CJK 等 Unicode 字符暂不支持
+        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('中'), KeyModifiers::NONE)), None);
     }
 }

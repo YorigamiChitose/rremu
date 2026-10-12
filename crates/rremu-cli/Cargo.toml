@@ -8,6 +8,7 @@ rust-version.workspace = true
 rremu-machine.workspace = true
 rremu-expr.workspace = true
 rustyline.workspace = true
+crossterm.workspace = true
 
 [lints]
 workspace = true

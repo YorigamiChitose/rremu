@@ -1522,6 +1522,7 @@ dependencies = [
 name = "rremu-cli"
 version = "0.1.0"
 dependencies = [
+ "crossterm",
  "rremu-expr",
  "rremu-machine",
  "rustyline",
