@@ -37,14 +37,18 @@ impl CsrState {
     }
 }
 
-/// 单步结果：正常执行一条、陷入，或 ebreak 触发宿主退出。
+/// 单步结果：正常执行一条、陷入，或 ecall+a7=EXIT_MAGIC 触发宿主退出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepOutcome {
     Executed { instr: Instruction, len: u8 },
     Trapped { cause: u32 },
-    /// 执行 ebreak/c.ebreak：以 a0（x10）为退出码终止模拟（宿主陷阱协议）。
+    /// 执行 ecall 且 a7==EXIT_MAGIC：以 a0（x10）为退出码终止模拟（宿主陷阱协议）。
     Exited { code: i32 },
 }
+
+/// 宿主陷阱协议魔术数：M-mode ecall 且 `a7 == EXIT_MAGIC` 时模拟器以 `a0` 为退出码退出。
+/// 选 0xCAFE_0000 是 rremu 专用值，避开 Linux syscall ABI（a7=0..~300）与 AM yield（a7=-1）。
+pub const EXIT_MAGIC: u32 = 0xCAFE_0000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum CpuError {
@@ -228,8 +232,9 @@ impl Cpu {
                 Ok(StepOutcome::Executed { instr, len })
             }
             Err(TrapErr { cause }) => {
-                // ebreak/c.ebreak：宿主陷阱协议——以 a0(x10) 为退出码终止模拟。
-                if cause == cause::BREAKPOINT {
+                // ecall+a7=EXIT_MAGIC：宿主陷阱协议——以 a0(x10) 为退出码终止模拟。
+                // 其余 cause（含 ebreak 的 BREAKPOINT）走正常 trap。
+                if cause == cause::ECALL_FROM_M && self.x[17] == EXIT_MAGIC {
                     let code = self.x[10] as i32;
                     return Ok(StepOutcome::Exited { code });
                 }
@@ -1298,21 +1303,21 @@ mod tests {
     }
 
     #[test]
-    fn exec_c_ebreak() {
-        // c.ebreak 触发宿主退出，退出码取 a0(x10)。
+    fn exec_c_ebreak_traps_normally() {
+        // c.ebreak 标准陷阱语义：mcause=BREAKPOINT，pc=mtvec（未设时 0）。
         let mut h = Harness::new();
         c_load(&mut h, BASE, &[
             Instruction::CAddi { rd: 10, imm: 1 }, // a0 = 1
             Instruction::CEbreak,
         ]);
         h.step(); // c.addi a0, 1
-        let outcome = h.step(); // c.ebreak → Exited { code: 1 }
-        assert_eq!(outcome, StepOutcome::Exited { code: 1 });
+        let outcome = h.step(); // c.ebreak → Trapped { cause: BREAKPOINT }
+        assert_eq!(outcome, StepOutcome::Trapped { cause: cause::BREAKPOINT });
     }
 
     #[test]
-    fn exec_ebreak_uses_a0_as_exit_code() {
-        // ebreak 退出码 = a0(x10)；a0 非零时透传
+    fn exec_ebreak_traps_normally_32bit() {
+        // 32 位 ebreak 同样走标准陷阱路径（确认未被宿主协议拦截）。
         let mut h = Harness::new();
         h.load(BASE, &[
             i_enc(OP_IMM, 10, 0b000, 0, 0x2a), // addi a0, zero, 42
@@ -1320,7 +1325,35 @@ mod tests {
         ]);
         h.step();
         let outcome = h.step();
+        assert_eq!(outcome, StepOutcome::Trapped { cause: cause::BREAKPOINT });
+    }
+
+    #[test]
+    fn exec_ecall_magic_exits_with_a0() {
+        // ecall + a7=EXIT_MAGIC → 宿主退出，退出码取 a0(x10)。
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            u_enc(0b0110111, 17, 0xCAFE0),                 // lui a7, 0xCAFE0  → a7 = EXIT_MAGIC
+            i_enc(OP_IMM, 10, 0b000, 0, 0x2a),             // addi a0, zero, 42
+            i_enc(0b1110011, 0, 0b000, 0, 0),               // ecall
+        ]);
+        h.step(); // lui
+        h.step(); // addi
+        let outcome = h.step(); // ecall → Exited { code: 42 }
         assert_eq!(outcome, StepOutcome::Exited { code: 42 });
+    }
+
+    #[test]
+    fn exec_ecall_without_magic_traps_normally() {
+        // ecall 但 a7≠EXIT_MAGIC → 走标准 ecall-from-M 陷阱路径。
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 17, 0b000, 0, 1),                // a7 = 1（非魔术数）
+            i_enc(0b1110011, 0, 0b000, 0, 0),               // ecall
+        ]);
+        h.step(); // addi
+        let outcome = h.step(); // ecall → Trapped { cause: ECALL_FROM_M }
+        assert_eq!(outcome, StepOutcome::Trapped { cause: cause::ECALL_FROM_M });
     }
 
     #[test]

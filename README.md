@@ -19,7 +19,7 @@
   Framebuffer（RGB565 → 0x00RRGGBB），均经 `BusDevice` trait 接入总线
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
   C 风格运算符）、无副作用内存 peek、事件环
-- **退出约定**：`ebreak`/`c.ebreak` 为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`
+- **退出约定**：M-mode `ecall` 且 `a7 == 0xCAFE_0000`（`EXIT_MAGIC`）为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`。其余 `ecall`（含 `a7 == -1` 的 AM yield）走标准 ecall-from-M 陷阱；`ebreak`/`c.ebreak` 走标准 breakpoint 陷阱
 
 ## 架构
 
@@ -125,4 +125,4 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ebreak 退出、UART 输出、CLINT 中断、riscv-tests 等）由独立的外部测试项目承担。
+仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ecall+a7=magic 退出、UART 输出、CLINT 中断、riscv-tests 等）由独立的外部测试项目承担。
