@@ -349,15 +349,16 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             Ok(Instruction::CLi { rd, imm })
         }
         (0b01, 0b011) => {
-            // c.addi16sp 时 rd 隐含为 x2，bits[9:7] 必须为 010，
-            // bits[11:10] 分别存放 imm[3]、imm[5]
-            if (half >> 7) & 0x7 == 0b010 {
+            // c.addi16sp 与 c.lui 共用 CI 编码空间，由 rd 字段区分：
+            // rd==x2(00010) → c.addi16sp（rd 隐含为 sp，bits[11:7]=00010）
+            // rd∉{x0,x2}     → c.lui（rd 字段为目标寄存器）
+            let rd = ((half >> 7) & 0x1f) as u8;
+            if rd == 2 {
                 // c.addi16sp
                 let imm = c_imm_addi16sp(half);
                 Ok(Instruction::CAddi16sp { imm })
             } else {
                 // c.lui
-                let rd = ((half >> 7) & 0x1f) as u8;
                 let imm = c_imm_lui(half);
                 if imm == 0 {
                     return Err(illegal); // 保留编码
@@ -967,5 +968,24 @@ mod tests {
             let decoded = decode16(h, PC).unwrap_or_else(|e| panic!("decode failed for {instr:?}: {e}"));
             assert_eq!(decoded, *instr, "round-trip failed for {instr:?}: encoded={h:#06x}, decoded={decoded:?}");
         }
+    }
+
+    /// 回归测试：c.lui rd=x10(a0) 不得被误判为 c.addi16sp。
+    ///
+    /// C.LUI 与 C.ADDI16SP 共用 CI 编码空间（op=01, funct3=011），由 rd 字段区分：
+    /// rd==x2 → c.addi16sp；rd∉{x0,x2} → c.lui。早期实现只取 bits[9:7] 做 3 位
+    /// 比较（==0b010），同时命中 x2(00010) 与 x10(01010)，导致 c.lui a0 被错误
+    /// 解码为 c.addi16sp，使 a0 保持为 0 而非装入 0xC000。
+    #[test]
+    fn c_lui_rd_a0_not_misidentified_as_addi16sp() {
+        // c.lui a0, 12（imm=0xC000）的编码：rd=10 → bits[11:7]=01010
+        // bits[9:7]=010，恰为旧实现误匹配 c.addi16sp 的模式。
+        let h: u16 = (0b011 << 13) | (10u16 << 7) | (12u16 << 2) | 0b01;
+        assert_eq!(h, 0x6531);
+        assert_eq!(
+            decode16(h, PC),
+            Ok(Instruction::CLui { rd: 10, imm: 0xC000 }),
+            "c.lui a0 被误判为 c.addi16sp（rd 字段 bits[9:7] 比较缺陷）"
+        );
     }
 }
