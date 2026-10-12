@@ -92,6 +92,7 @@ rremu --tui <ELF>
 | `d N` | 删除第 N 个断点/监视点 |
 | `info r` | 查看寄存器与 CSR |
 | `info w` | 列出断点与监视点 |
+| `uart` | 进入 UART 输入模式（按键原样映射为字节注入 RX，`Esc` 返回；输入模式下 Ctrl+C 仍传给程序为 0x03） |
 | `help` / `q` | 帮助 / 退出 |
 
 ### TUI 按键
@@ -125,4 +126,4 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ecall+a7=magic 退出、UART 输出、CLINT 中断、riscv-tests 等）由独立的外部测试项目承担。
+仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ecall+a7=magic 退出、UART 输出、CLINT 中断等端到端场景）由独立的外部测试项目 `rremu-test`（配合 HAL 库 `rremu-am`）承担。
