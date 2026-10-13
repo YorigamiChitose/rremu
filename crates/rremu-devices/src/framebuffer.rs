@@ -8,7 +8,7 @@
 //! `frame()` 返回 `&[u32]`，每个 u32 由 RGB565 扩展为 `0x00RRGGBB`。
 //! 任何写置 `dirty` 标志；`peek_read` 无副作用（不置 dirty）。
 
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, FrameSource};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, FrameSource, Resetable};
 
 /// RGB565 → 0x00RRGGBB（R5→8位、G6→8位、B5→8位，高位填充低位副本）。
 fn rgb565_to_u32(rgb565: u16) -> u32 {
@@ -142,6 +142,18 @@ impl BusDevice for Framebuffer {
     fn as_frame_source(&mut self) -> Option<&mut dyn FrameSource> {
         Some(self)
     }
+
+    fn as_resetable(&mut self) -> Option<&mut dyn Resetable> {
+        Some(self)
+    }
+}
+
+impl Resetable for Framebuffer {
+    fn reset(&mut self) {
+        self.pixels.fill(0);
+        self.frame.fill(0);
+        self.dirty = false;
+    }
 }
 
 impl FrameSource for Framebuffer {
@@ -266,6 +278,18 @@ mod tests {
         let mut fb = fb();
         let mut sink = rremu_bus::NullSink;
         assert_eq!(fb.read(BASE + 100, AccessSize::Word, &mut sink).unwrap(), 0);
+    }
+
+    #[test]
+    fn reset_clears_pixels_and_dirty() {
+        let mut fb = fb();
+        let mut sink = rremu_bus::NullSink;
+        fb.write(BASE, AccessSize::Half, 0xF800, &mut sink).unwrap();
+        assert!(fb.is_dirty());
+        Resetable::reset(&mut fb);
+        assert!(!fb.is_dirty());
+        assert_eq!(fb.frame()[0], 0);
+        assert_eq!(fb.read(BASE, AccessSize::Half, &mut sink).unwrap(), 0);
     }
 
     #[test]

@@ -168,8 +168,8 @@ impl Cpu {
 
     /// 取指 → 解码 → 执行 → 写回；错误路径统一走 trap。
     ///
-    /// 中断检查在取指**之前**：三层 AND 门控 ——
-    /// mstatus.MIE（全局使能）& mie 对应位（单独使能）& 硬件 pending。
+    /// 陷阱优先级（取指异常优先于中断）：先取指（含对齐检查），取指成功后再检查
+    /// 中断（三层 AND 门控 —— mstatus.MIE & mie 对应位 & 硬件 pending）。
     /// 设备侧 `check_interrupt()` 返回全部 pending cause（不裁剪优先级）；
     /// CPU 按 spec 序 MEI>MSI>MTI 遍历，跳过未使能者，取第一个已使能的中断。
     /// 中断命中时 mepc = 当前 pc（未执行的下一条指令），mret 后重新执行。
@@ -177,33 +177,33 @@ impl Cpu {
         bus.set_cycle(self.cycle);
         let pc = self.pc;
 
-        // 中断检查（取指前）
+        // 取指前先做对齐检查：取指 misaligned 优先于中断
+        if pc & 0x1 != 0 {
+            return self.trap(sink, cause::INSTR_MISALIGNED, pc);
+        }
+
+        // 取指单元(IFU)：取指 access fault 优先于中断
+        let word = match Self::fetch_word(bus, pc, sink) {
+            Ok(w) => w,
+            Err(c) => return self.trap(sink, c, pc),
+        };
+
+        // 设备 pending 同步到 mip（软件读 mip 可见），并在取指成功后检查中断
+        let pending = bus.pending_interrupts();
+        self.sync_mip(&pending);
         if (self.csr.mstatus & csr::MSTATUS_MIE) != 0 {
-            let pending = bus.pending_interrupts();
             // spec 优先级：MEI(11) > MSI(3) > MTI(7)
             const PRIORITY: [u32; 3] = [cause::M_EI, cause::M_SI, cause::M_TI];
             for &c in &PRIORITY {
                 if pending.contains(&c) {
                     let int_id = c & 0x7fff_ffff;
                     if (self.csr.mie >> int_id) & 1 == 1 {
-                        return self.trap(sink, c);
+                        return self.trap(sink, c, 0);
                     }
                 }
             }
         }
 
-        // pc 必须 2 字节对齐（C 扩展允许 2 字节对齐）。取指原语 inst_read 也会按
-        // size 查对齐，这里在拆分前先统一拦截奇数地址 → INSTR_MISALIGNED。
-        if pc & 0x1 != 0 {
-            return self.trap(sink, cause::INSTR_MISALIGNED);
-        }
-
-        // 取指单元(IFU)：取回 pc 处完整 4 字节指令字。跨 XLEN 的拆分编排（对齐一次
-        // Word / pc&3==2 两次 Half 拼合）在 CPU 侧决定，bus.inst_read 只是单次对齐原语。
-        let word = match Self::fetch_word(bus, pc, sink) {
-            Ok(w) => w,
-            Err(c) => return self.trap(sink, c),
-        };
         let lo = word as u16;
 
         let (instr, len) = if instr_len(lo) == 2 {
@@ -211,7 +211,7 @@ impl Cpu {
             match decode16(lo, pc) {
                 Ok(i) => (i, 2u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                    return self.trap(sink, cause::ILLEGAL_INSTR)
+                    return self.trap(sink, cause::ILLEGAL_INSTR, word)
                 }
             }
         } else {
@@ -219,7 +219,7 @@ impl Cpu {
             match decode32(word, pc) {
                 Ok(i) => (i, 4u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                    return self.trap(sink, cause::ILLEGAL_INSTR)
+                    return self.trap(sink, cause::ILLEGAL_INSTR, word)
                 }
             }
         };
@@ -231,14 +231,16 @@ impl Cpu {
                 self.instret += 1;
                 Ok(StepOutcome::Executed { instr, len })
             }
-            Err(TrapErr { cause }) => {
+            Err(TrapErr { cause, mtval }) => {
                 // ecall+a7=EXIT_MAGIC：宿主陷阱协议——以 a0(x10) 为退出码终止模拟。
-                // 其余 cause（含 ebreak 的 BREAKPOINT）走正常 trap。
+                // 退出指令也计入一个 cycle 与 instret。
                 if cause == cause::ECALL_FROM_M && self.x[17] == EXIT_MAGIC {
                     let code = self.x[10] as i32;
+                    self.cycle += 1;
+                    self.instret += 1;
                     return Ok(StepOutcome::Exited { code });
                 }
-                self.trap(sink, cause)
+                self.trap(sink, cause, mtval)
             }
         }
     }
@@ -438,9 +440,9 @@ impl Cpu {
             Instruction::Fence => {}
             Instruction::Ecall => {
                 let c = if self.priv_ == Priv::Machine { cause::ECALL_FROM_M } else { cause::ECALL_FROM_U };
-                return Err(TrapErr { cause: c });
+                return Err(TrapErr { cause: c, mtval: 0 });
             }
-            Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT }),
+            Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
             Instruction::Csrrw { rd, csr, rs1 } => {
                 let old = self.csr_read(csr);
                 self.csr_write(csr, x(self, rs1));
@@ -534,7 +536,7 @@ impl Cpu {
             }
             Instruction::CJr { rs1 } => next_pc = x(self, rs1) & !1,
             Instruction::CMv { rd, rs2 } => set!(rd, x(self, rs2)),
-            Instruction::CEbreak => return Err(TrapErr { cause: cause::BREAKPOINT }),
+            Instruction::CEbreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
             Instruction::CJalr { rs1 } => {
                 set!(1u8, pc.wrapping_add(2u32));
                 next_pc = x(self, rs1) & !1;
@@ -557,6 +559,7 @@ impl Cpu {
     ) -> Result<u32, TrapErr> {
         bus.data_read(addr, size, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
+            mtval: addr,
         })
     }
 
@@ -571,14 +574,16 @@ impl Cpu {
     ) -> Result<(), TrapErr> {
         bus.data_write(addr, size, data, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
+            mtval: addr,
         })
     }
 
-    /// 陷入流程：mepc ← pc；mcause ← cause；priv ← M；pc ← mtvec（仅 DIRECT）。
-    fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32) -> Result<StepOutcome, CpuError> {
+    /// 陷入流程：mepc ← pc；mcause ← cause；mtval ← mtval；priv ← M；pc ← mtvec（仅 DIRECT）。
+    fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
         sink.emit(EmuEvent::Trap { cause, pc: self.pc });
         self.csr.mepc = self.pc;
         self.csr.mcause = cause;
+        self.csr.mtval = mtval;
 
         // 更新 mstatus: MPP = 当前特权级, MPIE = 旧 MIE, MIE = 0
         let mpp = match self.priv_ {
@@ -596,11 +601,28 @@ impl Cpu {
         self.pc = self.csr.mtvec & !1;
         Ok(StepOutcome::Trapped { cause })
     }
+
+    /// 将设备 pending 中断投影到 mip 的 MSIP/MTIP/MEIP 位（软件只读）。
+    /// 其余位（如 SSIP）保留软件可写值，不被设备覆盖。
+    fn sync_mip(&mut self, pending: &[u32]) {
+        let mut dev = 0u32;
+        for &c in pending {
+            dev |= match c {
+                cause::M_SI => csr::MIP_MSIP,
+                cause::M_TI => csr::MIP_MTIP,
+                cause::M_EI => csr::MIP_MEIP,
+                _ => 0,
+            };
+        }
+        let mask = csr::MIP_MSIP | csr::MIP_MTIP | csr::MIP_MEIP;
+        self.csr.mip = (self.csr.mip & !mask) | dev;
+    }
 }
 
 /// 执行期内部 trap 信号（bus 错误 → cause 映射已完成）。
 struct TrapErr {
     cause: u32,
+    mtval: u32,
 }
 
 #[cfg(test)]
@@ -1575,5 +1597,75 @@ mod tests {
         let mut sink = Sink(Vec::new());
         let outcome = cpu.step(&mut bus, &mut sink).unwrap();
         assert_eq!(outcome, StepOutcome::Trapped { cause: cause::M_SI });
+    }
+
+    // ---- audit 修复回归测试 ----
+
+    #[test]
+    fn trap_sets_mtval_for_load_fault() {
+        // lw t0, 0x234(x0) → 地址 0x234 未映射 → LOAD_ACCESS_FAULT，mtval=0x234
+        let mut h = Harness::new();
+        h.load(BASE, &[i_enc(LOAD, 5, 0b010, 0, 0x234)]);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::LOAD_ACCESS_FAULT });
+        assert_eq!(h.cpu.csr_read(csr::MTVAL), 0x234);
+    }
+
+    #[test]
+    fn trap_sets_mtval_for_illegal_instr() {
+        let mut h = Harness::new();
+        h.load(BASE, &[0xffff_ffff]);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
+        assert_eq!(h.cpu.csr_read(csr::MTVAL), 0xffff_ffff);
+    }
+
+    #[test]
+    fn exit_ecall_counts_cycle_and_instret() {
+        // lui a7, 0xCAFE0 ; addi a0, x0, 42 ; ecall → 三条指令都计入 cycle/instret
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            u_enc(0b0110111, 17, 0xCAFE0),
+            i_enc(OP_IMM, 10, 0b000, 0, 0x2a),
+            i_enc(0b1110011, 0, 0b000, 0, 0),
+        ]);
+        h.step();
+        h.step();
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Exited { code: 42 });
+        assert_eq!(h.cpu.cycle(), 3);
+        assert_eq!(h.cpu.instret(), 3);
+    }
+
+    #[test]
+    fn fetch_misaligned_has_priority_over_interrupt() {
+        // 奇数 pc + MTI pending + 使能 → 取指 misaligned 优先于中断
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+
+        let mut cpu = Cpu::new(BASE + 1); // 奇数 pc
+        cpu.csr.mstatus = csr::MSTATUS_MIE | csr::MSTATUS_MPP_M;
+        cpu.csr.mie = csr::MIE_MTIE;
+        cpu.csr.mtvec = BASE + 0x800;
+
+        let mut sink = Sink(Vec::new());
+        let outcome = cpu.step(&mut bus, &mut sink).unwrap();
+        assert_eq!(outcome, StepOutcome::Trapped { cause: cause::INSTR_MISALIGNED });
+    }
+
+    #[test]
+    fn mip_reflects_device_pending() {
+        // MSI pending（但 MIE=0 不触发）→ step 后 mip.MSIP 应被投影为 1
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_SI))).unwrap();
+
+        let mut cpu = Cpu::new(BASE);
+        cpu.csr.mstatus = csr::MSTATUS_MPP_M; // MIE=0
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        h.load(BASE, &[0x0000_0013]); // NOP
+        h.step();
+        assert_eq!(h.cpu.csr_read(csr::MIP) & csr::MIP_MSIP, csr::MIP_MSIP);
     }
 }

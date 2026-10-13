@@ -361,9 +361,11 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
                 // c.lui
                 let imm = c_imm_lui(half);
                 if imm == 0 {
-                    return Err(illegal); // 保留编码
+                    // HINT（NOP）：nzimm==0（或 rd==x0）为保留/HINT 编码
+                    Ok(Instruction::CLui { rd: 0, imm: 0 })
+                } else {
+                    Ok(Instruction::CLui { rd, imm })
                 }
-                Ok(Instruction::CLui { rd, imm })
             }
         }
         (0b01, 0b100) => {
@@ -436,6 +438,9 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             let bit12 = (half >> 12) & 0x1;
             if bit12 == 0 {
                 if rs2 == 0 {
+                    if rs1 == 0 {
+                        return Err(illegal); // c.jr x0 保留编码
+                    }
                     // c.jr
                     Ok(Instruction::CJr { rs1 })
                 } else {
@@ -987,5 +992,22 @@ mod tests {
             Ok(Instruction::CLui { rd: 10, imm: 0xC000 }),
             "c.lui a0 被误判为 c.addi16sp（rd 字段 bits[9:7] 比较缺陷）"
         );
+    }
+
+    #[test]
+    fn decode_c_hint_and_reserved_encodings() {
+        // HINT 编码应解码为 NOP 等价物；保留编码应 illegal。
+        // c.lui nzimm==0（rd=8）→ HINT（CLui{rd:0,imm:0}，执行时不写寄存器）
+        let lui_hint: u16 = (0b011 << 13) | (8u16 << 7) | 0b01;
+        assert_eq!(decode16(lui_hint, PC), Ok(Instruction::CLui { rd: 0, imm: 0 }));
+        // c.addi16sp nzimm==0（rd=2）→ HINT（CAddi16sp{imm:0}，sp 不变）
+        let addi16sp_hint: u16 = (0b011 << 13) | (2u16 << 7) | 0b01;
+        assert_eq!(decode16(addi16sp_hint, PC), Ok(Instruction::CAddi16sp { imm: 0 }));
+        // c.slli rd==x0 → HINT（CSlli{rd:0}，写 x0 被忽略）
+        let slli_hint: u16 = 0b10;
+        assert_eq!(decode16(slli_hint, PC), Ok(Instruction::CSlli { rd: 0, shamt: 0 }));
+        // c.jr x0 → 保留编码（illegal）
+        let jr_x0: u16 = (0b100 << 13) | 0b10;
+        assert!(decode16(jr_x0, PC).is_err());
     }
 }

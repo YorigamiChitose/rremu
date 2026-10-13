@@ -11,7 +11,7 @@
 //! | mtime >= mtimecmp → MTI (0x8000_0007)
 //! | 同时 pending 时两者都返回（不裁剪），由 CPU 按 spec 序裁决
 
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, Resetable};
 
 const REG_MSIP: u32 = 0x0000;
 const REG_MTIMECMP: u32 = 0x4000;
@@ -35,7 +35,8 @@ pub struct Clint {
 
 impl Clint {
     pub fn new(base: u32) -> Self {
-        Self { base, msip: 0, mtimecmp: 0, mtime: 0 }
+        // mtimecmp 初始 u32::MAX，避免复位后 mtime(0) >= mtimecmp(0) 立即产生虚假 MTI
+        Self { base, msip: 0, mtimecmp: u32::MAX, mtime: 0 }
     }
 
     fn offset(&self, addr: u32) -> u32 {
@@ -125,6 +126,18 @@ impl BusDevice for Clint {
     fn tick(&mut self, cycle: u64) {
         self.mtime = cycle as u32;
     }
+
+    fn as_resetable(&mut self) -> Option<&mut dyn Resetable> {
+        Some(self)
+    }
+}
+
+impl Resetable for Clint {
+    fn reset(&mut self) {
+        self.msip = 0;
+        self.mtimecmp = u32::MAX;
+        self.mtime = 0;
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +195,13 @@ mod tests {
         assert_eq!(clint.mtime, 42);
         clint.tick(100);
         assert_eq!(clint.mtime, 100);
+    }
+
+    #[test]
+    fn new_state_has_no_pending_interrupt() {
+        // 复位后 mtimecmp=u32::MAX，mtime=0 < mtimecmp，不应有虚假 MTI
+        let clint = Clint::new(BASE);
+        assert!(clint.check_interrupt().is_empty());
     }
 
     #[test]

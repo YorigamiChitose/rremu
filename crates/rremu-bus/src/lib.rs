@@ -243,6 +243,11 @@ impl BusRouter {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
         let idx = self.region_index(addr)?;
+        // 访问不得跨出设备区间末尾（否则设备内部可能越界 panic）
+        let access_end = addr.checked_add(size.bytes()).ok_or(BusError::Unmapped { addr })?;
+        if access_end > self.regions[idx].range.end {
+            return Err(BusError::Unmapped { addr: access_end });
+        }
         let region = &mut self.regions[idx];
         let value = region.device.read(addr, size, sink)?;
         sink.emit(EmuEvent::MemAccess {
@@ -268,6 +273,11 @@ impl BusRouter {
         Self::check_align(addr, size)?;
         let cycle = self.cycle;
         let idx = self.region_index(addr)?;
+        // 访问不得跨出设备区间末尾（否则设备内部可能越界 panic）
+        let access_end = addr.checked_add(size.bytes()).ok_or(BusError::Unmapped { addr })?;
+        if access_end > self.regions[idx].range.end {
+            return Err(BusError::Unmapped { addr: access_end });
+        }
         let region = &mut self.regions[idx];
         region.device.write(addr, size, data, sink)?;
         sink.emit(EmuEvent::MemAccess {
@@ -422,6 +432,26 @@ mod tests {
         assert_eq!(bus.data_read(0x9000_0000, AccessSize::Word, &mut sink), Err(BusError::Unmapped { addr: 0x9000_0000 }));
         assert_eq!(bus.data_write(0x1000_0000, AccessSize::Byte, 1, &mut sink), Err(BusError::Unmapped { addr: 0x1000_0000 }));
         assert!(bus.peek(0x0, AccessSize::Word).is_err());
+    }
+
+    #[test]
+    fn access_crossing_region_end_returns_unmapped() {
+        // RAM 大小非 4 的倍数时，跨末尾的 Word 访问应返回 Unmapped 而非 panic
+        let mut bus = BusRouter::new();
+        bus.map(0x8000_0000..0x8000_000A, Box::new(MockRam::new(0x8000_0000, 10, "ram"))).unwrap();
+        let mut sink = Collector::default();
+        // Word 读 0x8000_0008 → 8..12 跨出 0x8000_000A
+        assert_eq!(
+            bus.data_read(0x8000_0008, AccessSize::Word, &mut sink),
+            Err(BusError::Unmapped { addr: 0x8000_000C })
+        );
+        assert_eq!(
+            bus.data_write(0x8000_0008, AccessSize::Word, 0, &mut sink),
+            Err(BusError::Unmapped { addr: 0x8000_000C })
+        );
+        // 区间内访问仍正常
+        bus.data_write(0x8000_0000, AccessSize::Word, 0xDEAD_BEEF, &mut sink).unwrap();
+        assert_eq!(bus.peek(0x8000_0000, AccessSize::Word).unwrap(), 0xDEAD_BEEF);
     }
 
     #[test]

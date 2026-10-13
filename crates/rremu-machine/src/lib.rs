@@ -523,6 +523,7 @@ impl Machine {
 
         // 断点：命中则不执行，直接返回；刚命中过的地址放行一次（越过断点）
         if let Some(rr) = self.dbg.check_breakpoint(pc_before) {
+            self.state = RunState::Paused;
             return Some(rr);
         }
         self.dbg.clear_suppress();
@@ -535,7 +536,11 @@ impl Machine {
                     return Some(RunResult::Exited { code });
                 }
                 // 监视点：检查每个被跟踪表达式的值是否变化
-                self.check_watchpoints(pc_before)
+                if let Some(rr) = self.check_watchpoints(pc_before) {
+                    self.state = RunState::Paused;
+                    return Some(rr);
+                }
+                None
             }
             // ebreak/c.ebreak 宿主陷阱：以 a0 为退出码终止，发出 Halt 事件
             Ok(StepOutcome::Exited { code }) => {
@@ -606,12 +611,12 @@ impl Machine {
     /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
     pub fn reset(&mut self) -> Result<(), MachineError> {
         self.cpu.reset(self.entry);
-        // 通过 Resetable 能力复位 RAM；找不到可复位设备视为配置错误。
-        let ram = self.bus.device_mut(self.ram_base)
-            .ok_or_else(|| MachineError::ResetFailed(format!("no device at RAM base {:#x}", self.ram_base)))?;
-        let resetable = ram.as_resetable()
-            .ok_or_else(|| MachineError::ResetFailed("device at RAM base does not support reset".to_owned()))?;
-        resetable.reset();
+        // 复位 RAM（必须成功）
+        self.reset_device(self.ram_base)?;
+        // 复位其他已映射设备（UART/CLINT/FB）；未映射或不可复位则忽略
+        for base in [self.uart_base, self.clint_base, self.fb.base()].into_iter().flatten() {
+            let _ = self.reset_device(base);
+        }
         if let Some(img) = &self.image {
             for seg in &img.segments {
                 self.bus.write_bytes(seg.addr, &seg.data)?;
@@ -621,6 +626,16 @@ impl Machine {
         self.state = RunState::Idle;
         self.last_instr = None;
         self.dbg.reset();
+        Ok(())
+    }
+
+    /// 复位单个设备：支持 Resetable 则复位，否则报错（调用方决定是否忽略）。
+    fn reset_device(&mut self, base: u32) -> Result<(), MachineError> {
+        let dev = self.bus.device_mut(base)
+            .ok_or_else(|| MachineError::ResetFailed(format!("no device at {base:#x}")))?;
+        if let Some(r) = dev.as_resetable() {
+            r.reset();
+        }
         Ok(())
     }
 
@@ -877,5 +892,47 @@ mod tests {
             assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
         }
         assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
+    }
+
+    fn nop_image(entry: u32) -> Image {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes());
+        Image { segments: vec![rremu_loader::Segment { addr: entry, data: bytes }], entry }
+    }
+
+    #[test]
+    fn step_n_breakpoint_sets_paused_state() {
+        let base = 0x8000_0000;
+        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(nop_image(base)).build().unwrap();
+        machine.add_breakpoint(base);
+        let rr = machine.step_n(1);
+        assert_eq!(rr, RunResult::HitBreakpoint { addr: base });
+        assert_eq!(machine.state(), RunState::Paused);
+    }
+
+    #[test]
+    fn reset_clears_uart_and_clint_state() {
+        let base = 0x8000_0000;
+        let mut machine = MachineBuilder::new()
+            .ram(base, 0x1000)
+            .uart(0x1000_0000)
+            .clint(0x0200_0000)
+            .load(nop_image(base))
+            .build()
+            .unwrap();
+
+        // 注入 UART 输入 + 置 CLINT msip
+        machine.uart_push_input(b'A');
+        {
+            let dev = machine.device_mut(0x0200_0000).unwrap();
+            let mut sink = rremu_bus::NullSink;
+            dev.write(0x0200_0000, AccessSize::Word, 1, &mut sink).unwrap();
+        }
+
+        machine.reset().unwrap();
+
+        // UART FIFO 清空（RDR peek 为 0），CLINT msip 清零
+        assert_eq!(machine.peek(0x1000_0000).unwrap(), 0);
+        assert_eq!(machine.peek(0x0200_0000).unwrap(), 0);
     }
 }

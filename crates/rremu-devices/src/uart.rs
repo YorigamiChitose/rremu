@@ -9,7 +9,7 @@
 //! | 5      | LSR         | 恒 `0x60`；输入 FIFO 非空置 bit0 |
 //! | 其余   | —           | 读 0，写忽略 |
 
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, EmuEvent, InputSink};
+use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, EmuEvent, InputSink, Resetable};
 
 const REG_THR_RDR: u32 = 0;
 const REG_IER: u32 = 1;
@@ -92,6 +92,19 @@ impl BusDevice for Uart {
     fn as_input_sink(&mut self) -> Option<&mut dyn InputSink> {
         Some(self)
     }
+
+    fn as_resetable(&mut self) -> Option<&mut dyn Resetable> {
+        Some(self)
+    }
+}
+
+impl Resetable for Uart {
+    fn reset(&mut self) {
+        self.input.clear();
+        self.ier = 0;
+        self.isr = 0;
+        self.lcr = 0;
+    }
 }
 
 impl InputSink for Uart {
@@ -157,6 +170,20 @@ mod tests {
         // 真读弹出一个
         assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'X' as u32);
         assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), 0);
+    }
+
+    #[test]
+    fn reset_clears_fifo_and_registers() {
+        let mut uart = Uart::new(BASE);
+        let mut sink = Collector::default();
+        uart.push_input(b'A');
+        uart.write(BASE + 1, AccessSize::Byte, 0x07, &mut sink).unwrap(); // IER
+        uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink).unwrap(); // LCR
+        Resetable::reset(&mut uart);
+        // FIFO 空 → LSR 回 0x60
+        assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
+        assert_eq!(uart.peek_read(BASE + 1, AccessSize::Byte).unwrap(), 0); // IER 清零
+        assert_eq!(uart.peek_read(BASE + 3, AccessSize::Byte).unwrap(), 0); // LCR 清零
     }
 
     #[test]
