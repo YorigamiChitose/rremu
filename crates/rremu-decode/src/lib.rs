@@ -120,11 +120,29 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 _ => Err(illegal),
             }
         }
+        0b0101111 => {
+            // AMO：A 扩展（RV32A）。funct5 区分具体操作；aq/rl 位忽略。
+            let funct5 = word >> 27;
+            match (funct3, funct5) {
+                (0b010, 0b00010) => Ok(Instruction::LrW { rd, rs1 }),
+                (0b010, 0b00011) => Ok(Instruction::ScW { rd, rs1, rs2 }),
+                (0b010, 0b00001) => Ok(Instruction::AmoswapW { rd, rs1, rs2 }),
+                (0b010, 0b00000) => Ok(Instruction::AmoaddW { rd, rs1, rs2 }),
+                (0b010, 0b00100) => Ok(Instruction::AmoxorW { rd, rs1, rs2 }),
+                (0b010, 0b01100) => Ok(Instruction::AmoandW { rd, rs1, rs2 }),
+                (0b010, 0b01000) => Ok(Instruction::AmoorW { rd, rs1, rs2 }),
+                (0b010, 0b10000) => Ok(Instruction::AmominW { rd, rs1, rs2 }),
+                (0b010, 0b10100) => Ok(Instruction::AmomaxW { rd, rs1, rs2 }),
+                (0b010, 0b11000) => Ok(Instruction::AmominuW { rd, rs1, rs2 }),
+                (0b010, 0b11100) => Ok(Instruction::AmomaxuW { rd, rs1, rs2 }),
+                _ => Err(illegal),
+            }
+        }
         0b0001111 => {
-            if funct3 == 0b000 {
-                Ok(Instruction::Fence)
-            } else {
-                Err(illegal)
+            match funct3 {
+                0b000 => Ok(Instruction::Fence),
+                0b001 => Ok(Instruction::FenceI),
+                _ => Err(illegal),
             }
         }
         0b1110011 => {
@@ -789,6 +807,36 @@ mod tests {
         assert_eq!(decode32(m(0b101), PC), Ok(Instruction::Divu { rd: 3, rs1: 1, rs2: 2 }));
         assert_eq!(decode32(m(0b110), PC), Ok(Instruction::Rem { rd: 3, rs1: 1, rs2: 2 }));
         assert_eq!(decode32(m(0b111), PC), Ok(Instruction::Remu { rd: 3, rs1: 1, rs2: 2 }));
+    }
+
+    fn amo_enc(f5: u32, f3: u32, rs1: u8, rs2: u8, rd: u8) -> Word {
+        (f5 << 27) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b0101111
+    }
+
+    #[test]
+    fn decode_a_extension() {
+        let amo = |f5, f3| amo_enc(f5, f3, 1, 2, 3);
+        assert_eq!(decode32(amo(0b00010, 0b010), PC), Ok(Instruction::LrW { rd: 3, rs1: 1 }));
+        assert_eq!(decode32(amo(0b00011, 0b010), PC), Ok(Instruction::ScW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b00001, 0b010), PC), Ok(Instruction::AmoswapW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b00000, 0b010), PC), Ok(Instruction::AmoaddW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b00100, 0b010), PC), Ok(Instruction::AmoxorW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b01100, 0b010), PC), Ok(Instruction::AmoandW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b01000, 0b010), PC), Ok(Instruction::AmoorW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b10000, 0b010), PC), Ok(Instruction::AmominW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b10100, 0b010), PC), Ok(Instruction::AmomaxW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b11000, 0b010), PC), Ok(Instruction::AmominuW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(decode32(amo(0b11100, 0b010), PC), Ok(Instruction::AmomaxuW { rd: 3, rs1: 1, rs2: 2 }));
+        // 非法 AMO：funct3=011（RV64 .d 变体）与未知 funct5
+        assert!(decode32(amo(0b11000, 0b011), PC).is_err());
+        assert!(decode32(amo(0b11111, 0b010), PC).is_err());
+    }
+
+    #[test]
+    fn decode_fence_i() {
+        assert_eq!(decode32(0x0000_100F, PC), Ok(Instruction::FenceI));
+        // fence（funct3=000）仍正确
+        assert_eq!(decode32(0x0000_000F, PC), Ok(Instruction::Fence));
     }
 
     // ---- C extension tests ----

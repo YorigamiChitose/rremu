@@ -80,8 +80,21 @@ pub enum Instruction {
     Divu { rd: u8, rs1: u8, rs2: u8 },
     Rem { rd: u8, rs1: u8, rs2: u8 },
     Remu { rd: u8, rs1: u8, rs2: u8 },
+    // ---- A extension (RV32A) ----
+    LrW { rd: u8, rs1: u8 },
+    ScW { rd: u8, rs1: u8, rs2: u8 },
+    AmoswapW { rd: u8, rs1: u8, rs2: u8 },
+    AmoaddW { rd: u8, rs1: u8, rs2: u8 },
+    AmoxorW { rd: u8, rs1: u8, rs2: u8 },
+    AmoandW { rd: u8, rs1: u8, rs2: u8 },
+    AmoorW { rd: u8, rs1: u8, rs2: u8 },
+    AmominW { rd: u8, rs1: u8, rs2: u8 },
+    AmomaxW { rd: u8, rs1: u8, rs2: u8 },
+    AmominuW { rd: u8, rs1: u8, rs2: u8 },
+    AmomaxuW { rd: u8, rs1: u8, rs2: u8 },
     // ---- misc / system ----
     Fence,
+    FenceI,
     Ecall,
     Ebreak,
     // ---- Zicsr ----
@@ -238,7 +251,19 @@ impl core::fmt::Display for Instruction {
             Instruction::Divu { rd, rs1, rs2 } => write!(f, "divu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
             Instruction::Rem { rd, rs1, rs2 } => write!(f, "rem {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
             Instruction::Remu { rd, rs1, rs2 } => write!(f, "remu {}, {}, {}", reg_name(rd), reg_name(rs1), reg_name(rs2)),
+            Instruction::LrW { rd, rs1 } => write!(f, "lr.w {}, ({})", reg_name(rd), reg_name(rs1)),
+            Instruction::ScW { rd, rs1, rs2 } => write!(f, "sc.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmoswapW { rd, rs1, rs2 } => write!(f, "amoswap.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmoaddW { rd, rs1, rs2 } => write!(f, "amoadd.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmoxorW { rd, rs1, rs2 } => write!(f, "amoxor.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmoandW { rd, rs1, rs2 } => write!(f, "amoand.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmoorW { rd, rs1, rs2 } => write!(f, "amoor.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmominW { rd, rs1, rs2 } => write!(f, "amomin.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmomaxW { rd, rs1, rs2 } => write!(f, "amomax.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmominuW { rd, rs1, rs2 } => write!(f, "amominu.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            Instruction::AmomaxuW { rd, rs1, rs2 } => write!(f, "amomaxu.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
             Instruction::Fence => write!(f, "fence"),
+            Instruction::FenceI => write!(f, "fence.i"),
             Instruction::Ecall => write!(f, "ecall"),
             Instruction::Ebreak => write!(f, "ebreak"),
             Instruction::Csrrw { rd, csr, rs1 } => write!(f, "csrrw {}, 0x{csr:03x}, {}", reg_name(rd), reg_name(rs1)),
@@ -443,5 +468,16 @@ mod tests {
         // Zicsr（csrrw 用寄存器源；csrrsi 用 zimm）
         assert_eq!(Instruction::Csrrw { rd: 10, csr: 0x300, rs1: 11 }.to_string(), "csrrw a0, 0x300, a1");
         assert_eq!(Instruction::Csrrsi { rd: 10, csr: 0x340, zimm: 5 }.to_string(), "csrrsi a0, 0x340, 5");
+    }
+
+    #[test]
+    fn display_a_extension_and_fence_i() {
+        assert_eq!(Instruction::LrW { rd: 10, rs1: 11 }.to_string(), "lr.w a0, (a1)");
+        assert_eq!(Instruction::ScW { rd: 10, rs1: 11, rs2: 12 }.to_string(), "sc.w a0, a2, (a1)");
+        assert_eq!(Instruction::AmoswapW { rd: 10, rs1: 11, rs2: 12 }.to_string(), "amoswap.w a0, a2, (a1)");
+        assert_eq!(Instruction::AmoaddW { rd: 10, rs1: 11, rs2: 12 }.to_string(), "amoadd.w a0, a2, (a1)");
+        assert_eq!(Instruction::AmominuW { rd: 10, rs1: 11, rs2: 12 }.to_string(), "amominu.w a0, a2, (a1)");
+        assert_eq!(Instruction::AmomaxuW { rd: 10, rs1: 11, rs2: 12 }.to_string(), "amomaxu.w a0, a2, (a1)");
+        assert_eq!(Instruction::FenceI.to_string(), "fence.i");
     }
 }

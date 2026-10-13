@@ -8,8 +8,9 @@
 
 ## 特性
 
-- **ISA**：RV32I + M（乘除）+ C（压缩指令）+ Zicsr；最简 M-mode 陷阱
-  （ecall / ebreak / mret，mstatus / mtvec / mepc / mcause / mtval / mie / mip）
+- **ISA**：RV32I + M（乘除）+ A（原子 lr/sc + AMO）+ C（压缩指令）+ Zicsr；
+  最简 M-mode 陷阱（ecall / ebreak / mret，mstatus / mtvec / mepc / mcause /
+  mtval / mie / mip）；`fence.i` 按无缓存实现为 NOP
 - **执行模型**：单周期（一条指令 = 一个 cycle）
 - **前端**
   - CLI：rustyline 交互式 REPL，加载 ELF 后暂停在入口，`c` 开始运行
