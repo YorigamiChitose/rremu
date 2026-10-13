@@ -9,14 +9,16 @@
 ## 特性
 
 - **ISA**：RV32I + M（乘除）+ C（压缩指令）+ Zicsr；最简 M-mode 陷阱
-  （ecall / ebreak / mret，mstatus / mtvec / mepc / mcause / mie / mip）
+  （ecall / ebreak / mret，mstatus / mtvec / mepc / mcause / mtval / mie / mip）
 - **执行模型**：单周期（一条指令 = 一个 cycle）
 - **前端**
   - CLI：rustyline 交互式 REPL，加载 ELF 后暂停在入口，`c` 开始运行
   - TUI：ratatui 多面板（寄存器 / 反汇编 / 内存事件 / UART）+ 键盘控制
   - 独立帧缓冲窗口（minifb，X11），**懒启动**：首次写 fb 才弹窗
 - **设备**：RAM、UART（NS16550A 子集）、CLINT（mtime/mtimecmp/msip）、
-  Framebuffer（RGB565 → 0x00RRGGBB），均经 `BusDevice` trait 接入总线
+  Framebuffer（RGB565 → 0x00RRGGBB），均经 `BusDevice` trait 接入总线。
+  CLINT `mtimecmp` 复位为 `u32::MAX`（避免虚假定时器中断）；
+  `mip` 的 MSIP/MTIP/MEIP 位由设备 pending 投影（软件只读）
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
   C 风格运算符）、无副作用内存 peek、事件环
 - **退出约定**：M-mode `ecall` 且 `a7 == 0xCAFE_0000`（`EXIT_MAGIC`）为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`。其余 `ecall`（含 `a7 == -1` 的 AM yield）走标准 ecall-from-M 陷阱；`ebreak`/`c.ebreak` 走标准 breakpoint 陷阱
