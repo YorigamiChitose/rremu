@@ -31,13 +31,29 @@ pub struct RenderData<'a> {
 pub fn draw(f: &mut Frame, data: &RenderData) {
     let area = f.area();
 
+    // min 档（全部面板关闭）：UART 顺便全屏
+    if data.panel_level >= 3 {
+        let main = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // top bar
+                Constraint::Min(0),    // uart（全屏）
+                Constraint::Length(1), // status bar
+            ])
+            .split(area);
+        draw_top_bar(f, main[0], data.snap, data.speed, data.running);
+        draw_uart(f, main[1], data.snap, data.input_mode);
+        draw_status_bar(f, main[2], data.input_mode, data.panel_level);
+        return;
+    }
+
     let main = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // top bar
-            Constraint::Min(0),     // middle
+            Constraint::Length(1), // top bar
+            Constraint::Min(0),    // middle
             Constraint::Length(6), // uart
-            Constraint::Length(1),  // status bar
+            Constraint::Length(1), // status bar
         ])
         .split(area);
 
@@ -282,7 +298,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8)
         0 => "full",
         1 => "no-insn",
         2 => "no-insn,io",
-        _ => "min",
+        _ => "uart-full",
     };
     let hint = if input_mode {
         " Esc: exit input mode | type to send to UART ".to_owned()
