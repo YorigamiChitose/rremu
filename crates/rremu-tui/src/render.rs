@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
+use rremu_machine::term::{Cell as TermCell, Color as TermColor, Style as TermStyle, Terminal};
 use rremu_machine::{
     reg_name, AccessSize, DisasmLine, EmuEvent, FramebufferFrame, MachineSnapshot, MemKind,
     RunState,
@@ -24,6 +25,8 @@ pub struct RenderData<'a> {
     pub running: bool,
     pub input_mode: bool,
     pub fb_view: bool,
+    /// UART 终端（有状态屏幕）。
+    pub terminal: &'a Terminal,
     /// 面板信息档位（0=全开；1=关指令；2=关指令+读写；3=全关）。
     pub panel_level: u8,
 }
@@ -42,7 +45,7 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
             ])
             .split(area);
         draw_top_bar(f, main[0], data.snap, data.speed, data.running);
-        draw_uart(f, main[1], data.snap, data.input_mode);
+        draw_uart(f, main[1], data.terminal, data.input_mode);
         draw_status_bar(f, main[2], data.input_mode, data.panel_level);
         return;
     }
@@ -60,7 +63,7 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
     draw_top_bar(f, main[0], data.snap, data.speed, data.running);
     let panels = Panels::from_level(data.panel_level);
     draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view, panels);
-    draw_uart(f, main[2], data.snap, data.input_mode);
+    draw_uart(f, main[2], data.terminal, data.input_mode);
     draw_status_bar(f, main[3], data.input_mode, data.panel_level);
 }
 
@@ -286,11 +289,80 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     f.render_widget(list, area);
 }
 
-fn draw_uart(f: &mut Frame, area: Rect, snap: &MachineSnapshot, input_mode: bool) {
-    let text = String::from_utf8_lossy(&snap.uart_out).into_owned();
+fn draw_uart(f: &mut Frame, area: Rect, term: &Terminal, input_mode: bool) {
     let title = if input_mode { " UART [INPUT MODE - Esc to exit] " } else { " UART " };
-    let para = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(title));
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+
+    // 只渲染末尾可见行（scrollback 可能很长）
+    let lines = term.lines();
+    let start = lines.len().saturating_sub(inner.height as usize);
+    let (crow, ccol) = term.cursor();
+    let rat_lines: Vec<Line> = lines[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, l)| cell_line(l, if start + i == crow { Some(ccol) } else { None }))
+        .collect();
+
+    let para = Paragraph::new(rat_lines).block(block);
     f.render_widget(para, area);
+}
+
+/// 一行单元格 → ratatui `Line`：跳过宽字符次格、合并同一样式段；
+/// `cursor` 指定的列以反显标出。
+fn cell_line(cells: &[TermCell], cursor: Option<usize>) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut run = String::new();
+    let mut prev: Option<TermStyle> = None;
+    for (idx, cell) in cells.iter().enumerate() {
+        if cell.wide_cont {
+            continue;
+        }
+        let mut st = cell.style;
+        if cursor == Some(idx) {
+            st.reverse = !st.reverse;
+        }
+        if prev == Some(st) {
+            run.push(cell.ch);
+        } else {
+            if let Some(p) = prev.replace(st) {
+                spans.push(Span::styled(core::mem::take(&mut run), to_style(p)));
+            }
+            run.push(cell.ch);
+        }
+    }
+    if let Some(p) = prev {
+        spans.push(Span::styled(run, to_style(p)));
+    }
+    Line::from(spans)
+}
+
+fn to_color(c: TermColor) -> Color {
+    match c {
+        TermColor::Default => Color::Reset,
+        TermColor::Indexed(n) => Color::Indexed(n),
+        TermColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+fn to_style(s: TermStyle) -> Style {
+    let mut m = Modifier::empty();
+    if s.bold {
+        m |= Modifier::BOLD;
+    }
+    if s.dim {
+        m |= Modifier::DIM;
+    }
+    if s.italic {
+        m |= Modifier::ITALIC;
+    }
+    if s.underline {
+        m |= Modifier::UNDERLINED;
+    }
+    if s.reverse {
+        m |= Modifier::REVERSED;
+    }
+    Style::default().fg(to_color(s.fg)).bg(to_color(s.bg)).add_modifier(m)
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8) {
@@ -350,3 +422,5 @@ fn draw_bar(f: &mut Frame, area: Rect, spans: Vec<Span>) {
 fn span(text: String, color: Color) -> Span<'static> {
     Span::styled(text, Style::default().fg(color))
 }
+
+

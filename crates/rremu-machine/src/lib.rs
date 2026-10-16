@@ -19,6 +19,9 @@ pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
 pub use rremu_isa::{reg_name, Instruction, Priv};
 
 pub mod dump;
+pub mod term;
+
+use term::Terminal;
 
 /// 运行状态（快照展示用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -313,6 +316,21 @@ impl EventSink for RingCollector {
     }
 }
 
+/// 事件 sink：所有事件入 collector；UART 输出字节**同时**喂给终端状态机。
+struct MachineSink<'a> {
+    collector: &'a mut RingCollector,
+    terminal: &'a mut Terminal,
+}
+
+impl EventSink for MachineSink<'_> {
+    fn emit(&mut self, ev: EmuEvent) {
+        if let EmuEvent::UartOutput { byte } = ev {
+            self.terminal.feed(byte);
+        }
+        self.collector.emit(ev);
+    }
+}
+
 /// CSR 快照（TUI/CLI 显示所需的最简 M-mode 集合）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CsrSnapshot {
@@ -421,6 +439,7 @@ impl Machine {
             clint_base: cfg.layout.clint.map(|d| d.base),
             entry,
             state: RunState::Idle,
+            terminal: Terminal::new(),
             trace: VecDeque::new(),
             trace_capacity: cfg.diag.trace_capacity,
             last_trap: None,
@@ -448,6 +467,8 @@ pub struct Machine {
     clint_base: Option<u32>,
     entry: u32,
     state: RunState,
+    /// UART 终端视图（有状态，逐字节推进）。
+    terminal: Terminal,
     trace: VecDeque<TraceEntry>,
     /// 指令 trace 环形缓冲容量（来自配置）。
     trace_capacity: usize,
@@ -513,7 +534,11 @@ impl Machine {
         }
         self.dbg.clear_suppress();
 
-        match self.cpu.step(&mut self.bus, &mut self.collector) {
+        let stepped = {
+            let mut sink = MachineSink { collector: &mut self.collector, terminal: &mut self.terminal };
+            self.cpu.step(&mut self.bus, &mut sink)
+        };
+        match stepped {
             Ok(StepOutcome::Executed { len, bits, .. }) => {
                 self.push_trace(pc_before, bits, len);
                 if let Some(code) = self.collector.take_halt() {
@@ -615,6 +640,7 @@ impl Machine {
         }
         self.collector.clear();
         self.state = RunState::Idle;
+        self.terminal = Terminal::new();
         self.trace.clear();
         self.last_trap = None;
         self.trace_at_trap = None;
@@ -846,6 +872,11 @@ impl Machine {
         self.collector.mem_ring()
     }
 
+    /// UART 终端视图（借用，不走 snapshot）。
+    pub fn terminal(&self) -> &Terminal {
+        &self.terminal
+    }
+
     /// 最近 UART 输入/输出事件（dump 用）。
     pub fn uart_ring(&self) -> &VecDeque<EmuEvent> {
         self.collector.uart_ring()
@@ -980,6 +1011,34 @@ mod tests {
         assert_eq!(frozen.len(), 3);
         assert_eq!(frozen[0].pc, base);
         assert_eq!(frozen[2].pc, base + 8);
+    }
+
+    #[test]
+    fn uart_output_feeds_terminal() {
+        let base = 0x8000_0000;
+        // lui t0, 0x10000; li t1,'h'; sb t1,0(t0); li t1,'i'; sb t1,0(t0)
+        let code: [u32; 5] = [
+            (0x10000u32 << 12) | (5 << 7) | 0b0110111,
+            (0x068u32 << 20) | (6 << 7) | 0b0010011,
+            0x0062_8023,
+            (0x069u32 << 20) | (6 << 7) | 0b0010011,
+            0x0062_8023,
+        ];
+        let mut bytes = Vec::new();
+        for w in code {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let mut m = test_machine(base, 0x1000, image);
+        m.step_n(5);
+        let line: String = m
+            .terminal()
+            .lines()[0]
+            .iter()
+            .filter(|c| !c.wide_cont)
+            .map(|c| c.ch)
+            .collect();
+        assert_eq!(line, "hi");
     }
 
     #[test]

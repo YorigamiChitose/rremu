@@ -130,6 +130,7 @@ impl TuiApp {
                 running: self.running,
                 input_mode: self.input_mode,
                 fb_view: self.fb_view,
+                terminal: self.machine.terminal(),
                 panel_level: self.panel_level,
             };
             terminal.draw(|f| render::draw(f, &data))?;
