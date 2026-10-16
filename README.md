@@ -30,11 +30,12 @@ Cargo workspace 多 crate + trait 依赖倒置；前端只能经 `rremu-machine`
 API 交互，`bin` 是唯一 composition root：
 
 ```
-bin (rremu)            clap 解析、设备地址分配、前端选择（唯一组装点）
+bin (rremu)            clap 解析、配置解析、设备映射、前端选择（唯一组装点）
 ├── rremu-cli          REPL 调试器（rustyline + rremu-expr）
 ├── rremu-tui          TUI（ratatui + crossterm）
 └── rremu-window       独立窗口（minifb）
-rremu-machine          Machine/Builder/快照/断点/监视点/事件环
+rremu-config           统一配置：默认值 + Overrides + resolve（唯一真相源，叶 crate）
+rremu-machine          Machine/快照/断点/监视点/事件环/dump
 ├── rremu-cpu          CPU 状态与执行循环、trap
 ├── rremu-devices      ram / uart / clint / framebuffer
 └── rremu-loader       ELF32 解析（零 IO）
@@ -43,6 +44,20 @@ rremu-isa              类型、指令枚举、CSR 常量、反汇编 Display
 rremu-decode           解码（纯函数）
 rremu-expr             表达式词法/解析/求值（独立叶 crate）
 ```
+
+## 配置
+
+`rremu-config` 集中 rremu 侧所有硬编码值与可变参数，是**唯一真相源**：
+
+- **默认值**（设备基址/尺寸、Framebuffer、诊断容量）以 `pub const` 集中定义；
+- **外部参数**（`--base` / `--mem` / `--entry` / `--no-fb` / `--dump-on-exit`）
+  经纯数据 `Overrides` 传入，由 `Config::resolve` 合并默认值并校验
+  （`ConfigError`：RAM 为 0/溢出、FB 维度为 0/溢出）；
+- `Machine::from_config(&Config, image)` 据此映射设备并构造机器；CLI/TUI 前端
+  亦从 `Config` 读取路径等；`rremu-config` **不依赖 clap**。
+
+`rremu-am/arch.rs` 为**人工镜像**（guest 侧独立 `no_std` 仓库，不依赖本 crate），
+两边一致性由 `rremu-test` 的护栏测试锁定。
 
 ## 构建要求
 
