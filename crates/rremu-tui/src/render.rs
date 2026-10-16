@@ -24,6 +24,8 @@ pub struct RenderData<'a> {
     pub running: bool,
     pub input_mode: bool,
     pub fb_view: bool,
+    /// 面板信息是否自动刷新（关闭时运行中跳过采集/绘制以提速）。
+    pub refresh: bool,
 }
 
 pub fn draw(f: &mut Frame, data: &RenderData) {
@@ -42,7 +44,7 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
     draw_top_bar(f, main[0], data.snap, data.speed, data.running);
     draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view);
     draw_uart(f, main[2], data.snap, data.input_mode);
-    draw_status_bar(f, main[3], data.input_mode);
+    draw_status_bar(f, main[3], data.input_mode, data.refresh);
 }
 
 fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedTier, running: bool) {
@@ -234,11 +236,14 @@ fn draw_uart(f: &mut Frame, area: Rect, snap: &MachineSnapshot, input_mode: bool
     f.render_widget(para, area);
 }
 
-fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool) {
+fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, refresh: bool) {
     let hint = if input_mode {
-        " Esc: exit input mode | type to send to UART "
+        " Esc: exit input mode | type to send to UART ".to_owned()
     } else {
-        " Space:run/pause  s:step  ←→:speed  f:full  i:input  r:reset  b:fb  q:quit "
+        format!(
+            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:refresh[{}]  r:reset  b:fb  q:quit ",
+            if refresh { "on" } else { "off" }
+        )
     };
     draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);
 }

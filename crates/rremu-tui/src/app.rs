@@ -35,6 +35,8 @@ pub struct TuiApp {
     fb_dims: (u32, u32),
     /// 统一配置（dump 路径等）。
     cfg: rremu_config::Config,
+    /// 面板信息自动刷新开关（`p` 键切换）；关闭时运行中跳过采集/绘制以提速。
+    refresh: bool,
 }
 
 impl TuiApp {
@@ -52,6 +54,7 @@ impl TuiApp {
             fb_cache: Vec::new(),
             fb_dims: (0, 0),
             cfg,
+            refresh: true,
         }
     }
 
@@ -98,36 +101,41 @@ impl TuiApp {
 
             if self.running {
                 self.tick_machine(frame_start);
-                // 帧节奏：Steps 档每帧恰好一批，提前完成则等满预算；
-                // Full 档在预算内循环，通常已用满。
-                let elapsed = frame_start.elapsed();
-                if elapsed < FRAME_BUDGET {
-                    std::thread::sleep(FRAME_BUDGET - elapsed);
+                // 帧节奏：仅开启刷新时限制 30fps；关闭刷新则全速跑。
+                if self.refresh {
+                    let elapsed = frame_start.elapsed();
+                    if elapsed < FRAME_BUDGET {
+                        std::thread::sleep(FRAME_BUDGET - elapsed);
+                    }
                 }
             }
 
-            self.sync_fb_cache();
-            let snap = self.machine.snapshot();
-            let disasm = self.collect_disasm(snap.pc);
-            let fb = if self.fb_view {
-                Some(FramebufferFrame {
-                    width: self.fb_dims.0,
-                    height: self.fb_dims.1,
-                    pixels: &self.fb_cache,
-                })
-            } else {
-                None
-            };
-            let data = render::RenderData {
-                snap: &snap,
-                disasm: &disasm,
-                fb: fb.as_ref(),
-                speed: self.speed,
-                running: self.running,
-                input_mode: self.input_mode,
-                fb_view: self.fb_view,
-            };
-            terminal.draw(|f| render::draw(f, &data))?;
+            // 关闭刷新时：运行中不采集/不绘制（纯跑）；暂停/单步时仍绘制。
+            if self.refresh || !self.running {
+                self.sync_fb_cache();
+                let snap = self.machine.snapshot();
+                let disasm = self.collect_disasm(snap.pc);
+                let fb = if self.fb_view {
+                    Some(FramebufferFrame {
+                        width: self.fb_dims.0,
+                        height: self.fb_dims.1,
+                        pixels: &self.fb_cache,
+                    })
+                } else {
+                    None
+                };
+                let data = render::RenderData {
+                    snap: &snap,
+                    disasm: &disasm,
+                    fb: fb.as_ref(),
+                    speed: self.speed,
+                    running: self.running,
+                    input_mode: self.input_mode,
+                    fb_view: self.fb_view,
+                    refresh: self.refresh,
+                };
+                terminal.draw(|f| render::draw(f, &data))?;
+            }
         }
         Ok(())
     }
@@ -246,6 +254,10 @@ impl TuiApp {
             KeyCode::Char('b') => {
                 // Toggle framebuffer view
                 self.fb_view = !self.fb_view;
+            }
+            KeyCode::Char('p') => {
+                // 切换面板信息自动刷新（关闭以提速）
+                self.refresh = !self.refresh;
             }
             KeyCode::Char('D') => {
                 // 手动写 dump（仅在配置了 --dump-on-exit 路径时）
