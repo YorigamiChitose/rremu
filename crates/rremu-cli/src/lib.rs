@@ -125,20 +125,22 @@ impl Repl {
 
     /// 批处理模式（`-c` 每条命令）。
     pub fn run_batch(&mut self, cmds: &[String]) -> i32 {
+        // 程序退出/故障后继续执行剩余命令（如退出后 `dump`），最终返回退出码。
+        let mut exit_code = 0;
         for cmd in cmds {
             let cmd = cmd.trim();
             println!("rremu> {cmd}");
             match self.dispatch(cmd) {
                 Outcome::Continue => {}
-                Outcome::Quit => return 0,
-                Outcome::ProgramExited(code) => return code,
+                Outcome::Quit => break,
+                Outcome::ProgramExited(code) => exit_code = code,
                 Outcome::Faulted(reason) => {
                     eprintln!("faulted: {reason}");
-                    return 1;
+                    exit_code = 1;
                 }
             }
         }
-        0
+        exit_code
     }
 
     fn dispatch(&mut self, line: &str) -> Outcome {
