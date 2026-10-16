@@ -380,6 +380,33 @@ pub mod cause {
     pub const M_SI: u32 = 0x8000_0003; // Machine Software Interrupt
     pub const M_TI: u32 = 0x8000_0007; // Machine Timer Interrupt
     pub const M_EI: u32 = 0x8000_000b; // Machine External Interrupt
+
+    /// mcause → 人类可读名称（bit31 区分中断/异常）。
+    pub fn cause_name(mcause: u32) -> &'static str {
+        let code = mcause & 0x7fff_ffff;
+        if mcause >> 31 == 1 {
+            match code {
+                3 => "machine software interrupt",
+                7 => "machine timer interrupt",
+                11 => "machine external interrupt",
+                _ => "unknown interrupt",
+            }
+        } else {
+            match code {
+                INSTR_MISALIGNED => "instruction address misaligned",
+                INSTR_ACCESS_FAULT => "instruction access fault",
+                ILLEGAL_INSTR => "illegal instruction",
+                BREAKPOINT => "breakpoint",
+                LOAD_MISALIGNED => "load address misaligned",
+                LOAD_ACCESS_FAULT => "load access fault",
+                STORE_MISALIGNED => "store address misaligned",
+                STORE_ACCESS_FAULT => "store access fault",
+                ECALL_FROM_U => "environment call from U-mode",
+                ECALL_FROM_M => "environment call from M-mode",
+                _ => "unknown exception",
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -468,6 +495,17 @@ mod tests {
         // Zicsr（csrrw 用寄存器源；csrrsi 用 zimm）
         assert_eq!(Instruction::Csrrw { rd: 10, csr: 0x300, rs1: 11 }.to_string(), "csrrw a0, 0x300, a1");
         assert_eq!(Instruction::Csrrsi { rd: 10, csr: 0x340, zimm: 5 }.to_string(), "csrrsi a0, 0x340, 5");
+    }
+
+    #[test]
+    fn cause_name_known() {
+        assert_eq!(cause::cause_name(cause::ILLEGAL_INSTR), "illegal instruction");
+        assert_eq!(cause::cause_name(cause::LOAD_ACCESS_FAULT), "load access fault");
+        assert_eq!(cause::cause_name(cause::ECALL_FROM_M), "environment call from M-mode");
+        assert_eq!(cause::cause_name(cause::M_TI), "machine timer interrupt");
+        assert_eq!(cause::cause_name(cause::M_SI), "machine software interrupt");
+        assert_eq!(cause::cause_name(99), "unknown exception");
+        assert_eq!(cause::cause_name(0x8000_0000 | 99), "unknown interrupt");
     }
 
     #[test]
