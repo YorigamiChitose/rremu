@@ -343,6 +343,22 @@ pub mod csr {
     pub const MINSTRET: u16 = 0xB02;
     pub const MHARTID: u16 = 0xF14; // 只读
 
+    // 非特权计数器（只读；RT-Thread/OS 常用 rdtime/rdcycle）
+    pub const CYCLE: u16 = 0xC00;
+    pub const TIME: u16 = 0xC01;
+    pub const INSTRET: u16 = 0xC02;
+    /// RV32 的 time 高 32 位（0xC81）。
+    pub const TIMEH: u16 = 0xC81;
+
+    // misa 扩展位（RV32：MXL=01 位于 bit30）
+    pub const MISA_A: u32 = 1 << 0;
+    pub const MISA_C: u32 = 1 << 2;
+    pub const MISA_I: u32 = 1 << 8;
+    pub const MISA_M: u32 = 1 << 12;
+    pub const MISA_S: u32 = 1 << 18;
+    pub const MISA_U: u32 = 1 << 20;
+    pub const MISA_MXL_32: u32 = 1 << 30;
+
     // mstatus 位段
     pub const MSTATUS_MIE: u32 = 1 << 3;
     pub const MSTATUS_MPIE: u32 = 1 << 7;

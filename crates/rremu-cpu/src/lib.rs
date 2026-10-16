@@ -24,7 +24,13 @@ impl CsrState {
     fn new() -> Self {
         Self {
             mstatus: csr::MSTATUS_MPP_M, // 复位进入 M-mode
-            misa: 0,
+            // RV32 + I/M/A/C/U（S 待 S-mode 支持时再加）
+            misa: csr::MISA_MXL_32
+                | csr::MISA_I
+                | csr::MISA_M
+                | csr::MISA_A
+                | csr::MISA_C
+                | csr::MISA_U,
             mie: 0,
             mtvec: 0,
             mscratch: 0,
@@ -138,6 +144,11 @@ impl Cpu {
         csr::MCYCLE   => read s.cycle as u32;
         csr::MINSTRET => read s.instret as u32;
         csr::MHARTID  => read s.csr.mhartid;
+        // 非特权计数器（只读别名；time = mtime = cycle）
+        csr::CYCLE    => read s.cycle as u32;
+        csr::TIME     => read s.cycle as u32;
+        csr::INSTRET  => read s.instret as u32;
+        csr::TIMEH    => read (s.cycle >> 32) as u32;
     }
 
     /// 总线错误 → 异常 cause：对齐违例返 `misalign`，其余（未映射/设备）返 `fault`。
@@ -1856,5 +1867,29 @@ mod tests {
         h.run(2);
         assert_eq!(h.cpu.reg(10), 42);
         assert_eq!(h.cpu.pc(), BASE + 8);
+    }
+
+    #[test]
+    fn unprivileged_counters_read_only() {
+        let mut h = Harness::new();
+        h.load(BASE, &[0x0000_0013, 0x0000_0013, 0x0000_0013]); // 3 nop
+        h.run(3);
+        assert_eq!(h.cpu.csr_read(csr::CYCLE), 3);
+        assert_eq!(h.cpu.csr_read(csr::TIME), 3);
+        assert_eq!(h.cpu.csr_read(csr::INSTRET), 3);
+        assert_eq!(h.cpu.csr_read(csr::TIMEH), 0);
+        // 只读：写入被忽略
+        h.cpu.csr_write(csr::TIME, 0xDEAD);
+        assert_eq!(h.cpu.csr_read(csr::TIME), 3);
+    }
+
+    #[test]
+    fn misa_advertises_extensions() {
+        let h = Harness::new();
+        let misa = h.cpu.csr_read(csr::MISA);
+        for bit in [csr::MISA_I, csr::MISA_M, csr::MISA_A, csr::MISA_C, csr::MISA_U] {
+            assert_eq!(misa & bit, bit, "missing misa bit {bit:#x}");
+        }
+        assert_eq!((misa >> 30) & 0b11, 0b01); // MXL=RV32
     }
 }
