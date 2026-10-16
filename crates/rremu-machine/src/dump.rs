@@ -63,6 +63,7 @@ pub struct MachineState {
     pub cycle: u64,
     pub instret: u64,
     pub pc: String,
+    #[serde(rename = "priv")]
     pub priv_: String,
     pub gprs: Vec<String>,
     pub csrs: CsrState,
@@ -164,12 +165,10 @@ impl Dump {
             events.drain(..events.len() - EVENT_CAPACITY);
         }
 
-        let trap = events.iter().rev().find_map(|e| match e {
-            EventItem::Trap { cause, pc } => {
-                Some(Trap { cause: cause.clone(), pc: pc.clone(), mtval: hex(snap.csrs.mtval) })
-            }
-            _ => None,
-        });
+        // trap 从 Machine 持久保留的 last_trap 取（不受事件环淘汰影响）
+        let trap = machine
+            .last_trap()
+            .map(|(cause, pc, mtval)| Trap { cause: hex(cause), pc: hex(pc), mtval: hex(mtval) });
 
         let trace: Vec<TraceItem> = machine
             .trace()

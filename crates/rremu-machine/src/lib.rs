@@ -464,6 +464,7 @@ impl MachineBuilder {
             entry,
             state: RunState::Idle,
             trace: VecDeque::new(),
+            last_trap: None,
             dbg: DebugController::new(),
             fb: FramebufferAccessor::new(self.fb_base, self.fb_width, self.fb_height),
         })
@@ -484,6 +485,8 @@ pub struct Machine {
     entry: u32,
     state: RunState,
     trace: VecDeque<TraceEntry>,
+    /// 最近一次 trap 的 (mcause, mepc, mtval)；从事件环之外持久保留。
+    last_trap: Option<(u32, u32, u32)>,
 }
 
 impl Machine {
@@ -563,7 +566,11 @@ impl Machine {
                 Some(RunResult::Exited { code })
             }
             // 非致命陷入：CPU 已重定向 pc 至 mtvec，本步无停止结果
-            Ok(StepOutcome::Trapped { .. }) => None,
+            Ok(StepOutcome::Trapped { .. }) => {
+                let c = self.cpu.csr_state();
+                self.last_trap = Some((c.mcause, c.mepc, c.mtval));
+                None
+            }
             Err(e) => {
                 // 不可恢复错误（如 vectored mtvec 未实现）：终止模拟，避免静默死循环。
                 let reason = e.to_string();
@@ -639,6 +646,7 @@ impl Machine {
         self.collector.clear();
         self.state = RunState::Idle;
         self.trace.clear();
+        self.last_trap = None;
         self.dbg.reset();
         Ok(())
     }
@@ -831,6 +839,11 @@ impl Machine {
         &self.trace
     }
 
+    /// 最近一次 trap 的 (mcause, mepc, mtval)（未发生过为 None）。
+    pub fn last_trap(&self) -> Option<(u32, u32, u32)> {
+        self.last_trap
+    }
+
     /// 当前运行状态（轻量查询，避免为读状态做整快照）。
     pub fn state(&self) -> RunState {
         self.state.clone()
@@ -932,6 +945,19 @@ mod tests {
             assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
         }
         assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
+    }
+
+    #[test]
+    fn last_trap_recorded_on_illegal_instruction() {
+        let base = 0x8000_0000;
+        // 非法指令 0x0000（c.addi4spn nzuimm=0）
+        let image = Image {
+            segments: vec![rremu_loader::Segment { addr: base, data: 0x0000u16.to_le_bytes().to_vec() }],
+            entry: base,
+        };
+        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        machine.step_n(1); // trap ILLEGAL_INSTR → pc = mtvec(0)
+        assert_eq!(machine.last_trap(), Some((2, base, 0)));
     }
 
     #[test]

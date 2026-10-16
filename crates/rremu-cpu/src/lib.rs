@@ -211,11 +211,11 @@ impl Cpu {
         let lo = word as u16;
 
         let (instr, len) = if instr_len(lo) == 2 {
-            // 16 位压缩指令
+            // 16 位压缩指令（mtval 为 16 位编码本身）
             match decode16(lo, pc) {
                 Ok(i) => (i, 2u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                    return self.trap(sink, cause::ILLEGAL_INSTR, word)
+                    return self.trap(sink, cause::ILLEGAL_INSTR, u32::from(lo))
                 }
             }
         } else {
