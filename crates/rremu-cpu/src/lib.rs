@@ -565,7 +565,11 @@ impl Cpu {
                 let mpie = (mstatus >> csr::MSTATUS_MPIE.trailing_zeros()) & 1;
                 // MPP = 0 (U-mode), MIE = MPIE, MPIE = 1
                 self.update_mstatus(0, mpie, 1);
-                self.priv_ = if mpp == 0b11 { Priv::Machine } else { Priv::User };
+                self.priv_ = match mpp {
+                    0b11 => Priv::Machine,
+                    0b01 => Priv::Supervisor,
+                    _ => Priv::User,
+                };
                 next_pc = self.csr.mepc;
             }
             // ---- C extension (RV32C) ----
@@ -687,6 +691,7 @@ impl Cpu {
         // 更新 mstatus: MPP = 当前特权级, MPIE = 旧 MIE, MIE = 0
         let mpp = match self.priv_ {
             Priv::Machine => 0b11,
+            Priv::Supervisor => 0b01,
             Priv::User => 0b00,
         };
         let old_mie = (self.csr.mstatus >> csr::MSTATUS_MIE.trailing_zeros()) & 1;
@@ -1053,6 +1058,22 @@ mod tests {
         assert_eq!((ms >> csr::MSTATUS_MIE.trailing_zeros()) & 1, 1);
         assert_eq!((ms >> csr::MSTATUS_MPIE.trailing_zeros()) & 1, 1);
         assert_eq!((ms >> csr::MSTATUS_MPP_SHIFT) & 0b11, 0b00);
+    }
+
+    #[test]
+    fn mret_enters_supervisor_when_mpp_s() {
+        let mut h = Harness::new();
+        // x5 = (1<<11) | MPIE(0x80) = 0x880（用移位+ori 避免立即数符号扩展）
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, 1),                    // addi x5, x0, 1
+            i_enc(OP_IMM, 5, 0b001, 5, 11),                   // slli x5, x5, 11  -> 0x800
+            i_enc(OP_IMM, 5, 0b110, 5, 0x80),                 // ori  x5, x5, 0x80 -> 0x880
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSTATUS as i32), // csrrw x0, mstatus, x5
+            i_enc(0b1110011, 0, 0, 0, 0x302),                 // mret
+        ]);
+        h.run(4);
+        h.step();
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
     }
 
     #[test]

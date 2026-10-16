@@ -10,6 +10,7 @@ pub type Address = u32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Priv {
     User,
+    Supervisor,
     Machine,
 }
 
@@ -17,6 +18,7 @@ impl core::fmt::Display for Priv {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Priv::User => write!(f, "U"),
+            Priv::Supervisor => write!(f, "S"),
             Priv::Machine => write!(f, "M"),
         }
     }
@@ -339,6 +341,21 @@ pub mod csr {
     pub const MCAUSE: u16 = 0x342;
     pub const MTVAL: u16 = 0x343;
     pub const MIP: u16 = 0x344;
+    // ---- S-mode CSR ----
+    pub const SSTATUS: u16 = 0x100;
+    pub const SIE: u16 = 0x104;
+    pub const STVEC: u16 = 0x105;
+    pub const SSCRATCH: u16 = 0x140;
+    pub const SEPC: u16 = 0x141;
+    pub const SCAUSE: u16 = 0x142;
+    pub const STVAL: u16 = 0x143;
+    pub const SIP: u16 = 0x144;
+    pub const SATP: u16 = 0x180;
+
+    // ---- M-mode 委派 ----
+    pub const MEDELEG: u16 = 0x302;
+    pub const MIDELEG: u16 = 0x303;
+
     pub const MCYCLE: u16 = 0xB00;
     pub const MINSTRET: u16 = 0xB02;
     pub const MHARTID: u16 = 0xF14; // 只读
@@ -360,8 +377,11 @@ pub mod csr {
     pub const MISA_MXL_32: u32 = 1 << 30;
 
     // mstatus 位段
+    pub const MSTATUS_SIE: u32 = 1 << 1;
     pub const MSTATUS_MIE: u32 = 1 << 3;
+    pub const MSTATUS_SPIE: u32 = 1 << 5;
     pub const MSTATUS_MPIE: u32 = 1 << 7;
+    pub const MSTATUS_SPP: u32 = 1 << 8;
     pub const MSTATUS_MPP_SHIFT: u32 = 11;
     pub const MSTATUS_MPP_MASK: u32 = 0b11 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_U: u32 = 0b00 << MSTATUS_MPP_SHIFT;
