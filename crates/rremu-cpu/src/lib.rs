@@ -18,18 +18,27 @@ pub struct CsrState {
     pub mtval: u32,
     pub mip: u32,
     pub mhartid: u32,
+    pub medeleg: u32,
+    pub mideleg: u32,
+    pub stvec: u32,
+    pub sscratch: u32,
+    pub sepc: u32,
+    pub scause: u32,
+    pub stval: u32,
+    pub satp: u32,
 }
 
 impl CsrState {
     fn new() -> Self {
         Self {
             mstatus: csr::MSTATUS_MPP_M, // 复位进入 M-mode
-            // RV32 + I/M/A/C/U（S 待 S-mode 支持时再加）
+            // RV32 + I/M/A/C/S/U
             misa: csr::MISA_MXL_32
                 | csr::MISA_I
                 | csr::MISA_M
                 | csr::MISA_A
                 | csr::MISA_C
+                | csr::MISA_S
                 | csr::MISA_U,
             mie: 0,
             mtvec: 0,
@@ -39,6 +48,14 @@ impl CsrState {
             mtval: 0,
             mip: 0,
             mhartid: 0,
+            medeleg: 0,
+            mideleg: 0,
+            stvec: 0,
+            sscratch: 0,
+            sepc: 0,
+            scause: 0,
+            stval: 0,
+            satp: 0,
         }
     }
 }
@@ -76,33 +93,6 @@ pub struct Cpu {
     reservation: Option<u32>,
 }
 
-/// CSR 表：一份描述同时生成 `csr_read`/`csr_write`，消除两张平行 match。
-///
-/// 条目 `ADDR => read EXPR` 为只读（写忽略）；`ADDR => read EXPR, write FIELD`
-/// 可读写，`FIELD` 为 `self.csr` 的字段名。
-macro_rules! csr_table {
-    ( $slf:ident; $( $addr:path => read $read:expr $(, write $field:ident)? );+ $(;)? ) => {
-        /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
-        pub fn csr_read(&self, addr: u16) -> u32 {
-            let $slf = self;
-            match addr {
-                $( $addr => $read, )+
-                _ => 0,
-            }
-        }
-
-        /// CSR 写入（CSR 指令执行用）。只读 CSR（mhartid/mcycle/minstret）与
-        /// 未知 CSR（satp/pmpaddr/medeleg 等）写入被忽略。
-        fn csr_write(&mut self, addr: u16, val: u32) {
-            let $slf = self;
-            match addr {
-                $( $addr => { $( $slf.csr.$field = val; )? } )+
-                _ => {}
-            }
-        }
-    };
-}
-
 impl Cpu {
     pub fn new(entry: u32) -> Self {
         Self { x: [0; 32], pc: entry, priv_: Priv::Machine, csr: CsrState::new(), cycle: 0, instret: 0, reservation: None }
@@ -131,24 +121,66 @@ impl Cpu {
         &self.csr
     }
 
-    csr_table! { s;
-        csr::MSTATUS  => read s.csr.mstatus, write mstatus;
-        csr::MISA     => read s.csr.misa, write misa;
-        csr::MIE      => read s.csr.mie, write mie;
-        csr::MTVEC    => read s.csr.mtvec, write mtvec;
-        csr::MSCRATCH => read s.csr.mscratch, write mscratch;
-        csr::MEPC     => read s.csr.mepc, write mepc;
-        csr::MCAUSE   => read s.csr.mcause, write mcause;
-        csr::MTVAL    => read s.csr.mtval, write mtval;
-        csr::MIP      => read s.csr.mip, write mip;
-        csr::MCYCLE   => read s.cycle as u32;
-        csr::MINSTRET => read s.instret as u32;
-        csr::MHARTID  => read s.csr.mhartid;
-        // 非特权计数器（只读别名；time = mtime = cycle）
-        csr::CYCLE    => read s.cycle as u32;
-        csr::TIME     => read s.cycle as u32;
-        csr::INSTRET  => read s.instret as u32;
-        csr::TIMEH    => read (s.cycle >> 32) as u32;
+    /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
+    /// `sstatus`/`sie`/`sip` 是 `mstatus`/`mie`/`mip` 的 S 位掩码视图。
+    pub fn csr_read(&self, addr: u16) -> u32 {
+        match addr {
+            csr::MSTATUS => self.csr.mstatus,
+            csr::MISA => self.csr.misa,
+            csr::MIE => self.csr.mie,
+            csr::MTVEC => self.csr.mtvec,
+            csr::MSCRATCH => self.csr.mscratch,
+            csr::MEPC => self.csr.mepc,
+            csr::MCAUSE => self.csr.mcause,
+            csr::MTVAL => self.csr.mtval,
+            csr::MIP => self.csr.mip,
+            csr::MEDELEG => self.csr.medeleg,
+            csr::MIDELEG => self.csr.mideleg,
+            csr::SSTATUS => self.csr.mstatus & csr::SSTATUS_MASK,
+            csr::SIE => self.csr.mie & csr::SIE_S_MASK,
+            csr::SIP => self.csr.mip & csr::SIE_S_MASK,
+            csr::STVEC => self.csr.stvec,
+            csr::SSCRATCH => self.csr.sscratch,
+            csr::SEPC => self.csr.sepc,
+            csr::SCAUSE => self.csr.scause,
+            csr::STVAL => self.csr.stval,
+            csr::SATP => self.csr.satp,
+            csr::MCYCLE | csr::CYCLE | csr::TIME => self.cycle as u32,
+            csr::MINSTRET | csr::INSTRET => self.instret as u32,
+            csr::TIMEH => (self.cycle >> 32) as u32,
+            csr::MHARTID => self.csr.mhartid,
+            _ => 0,
+        }
+    }
+
+    /// CSR 写入（CSR 指令执行用）。只读/未知 CSR 写入忽略。
+    fn csr_write(&mut self, addr: u16, val: u32) {
+        match addr {
+            csr::MSTATUS => self.csr.mstatus = val,
+            csr::MISA => self.csr.misa = val,
+            csr::MIE => self.csr.mie = val,
+            csr::MTVEC => self.csr.mtvec = val,
+            csr::MSCRATCH => self.csr.mscratch = val,
+            csr::MEPC => self.csr.mepc = val,
+            csr::MCAUSE => self.csr.mcause = val,
+            csr::MTVAL => self.csr.mtval = val,
+            csr::MIP => self.csr.mip = val,
+            csr::MEDELEG => self.csr.medeleg = val,
+            csr::MIDELEG => self.csr.mideleg = val,
+            csr::SSTATUS => {
+                self.csr.mstatus =
+                    (self.csr.mstatus & !csr::SSTATUS_MASK) | (val & csr::SSTATUS_MASK)
+            }
+            csr::SIE => self.csr.mie = (self.csr.mie & !csr::SIE_S_MASK) | (val & csr::SIE_S_MASK),
+            csr::SIP => self.csr.mip = (self.csr.mip & !csr::SIE_S_MASK) | (val & csr::SIE_S_MASK),
+            csr::STVEC => self.csr.stvec = val,
+            csr::SSCRATCH => self.csr.sscratch = val,
+            csr::SEPC => self.csr.sepc = val,
+            csr::SCAUSE => self.csr.scause = val,
+            csr::STVAL => self.csr.stval = val,
+            csr::SATP => self.csr.satp = val,
+            _ => {}
+        }
     }
 
     /// 总线错误 → 异常 cause：对齐违例返 `misalign`，其余（未映射/设备）返 `fault`。
@@ -1074,6 +1106,18 @@ mod tests {
         h.run(4);
         h.step();
         assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+    }
+
+    #[test]
+    fn sstatus_sie_are_views_of_mstatus_mie() {
+        let mut h = Harness::new();
+        h.cpu.csr_write(csr::SSTATUS, csr::SSTATUS_MASK);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS), csr::SSTATUS_MASK);
+        assert_eq!(h.cpu.csr_read(csr::MSTATUS) & csr::SSTATUS_MASK, csr::SSTATUS_MASK);
+        h.cpu.csr_write(csr::SIE, csr::SIE_S_MASK);
+        assert_eq!(h.cpu.csr_read(csr::MIE) & csr::SIE_S_MASK, csr::SIE_S_MASK);
+        h.cpu.csr_write(csr::SATP, 0x8000_0000);
+        assert_eq!(h.cpu.csr_read(csr::SATP), 0x8000_0000);
     }
 
     #[test]

@@ -382,6 +382,15 @@ pub mod csr {
     pub const MSTATUS_SPIE: u32 = 1 << 5;
     pub const MSTATUS_MPIE: u32 = 1 << 7;
     pub const MSTATUS_SPP: u32 = 1 << 8;
+
+    /// sstatus 是 mstatus 的视图，仅暴露 S 相关位。
+    pub const SSTATUS_MASK: u32 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP;
+
+    // S 级中断位（sie/sip 的 S 部分：SSIE/STIE/SEIE）
+    pub const SIE_SSIE: u32 = 1 << 1;
+    pub const SIE_STIE: u32 = 1 << 5;
+    pub const SIE_SEIE: u32 = 1 << 9;
+    pub const SIE_S_MASK: u32 = SIE_SSIE | SIE_STIE | SIE_SEIE;
     pub const MSTATUS_MPP_SHIFT: u32 = 11;
     pub const MSTATUS_MPP_MASK: u32 = 0b11 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_U: u32 = 0b00 << MSTATUS_MPP_SHIFT;
