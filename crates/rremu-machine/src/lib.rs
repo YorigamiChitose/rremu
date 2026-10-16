@@ -17,6 +17,8 @@ use thiserror::Error;
 pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
 pub use rremu_isa::{reg_name, Instruction, Priv};
 
+pub mod dump;
+
 /// 运行状态（快照展示用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
@@ -853,6 +855,16 @@ impl Machine {
 
     pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
         self.collector.mem_ring()
+    }
+
+    /// 最近 UART 输入/输出事件（dump 用）。
+    pub fn uart_ring(&self) -> &VecDeque<EmuEvent> {
+        self.collector.uart_ring()
+    }
+
+    /// 构造结构化 dump（纯读取，无副作用）。`elf_path` 由调用方提供。
+    pub fn dump(&self, elf_path: Option<&str>) -> dump::Dump {
+        dump::Dump::from_machine(self, elf_path)
     }
 }
 

@@ -1,0 +1,258 @@
+//! dump 模块：机器状态的结构化序列化格式（format_version = 1）。
+//!
+//! rremu 在终止时把机器状态序列化为 JSON；由离线工具（rremu-report）解析。
+//! 数值一律用 hex 字符串（避免 JSON double 精度损失，贴合 RISC-V 习惯）；
+//! 事件用字符串标签（`#[serde(tag = "type")]`）。
+
+use serde::{Deserialize, Serialize};
+
+use rremu_bus::EmuEvent;
+
+use crate::{Machine, RunState};
+
+/// dump 格式版本。
+pub const FORMAT_VERSION: u32 = 1;
+
+/// dump 保留的最大事件数（= 2 × trace 深度）。
+pub const EVENT_CAPACITY: usize = 64;
+
+/// u32 格式化为 8 位 hex 字符串（含 0x 前缀）。
+pub fn hex(v: u32) -> String {
+    format!("0x{v:08x}")
+}
+
+/// 顶层 dump 结构。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dump {
+    pub format_version: u32,
+    pub rremu_version: String,
+    pub reason: Reason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elf: Option<ElfRef>,
+    pub machine: MachineState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trap: Option<Trap>,
+    pub trace: Vec<TraceItem>,
+    #[serde(default)]
+    pub events: Vec<EventItem>,
+}
+
+/// 终止原因。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Reason {
+    /// 正常/异常退出（halt code）。
+    Halt { code: i32 },
+    /// 模拟器不可恢复错误。
+    Faulted { reason: String },
+    /// 未退出（步数上限/暂停）。
+    Paused,
+}
+
+/// ELF 引用（供离线工具符号化）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ElfRef {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+}
+
+/// 机器状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MachineState {
+    pub cycle: u64,
+    pub instret: u64,
+    pub pc: String,
+    pub priv_: String,
+    pub gprs: Vec<String>,
+    pub csrs: CsrState,
+}
+
+/// CSR 集合。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CsrState {
+    pub mstatus: String,
+    pub mtvec: String,
+    pub mepc: String,
+    pub mcause: String,
+    pub mtval: String,
+    pub mie: String,
+    pub mip: String,
+    pub mcycle: u64,
+    pub minstret: u64,
+}
+
+/// 最近一次 trap（取自事件环）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Trap {
+    pub cause: String,
+    pub pc: String,
+    pub mtval: String,
+}
+
+/// 指令 trace 条目。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceItem {
+    pub pc: String,
+    pub bits: String,
+    pub len: u8,
+}
+
+/// IO 事件条目（字符串标签）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EventItem {
+    Mem { cycle: u64, kind: String, size: String, addr: String, value: String, device: String },
+    Trap { cause: String, pc: String },
+    UartOut { byte: u8 },
+    UartIn { byte: u8 },
+}
+
+impl EventItem {
+    fn from_event(ev: &EmuEvent) -> Option<Self> {
+        match ev {
+            EmuEvent::MemAccess { cycle, kind, size, addr, value, device } => Some(EventItem::Mem {
+                cycle: *cycle,
+                kind: kind.to_string(),
+                size: size.to_string(),
+                addr: hex(*addr),
+                value: hex(*value),
+                device: device.clone(),
+            }),
+            EmuEvent::Trap { cause, pc } => {
+                Some(EventItem::Trap { cause: hex(*cause), pc: hex(*pc) })
+            }
+            EmuEvent::UartOutput { byte } => Some(EventItem::UartOut { byte: *byte }),
+            EmuEvent::UartInput { byte } => Some(EventItem::UartIn { byte: *byte }),
+            EmuEvent::Halt { .. } => None,
+        }
+    }
+}
+
+impl Dump {
+    /// 从 machine 构造 dump（纯读取，无副作用）。`elf_path` 由调用方提供。
+    pub fn from_machine(machine: &Machine, elf_path: Option<&str>) -> Self {
+        let snap = machine.snapshot();
+        let reason = match &snap.state {
+            RunState::Exited(code) => Reason::Halt { code: *code },
+            RunState::Faulted(r) => Reason::Faulted { reason: r.clone() },
+            _ => Reason::Paused,
+        };
+
+        let gprs: Vec<String> = snap.gprs.iter().map(|v| hex(*v)).collect();
+
+        let csrs = CsrState {
+            mstatus: hex(snap.csrs.mstatus),
+            mtvec: hex(snap.csrs.mtvec),
+            mepc: hex(snap.csrs.mepc),
+            mcause: hex(snap.csrs.mcause),
+            mtval: hex(snap.csrs.mtval),
+            mie: hex(snap.csrs.mie),
+            mip: hex(snap.csrs.mip),
+            mcycle: snap.csrs.mcycle,
+            minstret: snap.csrs.minstret,
+        };
+
+        // 事件：mem 环 + uart 环合并，截取最近 EVENT_CAPACITY 条
+        let mut events: Vec<EventItem> = machine
+            .mem_ring()
+            .iter()
+            .chain(machine.uart_ring().iter())
+            .filter_map(EventItem::from_event)
+            .collect();
+        if events.len() > EVENT_CAPACITY {
+            events.drain(..events.len() - EVENT_CAPACITY);
+        }
+
+        let trap = events.iter().rev().find_map(|e| match e {
+            EventItem::Trap { cause, pc } => {
+                Some(Trap { cause: cause.clone(), pc: pc.clone(), mtval: hex(snap.csrs.mtval) })
+            }
+            _ => None,
+        });
+
+        let trace: Vec<TraceItem> = machine
+            .trace()
+            .iter()
+            .map(|t| TraceItem { pc: hex(t.pc), bits: hex(t.bits), len: t.len })
+            .collect();
+
+        Dump {
+            format_version: FORMAT_VERSION,
+            rremu_version: env!("CARGO_PKG_VERSION").to_owned(),
+            reason,
+            elf: elf_path.map(|p| ElfRef { path: p.to_owned(), sha256: None }),
+            machine: MachineState {
+                cycle: snap.cycle,
+                instret: snap.csrs.minstret,
+                pc: hex(snap.pc),
+                priv_: snap.priv_.to_string(),
+                gprs,
+                csrs,
+            },
+            trap,
+            trace,
+            events,
+        }
+    }
+
+    /// 序列化为格式化 JSON 字符串。
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// 从 JSON 字符串反序列化。
+    pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
+mod tests {
+    use super::*;
+    use crate::MachineBuilder;
+    use rremu_loader::{Image, Segment};
+
+    fn nop_image(entry: u32) -> Image {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes()); // addi x0, x0, 0
+        Image { segments: vec![Segment { addr: entry, data: bytes }], entry }
+    }
+
+    #[test]
+    fn dump_roundtrip_json() {
+        let base = 0x8000_0000;
+        let mut m = MachineBuilder::new().ram(base, 0x1000).load(nop_image(base)).build().unwrap();
+        m.step_n(1);
+        let d = Dump::from_machine(&m, Some("prog.elf"));
+        assert_eq!(d.format_version, FORMAT_VERSION);
+        assert_eq!(d.reason, Reason::Paused);
+        assert_eq!(d.machine.pc, hex(base + 4));
+        assert_eq!(d.machine.gprs.len(), 32);
+        assert_eq!(d.trace.len(), 1);
+        assert_eq!(d.elf.as_ref().unwrap().path, "prog.elf");
+
+        let json = d.to_json().unwrap();
+        let back = Dump::from_json(&json).unwrap();
+        assert_eq!(back.format_version, d.format_version);
+        assert_eq!(back.machine.pc, d.machine.pc);
+        assert_eq!(back.trace.len(), 1);
+    }
+
+    #[test]
+    fn dump_reason_halt_and_trap_field() {
+        let base = 0x8000_0000;
+        // lui a7, 0xCAFE0 ; addi a0, x0, 7 ; ecall
+        let code: [u32; 3] = [0xCAFE_08B7, 0x0070_0513, 0x0000_0073];
+        let mut bytes = Vec::new();
+        for w in code {
+            bytes.extend_from_slice(&w.to_le_bytes());
+        }
+        let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
+        let mut m = MachineBuilder::new().ram(base, 0x1000).load(img).build().unwrap();
+        m.step_n(3);
+        let d = Dump::from_machine(&m, None);
+        assert_eq!(d.reason, Reason::Halt { code: 7 });
+    }
+}

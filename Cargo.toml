@@ -41,6 +41,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 # 注：goblin 0.10.x 仅开 elf32 会编译失败（上游缺陷），需同时启用 elf64（解析仍只走 elf32 路径）
 goblin = { version = "0.10", default-features = false, features = ["elf32", "elf64", "endian_fd"] }
 anyhow = "1.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 clap = { version = "4.6", features = ["derive"] }
 rustyline = "18"
 ctrlc = "3.5"

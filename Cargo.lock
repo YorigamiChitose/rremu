@@ -1584,6 +1584,8 @@ dependencies = [
  "rremu-expr",
  "rremu-isa",
  "rremu-loader",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tracing",
 ]
