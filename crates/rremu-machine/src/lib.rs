@@ -190,6 +190,17 @@ pub struct DisasmLine {
     pub is_current: bool,
 }
 
+/// 指令 trace 条目（dump 用）：pc + 原始编码 + 长度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceEntry {
+    pub pc: u32,
+    pub bits: u32,
+    pub len: u8,
+}
+
+/// 指令 trace 环形缓冲容量。
+pub const TRACE_CAPACITY: usize = 32;
+
 /// 帧缓冲零拷贝引用（窗口/TUI 刷新用）。
 ///
 /// `pixels` 生命周期绑定到 `&mut Machine`，调用方需在再次修改 machine 前
@@ -450,7 +461,7 @@ impl MachineBuilder {
             clint_base: self.clint_base,
             entry,
             state: RunState::Idle,
-            last_instr: None,
+            trace: VecDeque::new(),
             dbg: DebugController::new(),
             fb: FramebufferAccessor::new(self.fb_base, self.fb_width, self.fb_height),
         })
@@ -470,7 +481,7 @@ pub struct Machine {
     clint_base: Option<u32>,
     entry: u32,
     state: RunState,
-    last_instr: Option<(u32, Instruction)>,
+    trace: VecDeque<TraceEntry>,
 }
 
 impl Machine {
@@ -530,8 +541,8 @@ impl Machine {
         self.dbg.clear_suppress();
 
         match self.cpu.step(&mut self.bus, &mut self.collector) {
-            Ok(StepOutcome::Executed { instr, .. }) => {
-                self.last_instr = Some((pc_before, instr));
+            Ok(StepOutcome::Executed { len, bits, .. }) => {
+                self.push_trace(pc_before, bits, len);
                 if let Some(code) = self.collector.take_halt() {
                     self.state = RunState::Exited(code);
                     return Some(RunResult::Exited { code });
@@ -625,7 +636,7 @@ impl Machine {
         }
         self.collector.clear();
         self.state = RunState::Idle;
-        self.last_instr = None;
+        self.trace.clear();
         self.dbg.reset();
         Ok(())
     }
@@ -800,7 +811,22 @@ impl Machine {
 
     /// 最近一条已执行指令（si 回显用）：pc 与指令。
     pub fn last_instruction(&self) -> Option<(u32, Instruction)> {
-        self.last_instr
+        let e = self.trace.back()?;
+        let decoded = if e.len == 2 { decode16(e.bits as u16, e.pc) } else { decode32(e.bits, e.pc) };
+        decoded.ok().map(|i| (e.pc, i))
+    }
+
+    /// 记录一条已执行指令到 trace 环（满则淘汰最旧）。
+    fn push_trace(&mut self, pc: u32, bits: u32, len: u8) {
+        if self.trace.len() == TRACE_CAPACITY {
+            self.trace.pop_front();
+        }
+        self.trace.push_back(TraceEntry { pc, bits, len });
+    }
+
+    /// 最近 `TRACE_CAPACITY` 条已执行指令（最旧在前），供 dump 使用。
+    pub fn trace(&self) -> &VecDeque<TraceEntry> {
+        &self.trace
     }
 
     /// 当前运行状态（轻量查询，避免为读状态做整快照）。
@@ -894,6 +920,27 @@ mod tests {
             assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
         }
         assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
+    }
+
+    #[test]
+    fn trace_records_and_caps_at_capacity() {
+        let base = 0x8000_0000;
+        let nop = 0x0000_0013u32; // addi x0, x0, 0
+        let mut bytes = Vec::new();
+        for _ in 0..40 {
+            bytes.extend_from_slice(&nop.to_le_bytes());
+        }
+        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        machine.step_n(40);
+        // 容量 32：运行 40 条后只保留最后 32 条
+        assert_eq!(machine.trace().len(), TRACE_CAPACITY);
+        let front = machine.trace().front().unwrap();
+        assert_eq!(front.pc, base + 8 * 4); // 前 8 条被淘汰
+        assert_eq!(front.bits, nop);
+        assert_eq!(front.len, 4);
+        // last_instruction 从 trace 派生
+        assert_eq!(machine.last_instruction().unwrap().0, base + 39 * 4);
     }
 
     fn nop_image(entry: u32) -> Image {
