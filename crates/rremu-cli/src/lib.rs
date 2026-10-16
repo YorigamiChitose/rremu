@@ -248,8 +248,14 @@ impl Repl {
             println!("Framebuffer window closed; paused. Subsequent 'c' runs without window.");
         }
 
+        let paused = matches!(result, RunResult::Paused);
         self.flush_uart();
-        self.report_result(result)
+        let outcome = self.report_result(result);
+        // 挂起（Ctrl+C/关窗/步数上限）也写 dump，便于排查死循环
+        if paused && let Some(path) = self.dump_on_exit.clone() {
+            self.write_dump(&path);
+        }
+        outcome
     }
 
     fn cmd_step(&mut self, n: u64) -> Outcome {
