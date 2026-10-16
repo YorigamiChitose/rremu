@@ -152,6 +152,8 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 0b000 if rs1 == 0 && rd == 0 => match (word >> 20) & 0xfff {
                     0x000 => Ok(Instruction::Ecall),
                     0x001 => Ok(Instruction::Ebreak),
+                    0x102 => Ok(Instruction::Sret),
+                    0x105 => Ok(Instruction::Wfi),
                     0x302 => Ok(Instruction::Mret),
                     _ => Err(illegal),
                 },
@@ -830,6 +832,12 @@ mod tests {
         // 非法 AMO：funct3=011（RV64 .d 变体）与未知 funct5
         assert!(decode32(amo(0b11000, 0b011), PC).is_err());
         assert!(decode32(amo(0b11111, 0b010), PC).is_err());
+    }
+
+    #[test]
+    fn decode_sret_wfi() {
+        assert_eq!(decode32(0x1020_0073, PC), Ok(Instruction::Sret));
+        assert_eq!(decode32(0x1050_0073, PC), Ok(Instruction::Wfi));
     }
 
     #[test]

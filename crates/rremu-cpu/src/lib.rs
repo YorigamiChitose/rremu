@@ -542,6 +542,19 @@ impl Cpu {
                 self.amo(bus, sink, rd, rs1, rs2, |a, b| a.max(b))?;
             }
 
+            Instruction::Sret => {
+                let sstatus = self.csr.mstatus;
+                let spp = (sstatus >> csr::MSTATUS_SPP.trailing_zeros()) & 1;
+                let spie = (sstatus >> csr::MSTATUS_SPIE.trailing_zeros()) & 1;
+                // SPP=0, SIE=SPIE, SPIE=1
+                self.csr.mstatus &= !(csr::MSTATUS_SPP | csr::MSTATUS_SIE | csr::MSTATUS_SPIE);
+                self.csr.mstatus |= (spie << csr::MSTATUS_SIE.trailing_zeros())
+                    | (1 << csr::MSTATUS_SPIE.trailing_zeros());
+                self.priv_ = if spp == 1 { Priv::Supervisor } else { Priv::User };
+                next_pc = self.csr.sepc;
+            }
+            Instruction::Wfi => {} // 无等待实现：NOP
+
             Instruction::Fence => {}
             Instruction::FenceI => {}
             Instruction::Ecall => {
@@ -1118,6 +1131,19 @@ mod tests {
         assert_eq!(h.cpu.csr_read(csr::MIE) & csr::SIE_S_MASK, csr::SIE_S_MASK);
         h.cpu.csr_write(csr::SATP, 0x8000_0000);
         assert_eq!(h.cpu.csr_read(csr::SATP), 0x8000_0000);
+    }
+
+    #[test]
+    fn sret_returns_to_supervisor_and_restores_sie() {
+        let mut h = Harness::new();
+        h.cpu.csr_write(csr::SSTATUS, csr::MSTATUS_SPP | csr::MSTATUS_SPIE);
+        h.cpu.csr_write(csr::SEPC, BASE + 0x10);
+        h.load(BASE, &[0x1020_0073]); // sret
+        h.step();
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.pc(), BASE + 0x10);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SIE, csr::MSTATUS_SIE);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
     }
 
     #[test]
