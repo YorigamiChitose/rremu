@@ -35,6 +35,10 @@ pub struct Repl {
     display: Option<Box<dyn FbDisplay>>,
     /// 窗口工厂：尚无窗口且 fb 产生写入时调用；开窗失败或用户关窗后丢弃。
     window_factory: Option<WindowFactory>,
+    /// ELF 路径（dump 报告引用；可为 None）。
+    elf_path: Option<String>,
+    /// 退出时自动写 dump 的路径（`--dump-on-exit`；None 表示关闭）。
+    dump_on_exit: Option<String>,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -51,7 +55,35 @@ const WINDOW_BATCH: u64 = 1024;
 
 impl Repl {
     pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, window_factory: Option<WindowFactory>) -> Self {
-        Self { machine, pause_flag, display: None, window_factory }
+        Self {
+            machine,
+            pause_flag,
+            display: None,
+            window_factory,
+            elf_path: None,
+            dump_on_exit: None,
+        }
+    }
+
+    /// 设置 ELF 路径（dump 报告引用）。
+    pub fn set_elf_path(&mut self, path: Option<String>) {
+        self.elf_path = path;
+    }
+
+    /// 设置退出时自动写 dump 的路径（None 关闭）。
+    pub fn set_dump_on_exit(&mut self, path: Option<String>) {
+        self.dump_on_exit = path;
+    }
+
+    /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
+    fn write_dump(&self, path: &str) {
+        match self.machine.dump(self.elf_path.as_deref()).to_json() {
+            Ok(json) => match std::fs::write(path, json) {
+                Ok(()) => println!("Dump written to {path}."),
+                Err(e) => eprintln!("rremu: dump write failed: {e}"),
+            },
+            Err(e) => eprintln!("rremu: dump serialize failed: {e}"),
+        }
     }
 
     /// 交互式 REPL（无 `-c` 时）。
@@ -109,13 +141,20 @@ impl Repl {
     }
 
     fn dispatch(&mut self, line: &str) -> Outcome {
-        match parse_command(line) {
+        let outcome = match parse_command(line) {
             Ok(cmd) => self.execute(cmd),
             Err(msg) => {
                 eprintln!("rremu: {msg}");
                 Outcome::Continue
             }
+        };
+        // 程序终止（退出/故障）时按配置自动写 dump
+        if let Some(path) = self.dump_on_exit.clone()
+            && matches!(outcome, Outcome::ProgramExited(_) | Outcome::Faulted(_))
+        {
+            self.write_dump(&path);
         }
+        outcome
     }
 
     fn execute(&mut self, cmd: Command) -> Outcome {
@@ -140,6 +179,10 @@ impl Repl {
                 Outcome::Continue
             }
             Command::Uart => self.cmd_uart_input(),
+            Command::Dump(path) => {
+                self.write_dump(&path);
+                Outcome::Continue
+            }
             Command::Quit => Outcome::Quit,
         }
     }
@@ -157,6 +200,7 @@ impl Repl {
         println!("  info r        Show registers and CSRs");
         println!("  info w        List breakpoints and watchpoints");
         println!("  uart          Enter UART input mode (raw key→byte→UART RX, Esc to exit)");
+        println!("  dump FILE     Write a structured machine-state dump (JSON) to FILE");
         println!("  q             Quit");
     }
 
@@ -493,6 +537,8 @@ enum Command {
     InfoWatchpoints,
     /// 进入 UART 输入模式：raw mode 下逐键→字节→UART RX，Esc 退出。
     Uart,
+    /// 写出结构化机器状态 dump 到指定文件。
+    Dump(String),
     Quit,
 }
 
@@ -560,6 +606,12 @@ fn parse_command(line: &str) -> Result<Command, String> {
         }
         "q" | "quit" | "exit" => Ok(Command::Quit),
         "uart" => Ok(Command::Uart),
+        "dump" => {
+            if rest.is_empty() {
+                return Err("usage: dump FILE".into());
+            }
+            Ok(Command::Dump(rest.to_owned()))
+        }
         _ => Err(format!("unknown command: {cmd} (type 'help')")),
     }
 }
@@ -641,6 +693,15 @@ mod tests {
     #[test]
     fn parse_uart_command() {
         assert!(matches!(parse_command("uart").unwrap(), Command::Uart));
+    }
+
+    #[test]
+    fn parse_dump_command() {
+        match parse_command("dump /tmp/out.json").unwrap() {
+            Command::Dump(p) => assert_eq!(p, "/tmp/out.json"),
+            _ => panic!("expected Dump"),
+        }
+        assert!(parse_command("dump").is_err());
     }
 
     #[test]

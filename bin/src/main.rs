@@ -62,6 +62,10 @@ struct Args {
     #[arg(long)]
     no_fb: bool,
 
+    /// 程序终止时自动写出机器状态 dump（JSON）到指定文件（默认关闭）
+    #[arg(long, value_name = "FILE")]
+    dump_on_exit: Option<String>,
+
     /// 日志详细度（-v info / -vv debug / -vvv trace）
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -108,7 +112,9 @@ fn try_main() -> anyhow::Result<i32> {
     } else {
         builder
     };
-    let machine = builder.build().context("failed to build machine")?;
+    let mut machine = builder.build().context("failed to build machine")?;
+    // dump 保留最近 64 条事件（= 2 × trace 深度）
+    machine.set_event_ring_capacity(64, 1024);
 
     if args.tui {
         // TUI 使用 crossterm raw 模式，Ctrl+C 作为 KeyEvent 处理，不走 ctrlc crate
@@ -145,6 +151,8 @@ fn try_main() -> anyhow::Result<i32> {
     };
 
     let mut repl = Repl::new(machine, pause_flag, window_factory);
+    repl.set_elf_path(Some(args.elf.clone()));
+    repl.set_dump_on_exit(args.dump_on_exit.clone());
     let code = if args.cmds.is_empty() {
         repl.run_interactive()
     } else {
