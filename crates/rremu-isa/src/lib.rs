@@ -360,6 +360,10 @@ pub mod csr {
     pub const MEDELEG: u16 = 0x302;
     pub const MIDELEG: u16 = 0x303;
 
+    // ---- PMP ----
+    pub const PMPCFG0: u16 = 0x3A0; // ..0x3A3
+    pub const PMPADDR0: u16 = 0x3B0; // ..0x3BF
+
     pub const MCYCLE: u16 = 0xB00;
     pub const MINSTRET: u16 = 0xB02;
     pub const MHARTID: u16 = 0xF14; // 只读

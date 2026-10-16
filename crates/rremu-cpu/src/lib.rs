@@ -26,6 +26,8 @@ pub struct CsrState {
     pub scause: u32,
     pub stval: u32,
     pub satp: u32,
+    pub pmpcfg: [u32; 4],
+    pub pmpaddr: [u32; 16],
 }
 
 impl CsrState {
@@ -56,6 +58,8 @@ impl CsrState {
             scause: 0,
             stval: 0,
             satp: 0,
+            pmpcfg: [0; 4],
+            pmpaddr: [0; 16],
         }
     }
 }
@@ -149,6 +153,12 @@ impl Cpu {
             csr::MINSTRET | csr::INSTRET => self.instret as u32,
             csr::TIMEH => (self.cycle >> 32) as u32,
             csr::MHARTID => self.csr.mhartid,
+            a if (csr::PMPCFG0..csr::PMPCFG0 + 4).contains(&a) => {
+                self.csr.pmpcfg[(a - csr::PMPCFG0) as usize]
+            }
+            a if (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&a) => {
+                self.csr.pmpaddr[(a - csr::PMPADDR0) as usize]
+            }
             _ => 0,
         }
     }
@@ -179,6 +189,12 @@ impl Cpu {
             csr::SCAUSE => self.csr.scause = val,
             csr::STVAL => self.csr.stval = val,
             csr::SATP => self.csr.satp = val,
+            a if (csr::PMPCFG0..csr::PMPCFG0 + 4).contains(&a) => {
+                self.csr.pmpcfg[(a - csr::PMPCFG0) as usize] = val;
+            }
+            a if (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&a) => {
+                self.csr.pmpaddr[(a - csr::PMPADDR0) as usize] = val;
+            }
             _ => {}
         }
     }
@@ -1203,6 +1219,17 @@ mod tests {
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_U });
         assert_eq!(h.cpu.priv_(), Priv::Machine);
+    }
+
+    #[test]
+    fn pmp_csr_roundtrip() {
+        let mut h = Harness::new();
+        h.cpu.csr_write(csr::PMPADDR0, 0x8000_0000);
+        h.cpu.csr_write(csr::PMPCFG0, 0x0F);
+        h.cpu.csr_write(csr::PMPADDR0 + 15, 0xBEEF);
+        assert_eq!(h.cpu.csr_read(csr::PMPADDR0), 0x8000_0000);
+        assert_eq!(h.cpu.csr_read(csr::PMPCFG0), 0x0F);
+        assert_eq!(h.cpu.csr_read(csr::PMPADDR0 + 15), 0xBEEF);
     }
 
     #[test]

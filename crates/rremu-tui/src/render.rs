@@ -144,6 +144,7 @@ fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     ]));
     let priv_label = match snap.priv_ {
         rremu_machine::Priv::Machine => "M",
+        rremu_machine::Priv::Supervisor => "S",
         rremu_machine::Priv::User => "U",
     };
     lines.push(Line::from(vec![
