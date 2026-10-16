@@ -12,8 +12,10 @@ pub use speed::SpeedTier;
 use rremu_machine::Machine;
 
 /// 启动 TUI 主循环；返回退出码。
-pub fn run(machine: Machine) -> i32 {
-    match app::TuiApp::new(machine).run() {
+///
+/// `elf_path` / `dump_on_exit` 供结果 dump（可选）。
+pub fn run(machine: Machine, elf_path: Option<String>, dump_on_exit: Option<String>) -> i32 {
+    match app::TuiApp::new(machine, elf_path, dump_on_exit).run() {
         Ok(code) => code,
         Err(e) => {
             eprintln!("rremu-tui: {e}");

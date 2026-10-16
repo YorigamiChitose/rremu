@@ -33,10 +33,14 @@ pub struct TuiApp {
     /// 帧缓冲缓存：仅当 dirty 时从设备拷入，render 读缓存。
     fb_cache: Vec<u32>,
     fb_dims: (u32, u32),
+    /// ELF 路径（dump 引用）。
+    elf_path: Option<String>,
+    /// 退出/故障时自动写 dump 的路径（None 关闭）。
+    dump_on_exit: Option<String>,
 }
 
 impl TuiApp {
-    pub fn new(machine: Machine) -> Self {
+    pub fn new(machine: Machine, elf_path: Option<String>, dump_on_exit: Option<String>) -> Self {
         Self {
             machine,
             running: false,
@@ -49,6 +53,19 @@ impl TuiApp {
             fault_reason: None,
             fb_cache: Vec::new(),
             fb_dims: (0, 0),
+            elf_path,
+            dump_on_exit,
+        }
+    }
+
+    /// 将当前机器状态写入 `path`（TUI 下静默，失败忽略）。
+    fn write_dump(&self) {
+        let Some(path) = self.dump_on_exit.as_deref() else {
+            return;
+        };
+        let elf = self.elf_path.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        if let Ok(json) = self.machine.dump(elf).to_json() {
+            let _ = std::fs::write(path, json);
         }
     }
 
@@ -143,10 +160,12 @@ impl TuiApp {
                 self.exit_code = code;
                 // 不设 should_quit：程序结束后 TUI 保持打开，让用户查看
                 // 最终寄存器/内存状态，按 q 退出。
+                self.write_dump();
             }
             RunResult::Faulted { reason } => {
                 self.running = false;
                 self.fault_reason = Some(reason);
+                self.write_dump();
             }
             RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. } => {
                 self.running = false;
@@ -230,6 +249,10 @@ impl TuiApp {
             KeyCode::Char('b') => {
                 // Toggle framebuffer view
                 self.fb_view = !self.fb_view;
+            }
+            KeyCode::Char('D') => {
+                // 手动写 dump（仅在配置了 --dump-on-exit 路径时）
+                self.write_dump();
             }
             KeyCode::Left => {
                 // Speed down

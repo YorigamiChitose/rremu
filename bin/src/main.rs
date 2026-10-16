@@ -118,7 +118,7 @@ fn try_main() -> anyhow::Result<i32> {
 
     if args.tui {
         // TUI 使用 crossterm raw 模式，Ctrl+C 作为 KeyEvent 处理，不走 ctrlc crate
-        return Ok(rremu_tui::run(machine));
+        return Ok(rremu_tui::run(machine, Some(args.elf.clone()), args.dump_on_exit.clone()));
     }
 
     let pause_flag = Arc::new(AtomicBool::new(false));
