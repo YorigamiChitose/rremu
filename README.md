@@ -110,6 +110,7 @@ rremu --tui <ELF>
 | `←` / `→` | 切换速度档（1/2/4/8/16/32/64/full） |
 | `i` | 进入 UART 输入模式（`Esc` 返回；输入模式下 Ctrl+C 仍可退出） |
 | `b` | 切换内嵌 framebuffer 视图 |
+| `D` | 写 dump（需配置 `--dump-on-exit` 路径） |
 | `r` | 复位机器 |
 | `q` / `Ctrl+C` | 退出 |
 
@@ -136,12 +137,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 ### 结果 dump
 
 rremu 支持把终止时的机器状态序列化为结构化 JSON（`format_version=1`）：
-寄存器/CSR（含 `mtval`）、最近 32 条指令 trace、最近 64 条 IO 事件、
-终止原因、最近 trap。触发方式：
+寄存器/CSR（含 `mtval`）、最近 32 条指令 trace（trap 时冻结为崩溃路径）、
+最近 64 条 IO 事件、终止原因、最近 trap、ELF 引用（路径 + sha256）。触发方式：
 
-- `dump FILE`（REPL 命令）
-- `--dump-on-exit FILE`（启动参数，程序终止时自动写）
+- `dump FILE`（REPL 命令；批量模式下程序退出后仍可执行）
+- `--dump-on-exit FILE`（启动参数）：程序**停止**（退出/故障/挂起）时自动写；
+  TUI 模式下同样生效，另可按 `D` 手动写
 
 dump 由 `rremu-report`（rremu-am workspace 内的工具）解析为人类可读报告
-（退出码语义化、mcause 名称化、寄存器/地址符号化、trace 反汇编），
-不依赖串口输出。
+（退出码语义化、mcause 名称化、寄存器/地址符号化、trace 反汇编）；
+report 会校验 `format_version`，并在 ELF sha256 与 dump 记录不符时告警。
+全程不依赖串口输出。
