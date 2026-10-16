@@ -19,6 +19,11 @@ const REG_LSR: u32 = 5;
 const LSR_THR_EMPTY: u32 = 0x60;
 const LSR_DATA_READY: u32 = 0x01;
 
+/// IER bit0：接收数据可中断。
+const IER_RX_ENABLE: u32 = 0x01;
+/// PLIC 源号（qemu-virt 约定：UART0 = 10）。
+pub const UART_IRQ: u32 = 10;
+
 pub struct Uart {
     base: u32,
     ier: u32,
@@ -91,6 +96,15 @@ impl BusDevice for Uart {
 
     fn as_input_sink(&mut self) -> Option<&mut dyn InputSink> {
         Some(self)
+    }
+
+    /// RX 有数据且使能接收中断时断言 UART0 IRQ（level）。
+    fn irq_line(&self) -> Option<u32> {
+        if self.ier & IER_RX_ENABLE != 0 && !self.input.is_empty() {
+            Some(UART_IRQ)
+        } else {
+            None
+        }
     }
 
     fn as_resetable(&mut self) -> Option<&mut dyn Resetable> {

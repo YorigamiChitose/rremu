@@ -143,6 +143,14 @@ pub trait BusDevice {
     /// 默认空；CLINT 等中断源设备覆写此方法。
     fn check_interrupt(&self) -> Vec<u32> { Vec::new() }
 
+    /// 本设备当前向中断控制器断言的 IRQ 源（PLIC source 号）。
+    /// 默认 `None`；外设（如 UART）在有事时返回源号，由 `BusRouter`
+    /// 在中断检查时喂给中断控制器。
+    fn irq_line(&self) -> Option<u32> { None }
+
+    /// 中断控制器接收设备 IRQ 断言（默认空操作；PLIC 覆写为置 pending）。
+    fn irq_assert(&mut self, _source: u32) {}
+
     /// 每步周期同步：设备按 cycle 更新内部时序状态（如 CLINT mtime）。
     /// 默认空操作。由 `BusRouter::set_cycle` 遍历调用。
     fn tick(&mut self, _cycle: u64) {}
@@ -343,6 +351,16 @@ impl Bus for BusRouter {
     }
 
     fn pending_interrupts(&mut self) -> Vec<u32> {
+        // 1) 收集各设备断言的 IRQ 源（level）；喂给中断控制器（PLIC）
+        let asserted: Vec<u32> = self.regions.iter().filter_map(|r| r.device.irq_line()).collect();
+        if !asserted.is_empty() {
+            for r in &mut self.regions {
+                for &src in &asserted {
+                    r.device.irq_assert(src);
+                }
+            }
+        }
+        // 2) 聚合各设备 pending 中断 cause
         let mut causes = Vec::new();
         for r in &self.regions {
             causes.extend(r.device.check_interrupt());

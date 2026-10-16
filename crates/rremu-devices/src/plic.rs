@@ -200,6 +200,11 @@ impl BusDevice for Plic {
         }
         Vec::new()
     }
+
+    /// 接收设备 IRQ 断言：置对应 source 的 pending。
+    fn irq_assert(&mut self, source: u32) {
+        self.set_pending(source, true);
+    }
 }
 
 /// 从 32 位寄存器值按 offset 与宽度提取。
