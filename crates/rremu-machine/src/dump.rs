@@ -277,6 +277,26 @@ mod tests {
     }
 
     #[test]
+    fn dump_includes_trap_and_crash_trace() {
+        let base = 0x8000_0000;
+        let mut bytes = Vec::new();
+        for _ in 0..3 {
+            bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes()); // nop
+        }
+        bytes.extend_from_slice(&0x0000u16.to_le_bytes()); // illegal
+        let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
+        let mut m = MachineBuilder::new().ram(base, 0x1000).load(img).build().unwrap();
+        m.step_n(4);
+        let d = Dump::from_machine(&m, None);
+        let trap = d.trap.as_ref().unwrap();
+        assert_eq!(trap.cause, hex(2)); // ILLEGAL_INSTR
+        assert_eq!(trap.pc, hex(base + 12));
+        // trace 为崩溃前 3 条 nop，不含之后的 handler
+        assert_eq!(d.trace.len(), 3);
+        assert_eq!(d.trace[2].pc, hex(base + 8));
+    }
+
+    #[test]
     fn dump_reason_halt_and_trap_field() {
         let base = 0x8000_0000;
         // lui a7, 0xCAFE0 ; addi a0, x0, 7 ; ecall

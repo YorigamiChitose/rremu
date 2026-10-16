@@ -974,6 +974,24 @@ mod tests {
     }
 
     #[test]
+    fn trace_at_trap_captures_crash_path() {
+        let base = 0x8000_0000;
+        // 3 条 nop(all addi x0,x0,0) + 非法指令
+        let mut bytes = Vec::new();
+        for _ in 0..3 {
+            bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0x0000u16.to_le_bytes());
+        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        machine.step_n(4); // 3 nop + trap
+        let frozen = machine.trace_at_trap().unwrap();
+        assert_eq!(frozen.len(), 3);
+        assert_eq!(frozen[0].pc, base);
+        assert_eq!(frozen[2].pc, base + 8);
+    }
+
+    #[test]
     fn trace_records_and_caps_at_capacity() {
         let base = 0x8000_0000;
         let nop = 0x0000_0013u32; // addi x0, x0, 0
