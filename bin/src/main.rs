@@ -63,6 +63,10 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     dump_on_exit: Option<String>,
 
+    /// 设备树 DTB 文件；加载到 RAM 并以 boot a1 传给 guest（OpenSBI/Linux 需要）
+    #[arg(long, value_name = "FILE")]
+    dtb: Option<String>,
+
     /// 日志详细度（-v info / -vv debug / -vvv trace）
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -89,9 +93,10 @@ fn try_main() -> anyhow::Result<i32> {
     }
 
     // 外部参数 → 统一 Config（唯一解析入口）
-    let cfg = Config::resolve(Overrides {
+    let mem_size = parse_size(&args.mem)?;
+    let mut cfg = Config::resolve(Overrides {
         ram_base: Some(args.base),
-        ram_size: Some(parse_size(&args.mem)?),
+        ram_size: Some(mem_size),
         no_fb: args.no_fb,
         entry: args.entry,
         elf: Some(args.elf.clone()),
@@ -99,12 +104,25 @@ fn try_main() -> anyhow::Result<i32> {
     })
     .context("invalid configuration")?;
 
+    // 可选 DTB：放到 RAM 顶部下方 1MB 处，作为 boot a1
+    let dtb = match &args.dtb {
+        Some(p) => Some(std::fs::read(p).with_context(|| format!("failed to read DTB: {p}"))?),
+        None => None,
+    };
+    if dtb.is_some() {
+        let ram_end = args.base.checked_add(mem_size).context("ram range overflow")?;
+        cfg.boot.dtb = Some((ram_end - 0x10_0000) & !7);
+    }
+
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
     let image = load_elf(&bytes)
         .with_context(|| format!("failed to parse ELF: {}", args.elf))?;
 
-    let machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
+    let mut machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
+    if let (Some(bytes), Some(addr)) = (&dtb, cfg.boot.dtb) {
+        machine.write_mem(addr, bytes).context("failed to load DTB")?;
+    }
 
     if args.tui {
         // TUI 使用 crossterm raw 模式，Ctrl+C 作为 KeyEvent 处理，不走 ctrlc crate

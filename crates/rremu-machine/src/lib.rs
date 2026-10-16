@@ -868,6 +868,12 @@ impl Machine {
         self.bus.device_mut(addr)
     }
 
+    /// 直接写入内存（用于在 ELF 镜像之外加载 DTB 等数据）。
+    pub fn write_mem(&mut self, addr: u32, data: &[u8]) -> Result<(), MachineError> {
+        self.bus.write_bytes(addr, data)?;
+        Ok(())
+    }
+
     pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
         self.collector.mem_ring()
     }
