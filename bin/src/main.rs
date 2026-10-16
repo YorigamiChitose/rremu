@@ -67,6 +67,10 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     dtb: Option<String>,
 
+    /// 为 PIE/可重定位镜像指定加载基址（段与入口整体偏移；OpenSBI 用）
+    #[arg(long, value_name = "ADDR", value_parser = parse_addr)]
+    load_base: Option<u32>,
+
     /// 日志详细度（-v info / -vv debug / -vvv trace）
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -116,8 +120,14 @@ fn try_main() -> anyhow::Result<i32> {
 
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
-    let image = load_elf(&bytes)
+    let mut image = load_elf(&bytes)
         .with_context(|| format!("failed to parse ELF: {}", args.elf))?;
+    if let Some(lb) = args.load_base {
+        for seg in &mut image.segments {
+            seg.addr = seg.addr.wrapping_add(lb);
+        }
+        image.entry = image.entry.wrapping_add(lb);
+    }
 
     let mut machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
     if let (Some(bytes), Some(addr)) = (&dtb, cfg.boot.dtb) {

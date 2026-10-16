@@ -570,6 +570,7 @@ impl Cpu {
                 next_pc = self.csr.sepc;
             }
             Instruction::Wfi => {} // 无等待实现：NOP
+            Instruction::SfenceVma => {} // 无 TLB：NOP
 
             Instruction::Fence => {}
             Instruction::FenceI => {}

@@ -110,6 +110,7 @@ pub enum Instruction {
     Mret,
     Sret,
     Wfi,
+    SfenceVma,
     // ---- C extension (RV32C) ----
     CAddi4spn { rd: u8, imm: u32 },
     CLw { rd: u8, rs1: u8, imm: i32 },
@@ -279,6 +280,7 @@ impl core::fmt::Display for Instruction {
             Instruction::Mret => write!(f, "mret"),
             Instruction::Sret => write!(f, "sret"),
             Instruction::Wfi => write!(f, "wfi"),
+            Instruction::SfenceVma => write!(f, "sfence.vma"),
             // ---- C extension ----
             Instruction::CAddi4spn { rd, imm } => write!(f, "c.addi4spn {}, {imm}", reg_name(rd)),
             Instruction::CLw { rd, rs1, imm } => write!(f, "c.lw {}, {}({})", reg_name(rd), imm, reg_name(rs1)),

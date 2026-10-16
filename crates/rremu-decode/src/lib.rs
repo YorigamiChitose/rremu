@@ -149,6 +149,8 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
             // SYSTEM：ecall/ebreak/mret + Zicsr CSR 读写
             let csr_addr = ((word >> 20) & 0xfff) as u16;
             match funct3 {
+                // sfence.vma：funct7=0001001, funct3=000
+                0b000 if funct7 == 0b0001001 => Ok(Instruction::SfenceVma),
                 0b000 if rs1 == 0 && rd == 0 => match (word >> 20) & 0xfff {
                     0x000 => Ok(Instruction::Ecall),
                     0x001 => Ok(Instruction::Ebreak),
@@ -838,6 +840,7 @@ mod tests {
     fn decode_sret_wfi() {
         assert_eq!(decode32(0x1020_0073, PC), Ok(Instruction::Sret));
         assert_eq!(decode32(0x1050_0073, PC), Ok(Instruction::Wfi));
+        assert_eq!(decode32(0x1200_0073, PC), Ok(Instruction::SfenceVma));
     }
 
     #[test]
