@@ -40,7 +40,8 @@ impl CsrState {
 /// 单步结果：正常执行一条、陷入，或 ecall+a7=EXIT_MAGIC 触发宿主退出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepOutcome {
-    Executed { instr: Instruction, len: u8 },
+    /// `bits` 为该指令的原始编码（len==2 时低 16 位，len==4 时全 32 位），供 trace/dump。
+    Executed { instr: Instruction, len: u8, bits: u32 },
     Trapped { cause: u32 },
     /// 执行 ecall 且 a7==EXIT_MAGIC：以 a0（x10）为退出码终止模拟（宿主陷阱协议）。
     Exited { code: i32 },
@@ -232,7 +233,8 @@ impl Cpu {
                 self.pc = next_pc;
                 self.cycle += 1;
                 self.instret += 1;
-                Ok(StepOutcome::Executed { instr, len })
+                let bits = if len == 2 { word & 0xffff } else { word };
+                Ok(StepOutcome::Executed { instr, len, bits })
             }
             Err(TrapErr { cause, mtval }) => {
                 // ecall+a7=EXIT_MAGIC：宿主陷阱协议——以 a0(x10) 为退出码终止模拟。
