@@ -729,6 +729,20 @@ impl Cpu {
     /// 陷入流程：mepc ← pc；mcause ← cause；mtval ← mtval；priv ← M；pc ← mtvec（仅 DIRECT）。
     fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
         sink.emit(EmuEvent::Trap { cause, pc: self.pc });
+
+        // 陷阱委派：非 M 特权下，已委派（medeleg/mideleg）的异常/中断交 S-mode
+        let is_interrupt = cause & 0x8000_0000 != 0;
+        let code = cause & 0x7fff_ffff;
+        let delegated = self.priv_ != Priv::Machine
+            && if is_interrupt {
+                (self.csr.mideleg >> code) & 1 == 1
+            } else {
+                (self.csr.medeleg >> code) & 1 == 1
+            };
+        if delegated {
+            return self.trap_supervisor(cause, mtval);
+        }
+
         self.csr.mepc = self.pc;
         self.csr.mcause = cause;
         self.csr.mtval = mtval;
@@ -748,6 +762,25 @@ impl Cpu {
             return Err(CpuError::Unimplemented("vectored mtvec"));
         }
         self.pc = self.csr.mtvec & !1;
+        Ok(StepOutcome::Trapped { cause })
+    }
+
+    /// 陷入到 S-mode：sepc/scause/stval ← 当前；sstatus.SPP/SPIE/SIE；pc ← stvec（仅 DIRECT）。
+    fn trap_supervisor(&mut self, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
+        self.csr.sepc = self.pc;
+        self.csr.scause = cause;
+        self.csr.stval = mtval;
+        let spp = u32::from(self.priv_ == Priv::Supervisor);
+        let old_sie = (self.csr.mstatus >> csr::MSTATUS_SIE.trailing_zeros()) & 1;
+        self.csr.mstatus &= !(csr::MSTATUS_SPP | csr::MSTATUS_SPIE | csr::MSTATUS_SIE);
+        self.csr.mstatus |= (spp << csr::MSTATUS_SPP.trailing_zeros())
+            | (old_sie << csr::MSTATUS_SPIE.trailing_zeros());
+        self.priv_ = Priv::Supervisor;
+        self.cycle += 1;
+        if self.csr.stvec & 1 == 1 {
+            return Err(CpuError::Unimplemented("vectored stvec"));
+        }
+        self.pc = self.csr.stvec & !1;
         Ok(StepOutcome::Trapped { cause })
     }
 
@@ -1144,6 +1177,32 @@ mod tests {
         assert_eq!(h.cpu.pc(), BASE + 0x10);
         assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SIE, csr::MSTATUS_SIE);
         assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+    }
+
+    #[test]
+    fn exception_delegated_to_supervisor() {
+        let mut h = Harness::new();
+        h.cpu.csr_write(csr::MEDELEG, 1 << cause::ECALL_FROM_U);
+        h.cpu.csr_write(csr::STVEC, BASE + 0x100);
+        h.cpu.priv_ = Priv::User;
+        h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]); // ecall
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_U });
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.pc(), BASE + 0x100);
+        assert_eq!(h.cpu.csr_read(csr::SCAUSE), cause::ECALL_FROM_U);
+        assert_eq!(h.cpu.csr_read(csr::SEPC), BASE);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+    }
+
+    #[test]
+    fn undelegated_ecall_from_u_goes_to_machine() {
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::User;
+        h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_U });
+        assert_eq!(h.cpu.priv_(), Priv::Machine);
     }
 
     #[test]
