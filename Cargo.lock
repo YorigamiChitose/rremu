@@ -1529,6 +1529,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rremu-config"
+version = "0.1.0"
+
+[[package]]
 name = "rremu-cpu"
 version = "0.1.0"
 dependencies = [

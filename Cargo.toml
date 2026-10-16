@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/rremu-config",
     "crates/rremu-isa",
     "crates/rremu-decode",
     "crates/rremu-bus",
@@ -22,6 +23,7 @@ rust-version = "1.99"
 
 # 内部 crate 统一走 path 依赖，成员一律 workspace = true 引用
 [workspace.dependencies]
+rremu-config = { path = "crates/rremu-config" }
 rremu-isa = { path = "crates/rremu-isa" }
 rremu-decode = { path = "crates/rremu-decode" }
 rremu-bus = { path = "crates/rremu-bus" }
