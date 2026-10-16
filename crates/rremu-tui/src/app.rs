@@ -35,10 +35,8 @@ pub struct TuiApp {
     fb_dims: (u32, u32),
     /// 统一配置（dump 路径等）。
     cfg: rremu_config::Config,
-    /// 「指令（反汇编）」面板开关（`p` 键）。
-    show_disasm: bool,
-    /// 「读写（内存事件）」面板开关（`o` 键）。
-    show_events: bool,
+    /// 面板信息档位（`p` 单键循环）：0=全开 1=关指令 2=关指令+读写 3=全关。
+    panel_level: u8,
 }
 
 impl TuiApp {
@@ -56,8 +54,7 @@ impl TuiApp {
             fb_cache: Vec::new(),
             fb_dims: (0, 0),
             cfg,
-            show_disasm: true,
-            show_events: true,
+            panel_level: 0,
         }
     }
 
@@ -114,8 +111,8 @@ impl TuiApp {
 
             self.sync_fb_cache();
             let snap = self.machine.snapshot();
-            // 关闭「指令」面板时不做反汇编采集（省去内存 peek 与格式化）
-            let disasm = if self.show_disasm { self.collect_disasm(snap.pc) } else { Vec::new() };
+            // 档位 ≥1（关指令面板）时不做反汇编采集（省去内存 peek 与格式化）
+            let disasm = if self.panel_level < 1 { self.collect_disasm(snap.pc) } else { Vec::new() };
             let fb = if self.fb_view {
                 Some(FramebufferFrame {
                     width: self.fb_dims.0,
@@ -133,8 +130,7 @@ impl TuiApp {
                 running: self.running,
                 input_mode: self.input_mode,
                 fb_view: self.fb_view,
-                show_disasm: self.show_disasm,
-                show_events: self.show_events,
+                panel_level: self.panel_level,
             };
             terminal.draw(|f| render::draw(f, &data))?;
         }
@@ -257,12 +253,8 @@ impl TuiApp {
                 self.fb_view = !self.fb_view;
             }
             KeyCode::Char('p') => {
-                // 切换「指令（反汇编）」面板
-                self.show_disasm = !self.show_disasm;
-            }
-            KeyCode::Char('o') => {
-                // 切换「读写（内存事件）」面板
-                self.show_events = !self.show_events;
+                // 单键循环面板信息档：full → no-insn → no-insn,io → min
+                self.panel_level = (self.panel_level + 1) % 4;
             }
             KeyCode::Char('D') => {
                 // 手动写 dump（仅在配置了 --dump-on-exit 路径时）

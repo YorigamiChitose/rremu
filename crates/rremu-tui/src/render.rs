@@ -24,10 +24,8 @@ pub struct RenderData<'a> {
     pub running: bool,
     pub input_mode: bool,
     pub fb_view: bool,
-    /// 是否显示/刷新「指令（反汇编）」面板。
-    pub show_disasm: bool,
-    /// 是否显示/刷新「读写（内存事件）」面板。
-    pub show_events: bool,
+    /// 面板信息档位（0=全开；1=关指令；2=关指令+读写；3=全关）。
+    pub panel_level: u8,
 }
 
 pub fn draw(f: &mut Frame, data: &RenderData) {
@@ -44,17 +42,25 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
         .split(area);
 
     draw_top_bar(f, main[0], data.snap, data.speed, data.running);
-    let panels = Panels { disasm: data.show_disasm, events: data.show_events };
+    let panels = Panels::from_level(data.panel_level);
     draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view, panels);
     draw_uart(f, main[2], data.snap, data.input_mode);
-    draw_status_bar(f, main[3], data.input_mode, panels);
+    draw_status_bar(f, main[3], data.input_mode, data.panel_level);
 }
 
-/// 右侧面板显示/刷新开关。
+/// 各面板显示/刷新开关。
 #[derive(Clone, Copy)]
 struct Panels {
     disasm: bool,
     events: bool,
+    registers: bool,
+}
+
+impl Panels {
+    /// 档位 → 开关：0 全开，1 关指令，2 再关读写，3 全关。
+    fn from_level(level: u8) -> Self {
+        Self { disasm: level < 1, events: level < 2, registers: level < 3 }
+    }
 }
 
 fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedTier, running: bool) {
@@ -87,13 +93,16 @@ fn draw_middle(
     fb_view: bool,
     panels: Panels,
 ) {
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(38), Constraint::Min(0)])
-        .split(area);
-
-    draw_registers(f, cols[0], snap);
-    draw_right_panels(f, cols[1], snap, disasm, fb, fb_view, panels);
+    if panels.registers {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(38), Constraint::Min(0)])
+            .split(area);
+        draw_registers(f, cols[0], snap);
+        draw_right_panels(f, cols[1], snap, disasm, fb, fb_view, panels);
+    } else {
+        draw_right_panels(f, area, snap, disasm, fb, fb_view, panels);
+    }
 }
 
 fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
@@ -268,14 +277,18 @@ fn draw_uart(f: &mut Frame, area: Rect, snap: &MachineSnapshot, input_mode: bool
     f.render_widget(para, area);
 }
 
-fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panels: Panels) {
+fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8) {
+    let level_label = match panel_level {
+        0 => "full",
+        1 => "no-insn",
+        2 => "no-insn,io",
+        _ => "min",
+    };
     let hint = if input_mode {
         " Esc: exit input mode | type to send to UART ".to_owned()
     } else {
         format!(
-            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:insn[{}]  o:io[{}]  r:reset  b:fb  q:quit ",
-            if panels.disasm { "on" } else { "off" },
-            if panels.events { "on" } else { "off" }
+            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:panels[{level_label}]  r:reset  b:fb  q:quit "
         )
     };
     draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);
