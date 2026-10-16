@@ -57,6 +57,28 @@ pub struct ElfRef {
     pub sha256: Option<String>,
 }
 
+impl ElfRef {
+    /// 从路径构造（计算 sha256；读取失败时 sha256 为 None）。
+    pub fn from_path(path: &str) -> Self {
+        let sha256 = std::fs::read(path).ok().map(|b| sha256_hex(&b));
+        Self { path: path.to_owned(), sha256 }
+    }
+}
+
+/// 字节串的 sha256 十六进制摘要。
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut s = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 /// 机器状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineState {
@@ -131,8 +153,8 @@ impl EventItem {
 }
 
 impl Dump {
-    /// 从 machine 构造 dump（纯读取，无副作用）。`elf_path` 由调用方提供。
-    pub fn from_machine(machine: &Machine, elf_path: Option<&str>) -> Self {
+    /// 从 machine 构造 dump（纯读取，无副作用）。`elf` 引用由调用方提供。
+    pub fn from_machine(machine: &Machine, elf: Option<ElfRef>) -> Self {
         let snap = machine.snapshot();
         let reason = match &snap.state {
             RunState::Exited(code) => Reason::Halt { code: *code },
@@ -181,7 +203,7 @@ impl Dump {
             format_version: FORMAT_VERSION,
             rremu_version: env!("CARGO_PKG_VERSION").to_owned(),
             reason,
-            elf: elf_path.map(|p| ElfRef { path: p.to_owned(), sha256: None }),
+            elf,
             machine: MachineState {
                 cycle: snap.cycle,
                 instret: snap.csrs.minstret,
@@ -225,7 +247,7 @@ mod tests {
         let base = 0x8000_0000;
         let mut m = MachineBuilder::new().ram(base, 0x1000).load(nop_image(base)).build().unwrap();
         m.step_n(1);
-        let d = Dump::from_machine(&m, Some("prog.elf"));
+        let d = Dump::from_machine(&m, Some(ElfRef { path: "prog.elf".to_owned(), sha256: None }));
         assert_eq!(d.format_version, FORMAT_VERSION);
         assert_eq!(d.reason, Reason::Paused);
         assert_eq!(d.machine.pc, hex(base + 4));
@@ -238,6 +260,20 @@ mod tests {
         assert_eq!(back.format_version, d.format_version);
         assert_eq!(back.machine.pc, d.machine.pc);
         assert_eq!(back.trace.len(), 1);
+    }
+
+    #[test]
+    fn elf_ref_computes_sha256() {
+        let p = std::env::temp_dir().join("rremu_dump_sha_test.bin");
+        std::fs::write(&p, b"hello").unwrap();
+        let r = ElfRef::from_path(p.to_str().unwrap());
+        assert_eq!(
+            r.sha256.as_deref(),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+        let _ = std::fs::remove_file(&p);
+        // 不存在的路径 → sha256 为 None
+        assert!(ElfRef::from_path("/nonexistent/xyz.elf").sha256.is_none());
     }
 
     #[test]

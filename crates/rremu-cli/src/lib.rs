@@ -77,7 +77,8 @@ impl Repl {
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
     fn write_dump(&self, path: &str) {
-        match self.machine.dump(self.elf_path.as_deref()).to_json() {
+        let elf = self.elf_path.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        match self.machine.dump(elf).to_json() {
             Ok(json) => match std::fs::write(path, json) {
                 Ok(()) => println!("Dump written to {path}."),
                 Err(e) => eprintln!("rremu: dump write failed: {e}"),

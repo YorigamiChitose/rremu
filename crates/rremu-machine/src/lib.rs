@@ -886,9 +886,9 @@ impl Machine {
         self.collector.uart_ring()
     }
 
-    /// 构造结构化 dump（纯读取，无副作用）。`elf_path` 由调用方提供。
-    pub fn dump(&self, elf_path: Option<&str>) -> dump::Dump {
-        dump::Dump::from_machine(self, elf_path)
+    /// 构造结构化 dump（纯读取，无副作用）。`elf` 引用由调用方提供。
+    pub fn dump(&self, elf: Option<dump::ElfRef>) -> dump::Dump {
+        dump::Dump::from_machine(self, elf)
     }
 }
 
