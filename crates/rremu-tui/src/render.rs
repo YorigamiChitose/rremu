@@ -24,8 +24,10 @@ pub struct RenderData<'a> {
     pub running: bool,
     pub input_mode: bool,
     pub fb_view: bool,
-    /// 面板信息是否自动刷新（关闭时运行中跳过采集/绘制以提速）。
-    pub refresh: bool,
+    /// 是否显示/刷新「指令（反汇编）」面板。
+    pub show_disasm: bool,
+    /// 是否显示/刷新「读写（内存事件）」面板。
+    pub show_events: bool,
 }
 
 pub fn draw(f: &mut Frame, data: &RenderData) {
@@ -42,9 +44,17 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
         .split(area);
 
     draw_top_bar(f, main[0], data.snap, data.speed, data.running);
-    draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view);
+    let panels = Panels { disasm: data.show_disasm, events: data.show_events };
+    draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view, panels);
     draw_uart(f, main[2], data.snap, data.input_mode);
-    draw_status_bar(f, main[3], data.input_mode, data.refresh);
+    draw_status_bar(f, main[3], data.input_mode, panels);
+}
+
+/// 右侧面板显示/刷新开关。
+#[derive(Clone, Copy)]
+struct Panels {
+    disasm: bool,
+    events: bool,
 }
 
 fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedTier, running: bool) {
@@ -75,6 +85,7 @@ fn draw_middle(
     disasm: &[DisasmLine],
     fb: Option<&FramebufferFrame<'_>>,
     fb_view: bool,
+    panels: Panels,
 ) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -82,7 +93,7 @@ fn draw_middle(
         .split(area);
 
     draw_registers(f, cols[0], snap);
-    draw_right_panels(f, cols[1], snap, disasm, fb, fb_view);
+    draw_right_panels(f, cols[1], snap, disasm, fb, fb_view, panels);
 }
 
 fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
@@ -151,16 +162,37 @@ fn draw_right_panels(
     disasm: &[DisasmLine],
     fb: Option<&FramebufferFrame<'_>>,
     fb_view: bool,
+    panels: Panels,
 ) {
-    let halves = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+    // 底部面板：fb 视图优先；否则按 events 开关显示内存事件
+    let bottom_on = if fb_view { fb.is_some() } else { panels.events };
 
-    draw_disasm(f, halves[0], disasm);
-    match (fb_view, fb) {
-        (true, Some(fb_data)) => draw_framebuffer(f, halves[1], fb_data),
-        _ => draw_mem_ring(f, halves[1], snap),
+    match (panels.disasm, bottom_on) {
+        (true, true) => {
+            let halves = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(area);
+            draw_disasm(f, halves[0], disasm);
+            if fb_view {
+                if let Some(fb_data) = fb {
+                    draw_framebuffer(f, halves[1], fb_data);
+                }
+            } else {
+                draw_mem_ring(f, halves[1], snap);
+            }
+        }
+        (true, false) => draw_disasm(f, area, disasm),
+        (false, true) => {
+            if fb_view {
+                if let Some(fb_data) = fb {
+                    draw_framebuffer(f, area, fb_data);
+                }
+            } else {
+                draw_mem_ring(f, area, snap);
+            }
+        }
+        (false, false) => {}
     }
 }
 
@@ -236,13 +268,14 @@ fn draw_uart(f: &mut Frame, area: Rect, snap: &MachineSnapshot, input_mode: bool
     f.render_widget(para, area);
 }
 
-fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, refresh: bool) {
+fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panels: Panels) {
     let hint = if input_mode {
         " Esc: exit input mode | type to send to UART ".to_owned()
     } else {
         format!(
-            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:refresh[{}]  r:reset  b:fb  q:quit ",
-            if refresh { "on" } else { "off" }
+            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:insn[{}]  o:io[{}]  r:reset  b:fb  q:quit ",
+            if panels.disasm { "on" } else { "off" },
+            if panels.events { "on" } else { "off" }
         )
     };
     draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);
