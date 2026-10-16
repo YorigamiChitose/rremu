@@ -7,7 +7,7 @@ use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
 use rremu_config::Config;
 use rremu_cpu::{Cpu, StepOutcome};
 use rremu_decode::{decode16, decode32, instr_len};
-use rremu_devices::{Clint, Framebuffer, Ram, Uart};
+use rremu_devices::{Clint, Framebuffer, Plic, Ram, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::{csr, Address, Word};
 use rremu_loader::Image;
@@ -362,6 +362,9 @@ impl Machine {
             // CLINT 范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
             bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Clint::new(d.base)))?;
         }
+        if let Some(d) = cfg.layout.plic {
+            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Plic::new(d.base)))?;
+        }
         if let Some(f) = cfg.layout.fb {
             let fb_size = f
                 .width
@@ -426,6 +429,8 @@ impl Machine {
             fb,
         };
         machine.set_event_ring_capacity(cfg.diag.event_capacity, cfg.diag.uart_event_capacity);
+        // 启动参数注入：a0=hartid、a1=dtb（qemu-virt 约定）
+        machine.cpu.set_args(cfg.boot.hartid, cfg.boot.dtb.unwrap_or(0));
         Ok(machine)
     }
 }
@@ -897,6 +902,19 @@ mod tests {
             panic!("from_config should reject out-of-range segment")
         };
         assert!(matches!(err, MachineError::SegmentOutOfRange { .. }));
+    }
+
+    #[test]
+    fn from_config_injects_boot_args() {
+        let base = 0x8000_0000;
+        let mut cfg = Config::default();
+        cfg.layout.ram_base = base;
+        cfg.layout.ram_size = 0x1000;
+        cfg.boot.hartid = 3;
+        cfg.boot.dtb = Some(0x8000_0900);
+        let machine = Machine::from_config(&cfg, Some(nop_image(base))).unwrap();
+        assert_eq!(machine.cpu.reg(10), 3); // a0 = hartid
+        assert_eq!(machine.cpu.reg(11), 0x8000_0900); // a1 = dtb
     }
 
     #[test]

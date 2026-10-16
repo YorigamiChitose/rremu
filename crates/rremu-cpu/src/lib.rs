@@ -181,6 +181,12 @@ impl Cpu {
         self.reservation = None;
     }
 
+    /// 注入启动参数到 `a0`(x10)/`a1`(x11)（qemu-virt 约定：hartid / dtb）。
+    pub fn set_args(&mut self, a0: u32, a1: u32) {
+        self.x[10] = a0;
+        self.x[11] = a1;
+    }
+
     /// 取指 → 解码 → 执行 → 写回；错误路径统一走 trap。
     ///
     /// 陷阱优先级（取指异常优先于中断）：先取指（含对齐检查），取指成功后再检查

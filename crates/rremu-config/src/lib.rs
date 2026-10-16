@@ -21,6 +21,8 @@ pub const DEFAULT_RAM_SIZE: u32 = 16 * 1024 * 1024;
 pub const DEFAULT_UART_BASE: u32 = 0x1000_0000;
 /// 默认 CLINT 基址。
 pub const DEFAULT_CLINT_BASE: u32 = 0x0200_0000;
+/// 默认 PLIC 基址（qemu-virt）。
+pub const DEFAULT_PLIC_BASE: u32 = 0x0c00_0000;
 /// 默认 Framebuffer 基址。
 pub const DEFAULT_FB_BASE: u32 = 0x2000_0000;
 /// 默认 Framebuffer 宽度。
@@ -32,6 +34,8 @@ pub const DEFAULT_FB_HEIGHT: u32 = 480;
 pub const UART_SIZE: u32 = 8;
 /// CLINT 设备尺寸（覆盖 msip/mtimecmp/mtime）。
 pub const CLINT_SIZE: u32 = 0xC000;
+/// PLIC 映射尺寸（qemu-virt）。
+pub const PLIC_SIZE: u32 = 0x40_0000;
 /// Framebuffer 每像素字节数（RGB565）。
 pub const FB_BPP: u32 = 2;
 
@@ -71,6 +75,8 @@ pub struct Layout {
     pub uart: Option<Device>,
     /// `None` 表示不映射 CLINT。
     pub clint: Option<Device>,
+    /// `None` 表示不映射 PLIC。
+    pub plic: Option<Device>,
     /// `None` 表示不映射 Framebuffer。
     pub fb: Option<FbLayout>,
 }
@@ -81,6 +87,16 @@ pub struct Diag {
     pub trace_capacity: usize,
     pub event_capacity: usize,
     pub uart_event_capacity: usize,
+}
+
+/// 启动上下文（复位后注入到 a0/a1）。
+///
+/// qemu-virt 约定：`a0 = hartid`、`a1 = dtb 物理地址`。
+/// RT-Thread 可能不用；OpenSBI/Linux 必需。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Boot {
+    pub hartid: u32,
+    pub dtb: Option<u32>,
 }
 
 /// host 侧路径（dump/ELF）。
@@ -96,6 +112,7 @@ pub struct Config {
     pub layout: Layout,
     pub diag: Diag,
     pub paths: Paths,
+    pub boot: Boot,
     /// 覆盖 ELF 入口（`None` 时用镜像自身入口）。
     pub entry: Option<u32>,
 }
@@ -107,6 +124,7 @@ impl Default for Layout {
             ram_size: DEFAULT_RAM_SIZE,
             uart: Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }),
             clint: Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }),
+            plic: Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }),
             fb: Some(FbLayout {
                 base: DEFAULT_FB_BASE,
                 width: DEFAULT_FB_WIDTH,
@@ -248,6 +266,7 @@ mod tests {
         assert_eq!(c.layout.ram_size, DEFAULT_RAM_SIZE);
         assert_eq!(c.layout.uart, Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }));
         assert_eq!(c.layout.clint, Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }));
+        assert_eq!(c.layout.plic, Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }));
         assert_eq!(
             c.layout.fb,
             Some(FbLayout {
