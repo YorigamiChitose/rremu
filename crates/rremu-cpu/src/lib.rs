@@ -198,7 +198,7 @@ impl Cpu {
         }
 
         // 取指单元(IFU)：取指 access fault 优先于中断
-        let word = match Self::fetch_word(bus, pc, sink) {
+        let word = match self.fetch_word(bus, pc, sink) {
             Ok(w) => w,
             Err(c) => return self.trap(sink, c, pc),
         };
@@ -270,24 +270,30 @@ impl Cpu {
     ///
     /// 调用前 `pc` 已保证偶数；返回 Err 为取指异常 cause。
     /// RV64 扩展点：拆分序列需随 XLEN=8 调整。
-    fn fetch_word<B: Bus, E: EventSink>(
-        bus: &mut B,
-        pc: u32,
-        sink: &mut E,
-    ) -> Result<u32, u32> {
+    fn fetch_word<B: Bus, E: EventSink>(&self, bus: &mut B, pc: u32, sink: &mut E) -> Result<u32, u32> {
         // 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT
         fn map(e: rremu_bus::BusError) -> u32 {
             Cpu::cause_of(&e, cause::INSTR_MISALIGNED, cause::INSTR_ACCESS_FAULT)
         }
+        // 地址翻译（当前 bare 直通）
+        let pa = self.translate(pc);
         if pc & 3 == 0 {
-            return bus.inst_read(pc, AccessSize::Word, sink).map_err(map);
+            return bus.inst_read(pa, AccessSize::Word, sink).map_err(map);
         }
         // pc & 3 == 2：两次对齐 Half，物理位宽与 IF 事件严格一致
-        let lo = bus.inst_read(pc, AccessSize::Half, sink).map_err(map)?;
-        let hi = bus
-            .inst_read(pc.wrapping_add(2), AccessSize::Half, sink)
-            .map_err(map)?;
+        let lo = bus.inst_read(pa, AccessSize::Half, sink).map_err(map)?;
+        let hi = bus.inst_read(pa.wrapping_add(2), AccessSize::Half, sink).map_err(map)?;
         Ok(lo | (hi << 16))
+    }
+
+    /// 虚拟地址 → 物理地址翻译的**唯一收口**。
+    ///
+    /// 当前为 bare 直通；后续 Sv32（S-mode，satp）将在此展开页表遍历，
+    /// 并可能返回 page-fault 原因。所有取指/访存路径都已经此函数，
+    /// 使 MMU 的加入无需改动调用点。
+    #[inline]
+    fn translate(&self, va: u32) -> u32 {
+        va
     }
 
     /// 执行一条已解码指令；成功返回下一 pc，失败返回 trap 原因。
@@ -619,7 +625,8 @@ impl Cpu {
         addr: u32,
         size: AccessSize,
     ) -> Result<u32, TrapErr> {
-        bus.data_read(addr, size, sink).map_err(|e| TrapErr {
+        let pa = self.translate(addr);
+        bus.data_read(pa, size, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
             mtval: addr,
         })
@@ -635,7 +642,8 @@ impl Cpu {
         data: u32,
     ) -> Result<(), TrapErr> {
         self.reservation = None; // 任何 store 都使 lr.w 保留失效
-        bus.data_write(addr, size, data, sink).map_err(|e| TrapErr {
+        let pa = self.translate(addr);
+        bus.data_write(pa, size, data, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
             mtval: addr,
         })
