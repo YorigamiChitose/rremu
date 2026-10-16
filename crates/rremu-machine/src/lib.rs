@@ -465,6 +465,7 @@ impl MachineBuilder {
             state: RunState::Idle,
             trace: VecDeque::new(),
             last_trap: None,
+            trace_at_trap: None,
             dbg: DebugController::new(),
             fb: FramebufferAccessor::new(self.fb_base, self.fb_width, self.fb_height),
         })
@@ -487,6 +488,8 @@ pub struct Machine {
     trace: VecDeque<TraceEntry>,
     /// 最近一次 trap 的 (mcause, mepc, mtval)；从事件环之外持久保留。
     last_trap: Option<(u32, u32, u32)>,
+    /// trap 发生瞬间的指令 trace 快照（崩溃路径，不含之后的 handler）。
+    trace_at_trap: Option<Vec<TraceEntry>>,
 }
 
 impl Machine {
@@ -569,6 +572,8 @@ impl Machine {
             Ok(StepOutcome::Trapped { .. }) => {
                 let c = self.cpu.csr_state();
                 self.last_trap = Some((c.mcause, c.mepc, c.mtval));
+                // 冻结崩溃前的调用路径（此后 handler 指令不再污染）
+                self.trace_at_trap = Some(self.trace.iter().copied().collect());
                 None
             }
             Err(e) => {
@@ -647,6 +652,7 @@ impl Machine {
         self.state = RunState::Idle;
         self.trace.clear();
         self.last_trap = None;
+        self.trace_at_trap = None;
         self.dbg.reset();
         Ok(())
     }
@@ -844,6 +850,11 @@ impl Machine {
         self.last_trap
     }
 
+    /// trap 发生瞬间的指令 trace 快照（崩溃路径）。
+    pub fn trace_at_trap(&self) -> Option<&[TraceEntry]> {
+        self.trace_at_trap.as_deref()
+    }
+
     /// 当前运行状态（轻量查询，避免为读状态做整快照）。
     pub fn state(&self) -> RunState {
         self.state.clone()
@@ -958,6 +969,8 @@ mod tests {
         let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
         machine.step_n(1); // trap ILLEGAL_INSTR → pc = mtvec(0)
         assert_eq!(machine.last_trap(), Some((2, base, 0)));
+        // trap 时刻冻结的 trace 已生成（此例非法指令为首条，故为空）
+        assert_eq!(machine.trace_at_trap(), Some(&[][..]));
     }
 
     #[test]

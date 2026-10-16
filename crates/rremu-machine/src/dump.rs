@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use rremu_bus::EmuEvent;
 
-use crate::{Machine, RunState};
+use crate::{Machine, RunState, TraceEntry};
 
 /// dump 格式版本。
 pub const FORMAT_VERSION: u32 = 1;
@@ -170,11 +170,12 @@ impl Dump {
             .last_trap()
             .map(|(cause, pc, mtval)| Trap { cause: hex(cause), pc: hex(pc), mtval: hex(mtval) });
 
-        let trace: Vec<TraceItem> = machine
-            .trace()
-            .iter()
-            .map(|t| TraceItem { pc: hex(t.pc), bits: hex(t.bits), len: t.len })
-            .collect();
+        // trace 优先用 trap 时刻冻结的崩溃路径；否则用当前 trace
+        let to_item = |t: &TraceEntry| TraceItem { pc: hex(t.pc), bits: hex(t.bits), len: t.len };
+        let trace: Vec<TraceItem> = match machine.trace_at_trap() {
+            Some(frozen) => frozen.iter().map(to_item).collect(),
+            None => machine.trace().iter().map(to_item).collect(),
+        };
 
         Dump {
             format_version: FORMAT_VERSION,
