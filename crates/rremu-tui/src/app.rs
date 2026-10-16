@@ -33,14 +33,12 @@ pub struct TuiApp {
     /// 帧缓冲缓存：仅当 dirty 时从设备拷入，render 读缓存。
     fb_cache: Vec<u32>,
     fb_dims: (u32, u32),
-    /// ELF 路径（dump 引用）。
-    elf_path: Option<String>,
-    /// 退出/故障时自动写 dump 的路径（None 关闭）。
-    dump_on_exit: Option<String>,
+    /// 统一配置（dump 路径等）。
+    cfg: rremu_config::Config,
 }
 
 impl TuiApp {
-    pub fn new(machine: Machine, elf_path: Option<String>, dump_on_exit: Option<String>) -> Self {
+    pub fn new(machine: Machine, cfg: rremu_config::Config) -> Self {
         Self {
             machine,
             running: false,
@@ -53,17 +51,16 @@ impl TuiApp {
             fault_reason: None,
             fb_cache: Vec::new(),
             fb_dims: (0, 0),
-            elf_path,
-            dump_on_exit,
+            cfg,
         }
     }
 
-    /// 将当前机器状态写入 `path`（TUI 下静默，失败忽略）。
+    /// 将当前机器状态写入 `cfg.paths.dump_on_exit`（TUI 下静默，失败忽略）。
     fn write_dump(&self) {
-        let Some(path) = self.dump_on_exit.as_deref() else {
+        let Some(path) = self.cfg.paths.dump_on_exit.as_deref() else {
             return;
         };
-        let elf = self.elf_path.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self.cfg.paths.elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
         if let Ok(json) = self.machine.dump(elf).to_json() {
             let _ = std::fs::write(path, json);
         }

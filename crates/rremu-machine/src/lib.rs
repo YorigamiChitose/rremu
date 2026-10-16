@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
+use rremu_config::Config;
 use rremu_cpu::{Cpu, StepOutcome};
 use rremu_decode::{decode16, decode32, instr_len};
 use rremu_devices::{Clint, Framebuffer, Ram, Uart};
@@ -200,8 +201,6 @@ pub struct TraceEntry {
     pub len: u8,
 }
 
-/// 指令 trace 环形缓冲容量。
-pub const TRACE_CAPACITY: usize = 32;
 
 /// 帧缓冲零拷贝引用（窗口/TUI 刷新用）。
 ///
@@ -341,106 +340,55 @@ pub struct MachineSnapshot {
     pub uart_out: Vec<u8>,
 }
 
-#[derive(Debug, Default)]
-pub struct MachineBuilder {
-    ram_base: u32,
-    ram_size: u32,
-    uart_base: Option<u32>,
-    clint_base: Option<u32>,
-    fb_base: Option<u32>,
-    fb_width: u32,
-    fb_height: u32,
-    entry: Option<u32>,
-    image: Option<Image>,
-}
-
-impl MachineBuilder {
-    pub fn new() -> Self {
-        Self { ram_base: 0x8000_0000, ram_size: 16 * 1024 * 1024, ..Default::default() }
-    }
-
-    pub fn ram(mut self, base: u32, size: u32) -> Self {
-        self.ram_base = base;
-        self.ram_size = size;
-        self
-    }
-
-    pub fn uart(mut self, base: u32) -> Self {
-        self.uart_base = Some(base);
-        self
-    }
-
-    pub fn clint(mut self, base: u32) -> Self {
-        self.clint_base = Some(base);
-        self
-    }
-
-    pub fn framebuffer(mut self, base: u32, width: u32, height: u32) -> Self {
-        self.fb_base = Some(base);
-        self.fb_width = width;
-        self.fb_height = height;
-        self
-    }
-
-    pub fn entry(mut self, addr: u32) -> Self {
-        self.entry = Some(addr);
-        self
-    }
-
-    pub fn load(mut self, image: Image) -> Self {
-        self.image = Some(image);
-        self
-    }
-
-    pub fn build(self) -> Result<Machine, MachineError> {
-        if self.ram_size == 0 {
-            return Err(MachineError::InvalidConfig("ram size must be non-zero".into()));
-        }
-        let ram_end = self
-            .ram_base
-            .checked_add(self.ram_size)
-            .ok_or_else(|| MachineError::InvalidConfig("ram range overflows address space".into()))?;
+impl Machine {
+    /// 从配置 + 可选镜像构造机器（配置的唯一入口）。
+    ///
+    /// 配置合法性与校验已由 `rremu_config::Config`（`resolve`/`validate`）完成；
+    /// 此处仅做依赖镜像的段范围校验与设备映射。
+    pub fn from_config(cfg: &Config, image: Option<Image>) -> Result<Machine, MachineError> {
+        let ram_base = cfg.layout.ram_base;
+        let ram_size = cfg.layout.ram_size;
+        // 防御性：配置应已校验；overflow 不可能（保留兜底）
+        let ram_end = ram_base
+            .checked_add(ram_size)
+            .ok_or_else(|| MachineError::InvalidConfig("ram range overflows".into()))?;
 
         let mut bus = BusRouter::new();
-        bus.map(self.ram_base..ram_end, Box::new(Ram::new(self.ram_base, self.ram_size)))?;
-        if let Some(ub) = self.uart_base {
-            bus.map(ub..ub + 8, Box::new(Uart::new(ub)))?;
+        bus.map(ram_base..ram_end, Box::new(Ram::new(ram_base, ram_size)))?;
+        if let Some(d) = cfg.layout.uart {
+            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Uart::new(d.base)))?;
         }
-        if let Some(cb) = self.clint_base {
-            // CLINT 标准范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
-            bus.map(cb..cb + 0xC000, Box::new(Clint::new(cb)))?;
+        if let Some(d) = cfg.layout.clint {
+            // CLINT 范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
+            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Clint::new(d.base)))?;
         }
-        if let Some(fb) = self.fb_base {
-            if self.fb_width == 0 || self.fb_height == 0 {
-                return Err(MachineError::InvalidConfig("framebuffer dimensions must be non-zero".into()));
-            }
-            let fb_size = self
-                .fb_width
-                .checked_mul(self.fb_height)
-                .and_then(|n| n.checked_mul(2))
+        if let Some(f) = cfg.layout.fb {
+            let fb_size = f
+                .width
+                .checked_mul(f.height)
+                .and_then(|n| n.checked_mul(f.bpp))
                 .ok_or_else(|| MachineError::InvalidConfig("framebuffer size overflow".into()))?;
             bus.map(
-                fb..fb + fb_size,
-                Box::new(Framebuffer::new(fb, self.fb_width, self.fb_height)),
+                f.base..f.base.wrapping_add(fb_size),
+                Box::new(Framebuffer::new(f.base, f.width, f.height)),
             )?;
         }
 
-        let image = self.image;
         if let Some(img) = &image {
             for seg in &img.segments {
                 let end = seg.addr.checked_add(seg.data.len() as u32).ok_or(
                     MachineError::SegmentOutOfRange {
                         addr: seg.addr,
                         len: seg.data.len(),
-                        ram_base: self.ram_base,
+                        ram_base,
                         ram_end,
                     },
                 )?;
-                if seg.addr < self.ram_base || end > ram_end {
+                if seg.addr < ram_base || end > ram_end {
                     return Err(MachineError::SegmentOutOfRange {
                         addr: seg.addr,
                         len: seg.data.len(),
-                        ram_base: self.ram_base,
+                        ram_base,
                         ram_end,
                     });
                 }
@@ -450,25 +398,35 @@ impl MachineBuilder {
             }
         }
 
-        let entry =
-            self.entry.or_else(|| image.as_ref().map(|i| i.entry)).ok_or(MachineError::NoEntry)?;
+        let entry = cfg
+            .entry
+            .or_else(|| image.as_ref().map(|i| i.entry))
+            .ok_or(MachineError::NoEntry)?;
 
-        Ok(Machine {
+        let fb = match cfg.layout.fb {
+            Some(f) => FramebufferAccessor::new(Some(f.base), f.width, f.height),
+            None => FramebufferAccessor::new(None, 0, 0),
+        };
+
+        let mut machine = Machine {
             cpu: Cpu::new(entry),
             bus,
             collector: RingCollector::new(),
             image,
-            ram_base: self.ram_base,
-            uart_base: self.uart_base,
-            clint_base: self.clint_base,
+            ram_base,
+            uart_base: cfg.layout.uart.map(|d| d.base),
+            clint_base: cfg.layout.clint.map(|d| d.base),
             entry,
             state: RunState::Idle,
             trace: VecDeque::new(),
+            trace_capacity: cfg.diag.trace_capacity,
             last_trap: None,
             trace_at_trap: None,
             dbg: DebugController::new(),
-            fb: FramebufferAccessor::new(self.fb_base, self.fb_width, self.fb_height),
-        })
+            fb,
+        };
+        machine.set_event_ring_capacity(cfg.diag.event_capacity, cfg.diag.uart_event_capacity);
+        Ok(machine)
     }
 }
 
@@ -486,6 +444,8 @@ pub struct Machine {
     entry: u32,
     state: RunState,
     trace: VecDeque<TraceEntry>,
+    /// 指令 trace 环形缓冲容量（来自配置）。
+    trace_capacity: usize,
     /// 最近一次 trap 的 (mcause, mepc, mtval)；从事件环之外持久保留。
     last_trap: Option<(u32, u32, u32)>,
     /// trap 发生瞬间的指令 trace 快照（崩溃路径，不含之后的 handler）。
@@ -834,13 +794,13 @@ impl Machine {
 
     /// 记录一条已执行指令到 trace 环（满则淘汰最旧）。
     fn push_trace(&mut self, pc: u32, bits: u32, len: u8) {
-        if self.trace.len() == TRACE_CAPACITY {
+        if self.trace.len() == self.trace_capacity {
             self.trace.pop_front();
         }
         self.trace.push_back(TraceEntry { pc, bits, len });
     }
 
-    /// 最近 `TRACE_CAPACITY` 条已执行指令（最旧在前），供 dump 使用。
+    /// 最近 `trace_capacity` 条已执行指令（最旧在前），供 dump 使用。
     pub fn trace(&self) -> &VecDeque<TraceEntry> {
         &self.trace
     }
@@ -914,14 +874,27 @@ impl EvalContext for MachineCtx<'_> {
 mod tests {
     use super::*;
 
+    /// 测试辅助：自定义 RAM 基址/大小（其余用默认布局）+ 镜像。
+    pub(crate) fn test_machine(ram_base: u32, ram_size: u32, image: Image) -> Machine {
+        let cfg = Config {
+            layout: rremu_config::Layout { ram_base, ram_size, ..Default::default() },
+            ..Config::default()
+        };
+        Machine::from_config(&cfg, Some(image)).unwrap()
+    }
+
     #[test]
-    fn builder_rejects_out_of_range_segment() {
+    fn from_config_rejects_out_of_range_segment() {
         let image = Image {
             segments: vec![rremu_loader::Segment { addr: 0x9000_0000, data: vec![0; 16] }],
             entry: 0x9000_0000,
         };
-        let Err(err) = MachineBuilder::new().ram(0x8000_0000, 0x1000).load(image).build() else {
-            panic!("builder should reject out-of-range segment")
+        let cfg = Config {
+            layout: rremu_config::Layout { ram_base: 0x8000_0000, ram_size: 0x1000, ..Default::default() },
+            ..Config::default()
+        };
+        let Err(err) = Machine::from_config(&cfg, Some(image)) else {
+            panic!("from_config should reject out-of-range segment")
         };
         assert!(matches!(err, MachineError::SegmentOutOfRange { .. }));
     }
@@ -943,7 +916,7 @@ mod tests {
             segments: vec![rremu_loader::Segment { addr: base, data: bytes }],
             entry: base,
         };
-        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        let mut machine = test_machine(base, 0x1000, image);
         let rr = machine.step_n(3);
         assert!(matches!(rr, RunResult::Faulted { reason } if reason.contains("vectored mtvec")));
         assert!(matches!(machine.state(), RunState::Faulted(_)));
@@ -966,7 +939,7 @@ mod tests {
             segments: vec![rremu_loader::Segment { addr: base, data: 0x0000u16.to_le_bytes().to_vec() }],
             entry: base,
         };
-        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        let mut machine = test_machine(base, 0x1000, image);
         machine.step_n(1); // trap ILLEGAL_INSTR → pc = mtvec(0)
         assert_eq!(machine.last_trap(), Some((2, base, 0)));
         // trap 时刻冻结的 trace 已生成（此例非法指令为首条，故为空）
@@ -983,7 +956,7 @@ mod tests {
         }
         bytes.extend_from_slice(&0x0000u16.to_le_bytes());
         let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
-        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        let mut machine = test_machine(base, 0x1000, image);
         machine.step_n(4); // 3 nop + trap
         let frozen = machine.trace_at_trap().unwrap();
         assert_eq!(frozen.len(), 3);
@@ -1000,10 +973,10 @@ mod tests {
             bytes.extend_from_slice(&nop.to_le_bytes());
         }
         let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
-        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(image).build().unwrap();
+        let mut machine = test_machine(base, 0x1000, image);
         machine.step_n(40);
         // 容量 32：运行 40 条后只保留最后 32 条
-        assert_eq!(machine.trace().len(), TRACE_CAPACITY);
+        assert_eq!(machine.trace().len(), rremu_config::DEFAULT_TRACE_CAPACITY);
         let front = machine.trace().front().unwrap();
         assert_eq!(front.pc, base + 8 * 4); // 前 8 条被淘汰
         assert_eq!(front.bits, nop);
@@ -1021,7 +994,7 @@ mod tests {
     #[test]
     fn step_n_breakpoint_sets_paused_state() {
         let base = 0x8000_0000;
-        let mut machine = MachineBuilder::new().ram(base, 0x1000).load(nop_image(base)).build().unwrap();
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
         machine.add_breakpoint(base);
         let rr = machine.step_n(1);
         assert_eq!(rr, RunResult::HitBreakpoint { addr: base });
@@ -1031,13 +1004,7 @@ mod tests {
     #[test]
     fn reset_clears_uart_and_clint_state() {
         let base = 0x8000_0000;
-        let mut machine = MachineBuilder::new()
-            .ram(base, 0x1000)
-            .uart(0x1000_0000)
-            .clint(0x0200_0000)
-            .load(nop_image(base))
-            .build()
-            .unwrap();
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
 
         // 注入 UART 输入 + 置 CLINT msip
         machine.uart_push_input(b'A');

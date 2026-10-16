@@ -233,7 +233,7 @@ impl Dump {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
-    use crate::MachineBuilder;
+    use crate::tests::test_machine;
     use rremu_loader::{Image, Segment};
 
     fn nop_image(entry: u32) -> Image {
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn dump_roundtrip_json() {
         let base = 0x8000_0000;
-        let mut m = MachineBuilder::new().ram(base, 0x1000).load(nop_image(base)).build().unwrap();
+        let mut m = test_machine(base, 0x1000, nop_image(base));
         m.step_n(1);
         let d = Dump::from_machine(&m, Some(ElfRef { path: "prog.elf".to_owned(), sha256: None }));
         assert_eq!(d.format_version, FORMAT_VERSION);
@@ -285,7 +285,7 @@ mod tests {
         }
         bytes.extend_from_slice(&0x0000u16.to_le_bytes()); // illegal
         let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
-        let mut m = MachineBuilder::new().ram(base, 0x1000).load(img).build().unwrap();
+        let mut m = test_machine(base, 0x1000, img);
         m.step_n(4);
         let d = Dump::from_machine(&m, None);
         let trap = d.trap.as_ref().unwrap();
@@ -306,7 +306,7 @@ mod tests {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
         let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
-        let mut m = MachineBuilder::new().ram(base, 0x1000).load(img).build().unwrap();
+        let mut m = test_machine(base, 0x1000, img);
         m.step_n(3);
         let d = Dump::from_machine(&m, None);
         assert_eq!(d.reason, Reason::Halt { code: 7 });

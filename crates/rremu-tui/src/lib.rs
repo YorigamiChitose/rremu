@@ -9,13 +9,12 @@ mod speed;
 
 pub use speed::SpeedTier;
 
+use rremu_config::Config;
 use rremu_machine::Machine;
 
-/// 启动 TUI 主循环；返回退出码。
-///
-/// `elf_path` / `dump_on_exit` 供结果 dump（可选）。
-pub fn run(machine: Machine, elf_path: Option<String>, dump_on_exit: Option<String>) -> i32 {
-    match app::TuiApp::new(machine, elf_path, dump_on_exit).run() {
+/// 启动 TUI 主循环；返回退出码。`cfg` 提供 dump 路径等统一配置。
+pub fn run(machine: Machine, cfg: Config) -> i32 {
+    match app::TuiApp::new(machine, cfg).run() {
         Ok(code) => code,
         Err(e) => {
             eprintln!("rremu-tui: {e}");

@@ -9,6 +9,7 @@ name = "rremu"
 path = "src/main.rs"
 
 [dependencies]
+rremu-config.workspace = true
 rremu-cli.workspace = true
 rremu-tui.workspace = true
 rremu-machine.workspace = true

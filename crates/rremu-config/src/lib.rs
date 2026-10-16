@@ -91,7 +91,7 @@ pub struct Paths {
 }
 
 /// 统一配置。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub layout: Layout,
     pub diag: Diag,
@@ -100,28 +100,29 @@ pub struct Config {
     pub entry: Option<u32>,
 }
 
-impl Default for Config {
+impl Default for Layout {
     fn default() -> Self {
         Self {
-            layout: Layout {
-                ram_base: DEFAULT_RAM_BASE,
-                ram_size: DEFAULT_RAM_SIZE,
-                uart: Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }),
-                clint: Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }),
-                fb: Some(FbLayout {
-                    base: DEFAULT_FB_BASE,
-                    width: DEFAULT_FB_WIDTH,
-                    height: DEFAULT_FB_HEIGHT,
-                    bpp: FB_BPP,
-                }),
-            },
-            diag: Diag {
-                trace_capacity: DEFAULT_TRACE_CAPACITY,
-                event_capacity: DEFAULT_EVENT_CAPACITY,
-                uart_event_capacity: DEFAULT_UART_EVENT_CAPACITY,
-            },
-            paths: Paths::default(),
-            entry: None,
+            ram_base: DEFAULT_RAM_BASE,
+            ram_size: DEFAULT_RAM_SIZE,
+            uart: Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }),
+            clint: Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }),
+            fb: Some(FbLayout {
+                base: DEFAULT_FB_BASE,
+                width: DEFAULT_FB_WIDTH,
+                height: DEFAULT_FB_HEIGHT,
+                bpp: FB_BPP,
+            }),
+        }
+    }
+}
+
+impl Default for Diag {
+    fn default() -> Self {
+        Self {
+            trace_capacity: DEFAULT_TRACE_CAPACITY,
+            event_capacity: DEFAULT_EVENT_CAPACITY,
+            uart_event_capacity: DEFAULT_UART_EVENT_CAPACITY,
         }
     }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rremu-config.workspace = true
 rremu-machine.workspace = true
 ratatui.workspace = true
 crossterm.workspace = true

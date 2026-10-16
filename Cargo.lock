@@ -1503,6 +1503,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "rremu-cli",
+ "rremu-config",
  "rremu-loader",
  "rremu-machine",
  "rremu-tui",
@@ -1523,6 +1524,7 @@ name = "rremu-cli"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "rremu-config",
  "rremu-expr",
  "rremu-machine",
  "rustyline",
@@ -1582,6 +1584,7 @@ name = "rremu-machine"
 version = "0.1.0"
 dependencies = [
  "rremu-bus",
+ "rremu-config",
  "rremu-cpu",
  "rremu-decode",
  "rremu-devices",
@@ -1601,6 +1604,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "ratatui",
+ "rremu-config",
  "rremu-machine",
 ]
 

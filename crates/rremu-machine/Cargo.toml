@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+rremu-config.workspace = true
 rremu-isa.workspace = true
 rremu-decode.workspace = true
 rremu-expr.workspace = true

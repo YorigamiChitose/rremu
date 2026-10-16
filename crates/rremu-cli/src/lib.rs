@@ -8,6 +8,7 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use rremu_config::Config;
 use rremu_expr::{parse as parse_expr, Expr};
 use rremu_machine::{reg_name, EmuEvent, Machine, RunResult, RunState};
 use rustyline::error::ReadlineError;
@@ -30,15 +31,13 @@ pub type WindowFactory = Box<dyn FnMut() -> Option<Box<dyn FbDisplay>>>;
 /// REPL 调试器：持有 machine 实例与全局 Ctrl+C 暂停标志。
 pub struct Repl {
     machine: Machine,
+    /// 统一配置（含 dump/elf 路径等）。
+    cfg: Config,
     pause_flag: Arc<AtomicBool>,
     /// 活动显示后端；None 表示尚未懒启动、用户已关窗或无窗可用。
     display: Option<Box<dyn FbDisplay>>,
     /// 窗口工厂：尚无窗口且 fb 产生写入时调用；开窗失败或用户关窗后丢弃。
     window_factory: Option<WindowFactory>,
-    /// ELF 路径（dump 报告引用；可为 None）。
-    elf_path: Option<String>,
-    /// 退出时自动写 dump 的路径（`--dump-on-exit`；None 表示关闭）。
-    dump_on_exit: Option<String>,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -54,30 +53,18 @@ enum Outcome {
 const WINDOW_BATCH: u64 = 1024;
 
 impl Repl {
-    pub fn new(machine: Machine, pause_flag: Arc<AtomicBool>, window_factory: Option<WindowFactory>) -> Self {
-        Self {
-            machine,
-            pause_flag,
-            display: None,
-            window_factory,
-            elf_path: None,
-            dump_on_exit: None,
-        }
-    }
-
-    /// 设置 ELF 路径（dump 报告引用）。
-    pub fn set_elf_path(&mut self, path: Option<String>) {
-        self.elf_path = path;
-    }
-
-    /// 设置退出时自动写 dump 的路径（None 关闭）。
-    pub fn set_dump_on_exit(&mut self, path: Option<String>) {
-        self.dump_on_exit = path;
+    pub fn new(
+        machine: Machine,
+        cfg: Config,
+        pause_flag: Arc<AtomicBool>,
+        window_factory: Option<WindowFactory>,
+    ) -> Self {
+        Self { machine, cfg, pause_flag, display: None, window_factory }
     }
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
     fn write_dump(&self, path: &str) {
-        let elf = self.elf_path.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self.cfg.paths.elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
         match self.machine.dump(elf).to_json() {
             Ok(json) => match std::fs::write(path, json) {
                 Ok(()) => println!("Dump written to {path}."),
@@ -152,7 +139,7 @@ impl Repl {
             }
         };
         // 程序终止（退出/故障）时按配置自动写 dump
-        if let Some(path) = self.dump_on_exit.clone()
+        if let Some(path) = self.cfg.paths.dump_on_exit.clone()
             && matches!(outcome, Outcome::ProgramExited(_) | Outcome::Faulted(_))
         {
             self.write_dump(&path);
@@ -252,7 +239,7 @@ impl Repl {
         self.flush_uart();
         let outcome = self.report_result(result);
         // 挂起（Ctrl+C/关窗/步数上限）也写 dump，便于排查死循环
-        if paused && let Some(path) = self.dump_on_exit.clone() {
+        if paused && let Some(path) = self.cfg.paths.dump_on_exit.clone() {
             self.write_dump(&path);
         }
         outcome

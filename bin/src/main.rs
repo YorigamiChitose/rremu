@@ -10,13 +10,10 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 
 use rremu_cli::{FbDisplay, Repl};
+use rremu_config::{Config, Overrides};
 use rremu_loader::load_elf;
-use rremu_machine::MachineBuilder;
+use rremu_machine::Machine;
 use rremu_window::Window;
-
-/// 帧缓冲尺寸（设备映射与窗口共用）。
-const FB_WIDTH: u32 = 640;
-const FB_HEIGHT: u32 = 480;
 
 /// minifb 窗口的 FbDisplay 适配（newtype：trait 与类型均在外部，
 /// 孤儿规则要求本地包装）。
@@ -91,34 +88,27 @@ fn try_main() -> anyhow::Result<i32> {
         anyhow::bail!("--tui and --cmd are mutually exclusive");
     }
 
+    // 外部参数 → 统一 Config（唯一解析入口）
+    let cfg = Config::resolve(Overrides {
+        ram_base: Some(args.base),
+        ram_size: Some(parse_size(&args.mem)?),
+        no_fb: args.no_fb,
+        entry: args.entry,
+        elf: Some(args.elf.clone()),
+        dump_on_exit: args.dump_on_exit.clone(),
+    })
+    .context("invalid configuration")?;
+
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
     let image = load_elf(&bytes)
         .with_context(|| format!("failed to parse ELF: {}", args.elf))?;
 
-    let mem_size = parse_size(&args.mem)?;
-    let mut builder = MachineBuilder::new()
-        .ram(args.base, mem_size)
-        .uart(0x1000_0000)
-        .clint(0x0200_0000);
-    // 默认映射 fb 设备；--no-fb 时跳过（无设备即无写入，CLI 不会开窗，TUI 也无内嵌视图）
-    if !args.no_fb {
-        builder = builder.framebuffer(0x2000_0000, FB_WIDTH, FB_HEIGHT);
-    }
-    let builder = builder.load(image);
-    let entry = args.entry;
-    let builder = if let Some(entry) = entry {
-        builder.entry(entry)
-    } else {
-        builder
-    };
-    let mut machine = builder.build().context("failed to build machine")?;
-    // dump 保留最近 64 条事件（= 2 × trace 深度）
-    machine.set_event_ring_capacity(64, 1024);
+    let machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
 
     if args.tui {
         // TUI 使用 crossterm raw 模式，Ctrl+C 作为 KeyEvent 处理，不走 ctrlc crate
-        return Ok(rremu_tui::run(machine, Some(args.elf.clone()), args.dump_on_exit.clone()));
+        return Ok(rremu_tui::run(machine, cfg));
     }
 
     let pause_flag = Arc::new(AtomicBool::new(false));
@@ -134,11 +124,10 @@ fn try_main() -> anyhow::Result<i32> {
     // 注：minifb 在 workspace 依赖中禁用 wayland 后端、仅启用 x11，
     // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因
     // xdg-decoration 协议缺失会导致无边框窗口无法移动。
-    let window_factory: Option<rremu_cli::WindowFactory> = if args.no_fb {
-        None
-    } else {
-        Some(Box::new(|| {
-            match Window::new(FB_WIDTH as usize, FB_HEIGHT as usize, "rremu framebuffer") {
+    // 无 fb（--no-fb）即无窗口工厂
+    let window_factory: Option<rremu_cli::WindowFactory> = cfg.layout.fb.map(|fb| {
+        let factory: rremu_cli::WindowFactory = Box::new(move || {
+            match Window::new(fb.width as usize, fb.height as usize, "rremu framebuffer") {
                 Ok(w) => Some(Box::new(FbWindow(w)) as Box<dyn FbDisplay>),
                 Err(e) => {
                     eprintln!(
@@ -147,12 +136,11 @@ fn try_main() -> anyhow::Result<i32> {
                     None
                 }
             }
-        }))
-    };
+        });
+        factory
+    });
 
-    let mut repl = Repl::new(machine, pause_flag, window_factory);
-    repl.set_elf_path(Some(args.elf.clone()));
-    repl.set_dump_on_exit(args.dump_on_exit.clone());
+    let mut repl = Repl::new(machine, cfg, pause_flag, window_factory);
     let code = if args.cmds.is_empty() {
         repl.run_interactive()
     } else {
