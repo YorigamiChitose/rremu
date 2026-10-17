@@ -428,6 +428,12 @@ pub mod csr {
     pub const MIP_MSIP: u32 = 1 << 3;
     pub const MIP_MTIP: u32 = 1 << 7;
     pub const MIP_MEIP: u32 = 1 << 11;
+
+    // S 级 pending 位（sip 视图）
+    pub const MIP_SSIP: u32 = 1 << 1;
+    pub const MIP_STIP: u32 = 1 << 5;
+    pub const MIP_SEIP: u32 = 1 << 9;
+    pub const MIP_S_MASK: u32 = MIP_SSIP | MIP_STIP | MIP_SEIP;
 }
 
 /// 异常/中断 cause 值。
@@ -449,6 +455,9 @@ pub mod cause {
     pub const STORE_PAGE_FAULT: u32 = 15;
 
     // 中断（bit31=1）
+    pub const S_SI: u32 = 0x8000_0001; // Supervisor Software Interrupt
+    pub const S_TI: u32 = 0x8000_0005; // Supervisor Timer Interrupt
+    pub const S_EI: u32 = 0x8000_0009; // Supervisor External Interrupt
     pub const M_SI: u32 = 0x8000_0003; // Machine Software Interrupt
     pub const M_TI: u32 = 0x8000_0007; // Machine Timer Interrupt
     pub const M_EI: u32 = 0x8000_000b; // Machine External Interrupt
@@ -458,6 +467,9 @@ pub mod cause {
         let code = mcause & 0x7fff_ffff;
         if mcause >> 31 == 1 {
             match code {
+                1 => "supervisor software interrupt",
+                5 => "supervisor timer interrupt",
+                9 => "supervisor external interrupt",
                 3 => "machine software interrupt",
                 7 => "machine timer interrupt",
                 11 => "machine external interrupt",
@@ -584,6 +596,9 @@ mod tests {
         assert_eq!(cause::cause_name(cause::STORE_PAGE_FAULT), "store/AMO page fault");
         assert_eq!(cause::cause_name(cause::M_TI), "machine timer interrupt");
         assert_eq!(cause::cause_name(cause::M_SI), "machine software interrupt");
+        assert_eq!(cause::cause_name(cause::S_TI), "supervisor timer interrupt");
+        assert_eq!(cause::cause_name(cause::S_SI), "supervisor software interrupt");
+        assert_eq!(cause::cause_name(cause::S_EI), "supervisor external interrupt");
         assert_eq!(cause::cause_name(99), "unknown exception");
         assert_eq!(cause::cause_name(0x8000_0000 | 99), "unknown interrupt");
     }
