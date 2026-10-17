@@ -26,6 +26,7 @@ echo "==> build OpenSBI (RV32 generic FW_JUMP)"
 
 echo "==> run"
 # 默认保持运行，由用户自行控制退出（Ctrl+C / TUI q）。
+# CLI 批量模式的 UART 输出在暂停时刷新：按 Ctrl+C 暂停即可看到 OpenSBI 日志，再 q 退出。
 # 需要限时运行时可外部包裹：timeout -s INT 6 ./run-opensbi.sh
 if [[ "${1:-}" == "--tui" ]]; then
   exec "$BIN" "$FW" --load-base 0x80000000 --dtb "$DTB" --tui
