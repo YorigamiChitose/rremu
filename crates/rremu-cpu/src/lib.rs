@@ -343,10 +343,16 @@ impl Cpu {
             Err(t) => return Err(t.cause),
         };
         if pc & 3 == 0 {
+            if !self.pmp_check(pa, AccessType::Fetch) {
+                return Err(cause::INSTR_ACCESS_FAULT);
+            }
             return bus.inst_read(pa, AccessSize::Word, sink).map_err(map);
         }
 
         // pc & 3 == 2（仅 RVC 允许 2 字节对齐）：先读低半字。
+        if !self.pmp_check(pa, AccessType::Fetch) {
+            return Err(cause::INSTR_ACCESS_FAULT);
+        }
         let lo = bus.inst_read(pa, AccessSize::Half, sink).map_err(map)?;
         if instr_len(lo as u16) == 2 {
             return Ok(lo);
@@ -360,6 +366,9 @@ impl Cpu {
         } else {
             pa.wrapping_add(2)
         };
+        if !self.pmp_check(hi_pa, AccessType::Fetch) {
+            return Err(cause::INSTR_ACCESS_FAULT);
+        }
         let hi = bus.inst_read(hi_pa, AccessSize::Half, sink).map_err(map)?;
         Ok(lo | (hi << 16))
     }
@@ -856,6 +865,9 @@ impl Cpu {
         size: AccessSize,
     ) -> Result<u32, TrapErr> {
         let pa = self.translate(bus, sink, addr, AccessType::Load)?;
+        if !self.pmp_check(pa, AccessType::Load) {
+            return Err(TrapErr { cause: cause::LOAD_ACCESS_FAULT, mtval: addr });
+        }
         bus.data_read(pa, size, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
             mtval: addr,
@@ -873,6 +885,9 @@ impl Cpu {
     ) -> Result<(), TrapErr> {
         self.reservation = None; // 任何 store 都使 lr.w 保留失效
         let pa = self.translate(bus, sink, addr, AccessType::Store)?;
+        if !self.pmp_check(pa, AccessType::Store) {
+            return Err(TrapErr { cause: cause::STORE_ACCESS_FAULT, mtval: addr });
+        }
         bus.data_write(pa, size, data, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
             mtval: addr,
@@ -957,6 +972,61 @@ impl Cpu {
         }
         self.pc = self.csr.stvec & !1;
         Ok(StepOutcome::Trapped { cause })
+    }
+
+    /// PMP 物理地址检查。返回 true 表示允许访问。
+    ///
+    /// - 第一个匹配项决定权限（低编号优先）
+    /// - M-mode 默认绕过未锁定项；匹配到锁定项时必须满足权限
+    /// - M-mode 无匹配且存在锁定项时拒绝；S/U 无匹配时拒绝
+    fn pmp_check(&self, addr: u32, access: AccessType) -> bool {
+        let addr = u64::from(addr);
+        let mut any_locked = false;
+        for i in 0..16usize {
+            let cfg = ((self.csr.pmpcfg[i / 4] >> ((i % 4) * 8)) & 0xff) as u8;
+            let locked = cfg & 0x80 != 0;
+            any_locked |= locked;
+            let a = (cfg >> 3) & 0x3;
+            if a == 0 {
+                continue;
+            }
+            let (start, end) = match a {
+                1 => {
+                    // TOR
+                    let start = if i == 0 { 0 } else { u64::from(self.csr.pmpaddr[i - 1]) << 2 };
+                    (start, u64::from(self.csr.pmpaddr[i]) << 2)
+                }
+                2 => {
+                    // NA4
+                    let start = u64::from(self.csr.pmpaddr[i]) << 2;
+                    (start, start + 4)
+                }
+                _ => {
+                    // NAPOT：pmpaddr 低位连续的 1 编码区间大小
+                    let p = self.csr.pmpaddr[i];
+                    let ones = p.trailing_ones();
+                    if ones >= 32 {
+                        (0, 1u64 << 35)
+                    } else {
+                        let mask = (1u64 << ones) - 1;
+                        let start = (u64::from(p) & !mask) << 2;
+                        (start, start + (1u64 << (ones + 3)))
+                    }
+                }
+            };
+            if addr < start || addr >= end {
+                continue;
+            }
+            if self.priv_ == Priv::Machine && !locked {
+                return true;
+            }
+            return match access {
+                AccessType::Fetch => cfg & 0x04 != 0,
+                AccessType::Load => cfg & 0x01 != 0,
+                AccessType::Store => cfg & 0x02 != 0,
+            };
+        }
+        if self.priv_ == Priv::Machine { !any_locked } else { false }
     }
 
     /// 将设备 pending 中断投影到 mip 的设备位。
@@ -1134,7 +1204,11 @@ mod tests {
         fn new_with_ram(size: u32) -> Self {
             let mut bus = BusRouter::new();
             bus.map(BASE..BASE + size, Box::new(MockRam::new(BASE, size as usize))).unwrap();
-            Self { cpu: Cpu::new(BASE), bus, sink: Sink(Vec::new()) }
+            let mut cpu = Cpu::new(BASE);
+            // 测试默认给 S/U 全地址 R/W/X 权限；PMP 测试会显式清空。
+            cpu.csr.pmpaddr[0] = 0x1fff_ffff;
+            cpu.csr.pmpcfg[0] = 0x1f;
+            Self { cpu, bus, sink: Sink(Vec::new()) }
         }
         /// 把指令/数据写入内存后复位 CPU。
         fn load(&mut self, addr: u32, words: &[Word]) {
@@ -2581,6 +2655,8 @@ mod tests {
         bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
         bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
         let mut cpu = Cpu::new(BASE);
+        cpu.csr.pmpaddr[0] = 0x1fff_ffff;
+        cpu.csr.pmpcfg[0] = 0x1f;
         cpu.priv_ = Priv::Supervisor;
         cpu.csr_write(csr::MIE, csr::MIE_MTIE);
         cpu.csr_write(csr::MTVEC, BASE + 0x100);
@@ -2598,6 +2674,8 @@ mod tests {
         bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
         bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::S_EI))).unwrap();
         let mut cpu = Cpu::new(BASE);
+        cpu.csr.pmpaddr[0] = 0x1fff_ffff;
+        cpu.csr.pmpcfg[0] = 0x1f;
         cpu.priv_ = Priv::Supervisor;
         cpu.csr_write(csr::MSTATUS, csr::MSTATUS_SIE);
         cpu.csr_write(csr::MIE, csr::SIE_SEIE);
@@ -2608,6 +2686,83 @@ mod tests {
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::S_EI });
         assert_eq!(h.cpu.csr_read(csr::SIP) & csr::SIE_SEIE, csr::SIE_SEIE);
+    }
+
+    // ---- PMP tests ----
+
+    fn clear_pmp(h: &mut Harness) {
+        h.cpu.csr.pmpcfg = [0; 4];
+        h.cpu.csr.pmpaddr = [0; 16];
+    }
+
+    #[test]
+    fn pmp_without_entries_denies_s_but_allows_m() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.load(BASE, &[0x0000_0013]); // nop
+        h.cpu.priv_ = Priv::Supervisor;
+        assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::INSTR_ACCESS_FAULT });
+
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.load(BASE, &[0x0000_0013]);
+        assert!(matches!(h.step(), StepOutcome::Executed { .. }));
+    }
+
+    #[test]
+    fn pmp_napot_region_and_outside() {
+        let mut h = Harness::new_with_ram(0x10000);
+        clear_pmp(&mut h);
+        // NAPOT 4KiB，覆盖 BASE..BASE+0x1000。
+        h.cpu.csr.pmpaddr[0] = (BASE >> 2) | ((1 << 9) - 1);
+        h.cpu.csr.pmpcfg[0] = 0x1f; // R/W/X + NAPOT
+        h.cpu.priv_ = Priv::Supervisor;
+        assert!(h.cpu.pmp_check(BASE, AccessType::Fetch));
+        assert!(h.cpu.pmp_check(BASE + 0xfff, AccessType::Load));
+        assert!(!h.cpu.pmp_check(BASE + 0x1000, AccessType::Load));
+    }
+
+    #[test]
+    fn pmp_tor_uses_previous_address() {
+        let mut h = Harness::new_with_ram(0x10000);
+        clear_pmp(&mut h);
+        let start = BASE + 0x800;
+        let end = BASE + 0x1000;
+        h.cpu.csr.pmpaddr[0] = start >> 2;
+        h.cpu.csr.pmpaddr[1] = end >> 2;
+        h.cpu.csr.pmpcfg[0] = 0x0f00; // entry1: TOR + R/W/X；entry0=OFF
+        h.cpu.priv_ = Priv::Supervisor;
+        assert!(!h.cpu.pmp_check(start - 1, AccessType::Load));
+        assert!(h.cpu.pmp_check(start, AccessType::Load));
+        assert!(h.cpu.pmp_check(end - 1, AccessType::Load));
+        assert!(!h.cpu.pmp_check(end, AccessType::Load));
+    }
+
+    #[test]
+    fn pmp_na4_matches_single_word() {
+        let mut h = Harness::new_with_ram(0x10000);
+        clear_pmp(&mut h);
+        let addr = BASE + 0x100;
+        h.cpu.csr.pmpaddr[0] = addr >> 2;
+        h.cpu.csr.pmpcfg[0] = 0x17; // NA4 + R/W/X
+        h.cpu.priv_ = Priv::Supervisor;
+        assert!(h.cpu.pmp_check(addr, AccessType::Load));
+        assert!(h.cpu.pmp_check(addr + 3, AccessType::Load));
+        assert!(!h.cpu.pmp_check(addr + 4, AccessType::Load));
+    }
+
+    #[test]
+    fn pmp_locked_entry_applies_to_m() {
+        let mut h = Harness::new_with_ram(0x10000);
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpaddr[0] = (BASE >> 2) | ((1 << 9) - 1);
+        h.cpu.csr.pmpcfg[0] = 0x99; // NAPOT + R + L（无 W/X）
+        h.cpu.priv_ = Priv::Machine;
+        assert!(h.cpu.pmp_check(BASE, AccessType::Load));
+        assert!(!h.cpu.pmp_check(BASE, AccessType::Store));
+        assert!(!h.cpu.pmp_check(BASE, AccessType::Fetch));
+        // 有锁定项且无匹配 → M 也拒绝
+        assert!(!h.cpu.pmp_check(BASE + 0x1000, AccessType::Load));
     }
 
 }
