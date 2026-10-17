@@ -404,6 +404,7 @@ pub mod csr {
     pub const MSTATUS_MPP_SHIFT: u32 = 11;
     pub const MSTATUS_MPP_MASK: u32 = 0b11 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_U: u32 = 0b00 << MSTATUS_MPP_SHIFT;
+    pub const MSTATUS_MPP_S: u32 = 0b01 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_M: u32 = 0b11 << MSTATUS_MPP_SHIFT;
 
     // mie 使能位
@@ -429,6 +430,7 @@ pub mod cause {
     pub const STORE_MISALIGNED: u32 = 6;
     pub const STORE_ACCESS_FAULT: u32 = 7;
     pub const ECALL_FROM_U: u32 = 8;
+    pub const ECALL_FROM_S: u32 = 9;
     pub const ECALL_FROM_M: u32 = 11;
 
     // 中断（bit31=1）
@@ -457,6 +459,7 @@ pub mod cause {
                 STORE_MISALIGNED => "store address misaligned",
                 STORE_ACCESS_FAULT => "store access fault",
                 ECALL_FROM_U => "environment call from U-mode",
+                ECALL_FROM_S => "environment call from S-mode",
                 ECALL_FROM_M => "environment call from M-mode",
                 _ => "unknown exception",
             }
@@ -557,6 +560,7 @@ mod tests {
         assert_eq!(cause::cause_name(cause::ILLEGAL_INSTR), "illegal instruction");
         assert_eq!(cause::cause_name(cause::LOAD_ACCESS_FAULT), "load access fault");
         assert_eq!(cause::cause_name(cause::ECALL_FROM_M), "environment call from M-mode");
+        assert_eq!(cause::cause_name(cause::ECALL_FROM_S), "environment call from S-mode");
         assert_eq!(cause::cause_name(cause::M_TI), "machine timer interrupt");
         assert_eq!(cause::cause_name(cause::M_SI), "machine software interrupt");
         assert_eq!(cause::cause_name(99), "unknown exception");

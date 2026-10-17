@@ -575,7 +575,11 @@ impl Cpu {
             Instruction::Fence => {}
             Instruction::FenceI => {}
             Instruction::Ecall => {
-                let c = if self.priv_ == Priv::Machine { cause::ECALL_FROM_M } else { cause::ECALL_FROM_U };
+                let c = match self.priv_ {
+                    Priv::Machine => cause::ECALL_FROM_M,
+                    Priv::Supervisor => cause::ECALL_FROM_S,
+                    Priv::User => cause::ECALL_FROM_U,
+                };
                 return Err(TrapErr { cause: c, mtval: 0 });
             }
             Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
@@ -1099,6 +1103,19 @@ mod tests {
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_M });
         let mstatus = h.cpu.csr_read(csr::MSTATUS);
         assert_eq!(mstatus & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_M);
+    }
+
+    #[test]
+    fn trap_sets_mpp_to_supervisor_for_s_mode_ecall() {
+        // S-mode ecall → cause 9，mstatus.MPP 应写入 01（Supervisor）
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]); // ecall
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_S });
+        let mstatus = h.cpu.csr_read(csr::MSTATUS);
+        assert_eq!(mstatus & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_S);
+        assert_eq!(h.cpu.priv_(), Priv::Machine);
     }
 
     #[test]
