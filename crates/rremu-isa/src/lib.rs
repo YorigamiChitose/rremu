@@ -339,6 +339,8 @@ fn unreachable_x(i: u8) -> &'static str {
 /// CSR 地址常量（最简 M-mode 子集）。
 pub mod csr {
     pub const MSTATUS: u16 = 0x300;
+    /// RV32：mstatus 的高 32 位（SBE/MBE/GVA 等，当前恒为 0）。
+    pub const MSTATUSH: u16 = 0x310;
     pub const MISA: u16 = 0x301;
     pub const MIE: u16 = 0x304;
     pub const MTVEC: u16 = 0x305;
@@ -349,6 +351,8 @@ pub mod csr {
     pub const MIP: u16 = 0x344;
     // ---- S-mode CSR ----
     pub const SSTATUS: u16 = 0x100;
+    /// RV32：sstatus 的高 32 位（当前恒为 0）。
+    pub const SSTATUSH: u16 = 0x110;
     pub const SIE: u16 = 0x104;
     pub const STVEC: u16 = 0x105;
     pub const SSCRATCH: u16 = 0x140;
@@ -374,6 +378,9 @@ pub mod csr {
 
     pub const MCYCLE: u16 = 0xB00;
     pub const MINSTRET: u16 = 0xB02;
+    pub const MVENDORID: u16 = 0xF11; // 只读
+    pub const MARCHID: u16 = 0xF12; // 只读
+    pub const MIMPID: u16 = 0xF13; // 只读
     pub const MHARTID: u16 = 0xF14; // 只读
 
     // 非特权计数器（只读；RT-Thread/OS 常用 rdtime/rdcycle）

@@ -130,6 +130,7 @@ impl Cpu {
     pub fn csr_read(&self, addr: u16) -> u32 {
         match addr {
             csr::MSTATUS => self.csr.mstatus,
+            csr::MSTATUSH | csr::SSTATUSH => 0,
             csr::MISA => self.csr.misa,
             csr::MIE => self.csr.mie,
             csr::MTVEC => self.csr.mtvec,
@@ -167,6 +168,8 @@ impl Cpu {
     fn csr_write(&mut self, addr: u16, val: u32) {
         match addr {
             csr::MSTATUS => self.csr.mstatus = val & csr::MSTATUS_WRITE_MASK,
+            // mstatush/sstatush 的高位当前无状态，忽略写入。
+            csr::MSTATUSH | csr::SSTATUSH => {}
             // misa 为只读/WARL：忽略写入。
             csr::MIE => self.csr.mie = val,
             csr::MTVEC => self.csr.mtvec = val,
@@ -208,9 +211,54 @@ impl Cpu {
         }
     }
 
-    /// CSR 访问权限检查：特权级不足或写入只读 CSR 时触发 illegal instruction。
-    /// `write` 由具体指令决定（CSRRS/CSRRC 的 rs1=x0 不构成写）。
+    /// 当前实现存在的 CSR。未列出的 CSR 读/写必须触发 illegal instruction，
+    /// 不能返回 0：OpenSBI 等固件会通过“读取是否成功”探测可选扩展。
+    fn csr_implemented(addr: u16) -> bool {
+        matches!(
+            addr,
+            csr::MSTATUS
+                | csr::MSTATUSH
+                | csr::MISA
+                | csr::MIE
+                | csr::MTVEC
+                | csr::MSCRATCH
+                | csr::MEPC
+                | csr::MCAUSE
+                | csr::MTVAL
+                | csr::MIP
+                | csr::MEDELEG
+                | csr::MIDELEG
+                | csr::SSTATUS
+                | csr::SSTATUSH
+                | csr::SIE
+                | csr::SIP
+                | csr::STVEC
+                | csr::SSCRATCH
+                | csr::SEPC
+                | csr::SCAUSE
+                | csr::STVAL
+                | csr::SATP
+                | csr::MCYCLE
+                | csr::MINSTRET
+                | csr::CYCLE
+                | csr::TIME
+                | csr::INSTRET
+                | csr::TIMEH
+                | csr::MVENDORID
+                | csr::MARCHID
+                | csr::MIMPID
+                | csr::MHARTID
+        ) || (csr::PMPCFG0..csr::PMPCFG0 + 4).contains(&addr)
+            || (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&addr)
+    }
+
+    /// CSR 访问权限检查：CSR 不存在、特权级不足或写入只读 CSR 时触发
+    /// illegal instruction。`write` 由具体指令决定（CSRRS/CSRRC 的 rs1=x0
+    /// 不构成写）。
     fn check_csr_access(&self, addr: u16, write: bool, raw: u32) -> Result<(), TrapErr> {
+        if !Self::csr_implemented(addr) {
+            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+        }
         let required = u32::from((addr >> 8) & 0x3);
         let read_only = (addr >> 10) & 0x3 == 0x3;
         if required > self.priv_csr_level() || (write && read_only) {
@@ -1386,6 +1434,37 @@ mod tests {
         // cycle 前进，instret 不计陷入指令
         assert_eq!(h.cpu.cycle(), 1);
         assert_eq!(h.cpu.instret(), 0);
+    }
+
+    #[test]
+    fn unimplemented_csr_read_traps_illegal() {
+        let mut h = Harness::new();
+        // csrr t0, 0x14d (stimecmp): 未实现，不得被 OpenSBI 探测为 SSTC。
+        let raw = i_enc(0b1110011, 5, 0b010, 0, 0x14d);
+        h.load(BASE, &[raw]);
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }));
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+    }
+
+    #[test]
+    fn unimplemented_csr_write_traps_illegal() {
+        let mut h = Harness::new();
+        // csrw 0x14d, x0
+        let raw = i_enc(0b1110011, 0, 0b001, 0, 0x14d);
+        h.load(BASE, &[raw]);
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }));
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+    }
+
+    #[test]
+    fn implemented_csr_read_still_works() {
+        let mut h = Harness::new();
+        // csrr t0, mhartid
+        h.load(BASE, &[i_enc(0b1110011, 5, 0b010, 0, i32::from(csr::MHARTID))]);
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
     }
 
     #[test]
