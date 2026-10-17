@@ -147,7 +147,7 @@ impl EventItem {
             }
             EmuEvent::UartOutput { byte } => Some(EventItem::UartOut { byte: *byte }),
             EmuEvent::UartInput { byte } => Some(EventItem::UartIn { byte: *byte }),
-            EmuEvent::Halt { .. } => None,
+            EmuEvent::Halt { .. } | EmuEvent::PowerOff | EmuEvent::Reboot => None,
         }
     }
 }

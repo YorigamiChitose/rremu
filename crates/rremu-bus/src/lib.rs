@@ -84,6 +84,10 @@ pub enum EmuEvent {
     UartInput { byte: u8 },
     Trap { cause: u32, pc: u32 },
     Halt { code: i32 },
+    /// syscon 写 `0x5555`：请求关机。
+    PowerOff,
+    /// syscon 写 `0x7777`：请求重启。
+    Reboot,
 }
 
 /// 事件接收器。machine 层提供收集实现（环形缓冲），设备/总线只管发出。

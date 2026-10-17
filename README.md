@@ -26,7 +26,7 @@
   `mip` 的 MSIP/MTIP/MEIP 位由设备 pending 投影（软件只读）
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
   C 风格运算符）、无副作用内存 peek、事件环
-- **退出约定**：M-mode `ecall` 且 `a7 == 0xCAFE_0000`（`EXIT_MAGIC`）为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`。其余 `ecall`（含 `a7 == -1` 的 AM yield）走标准 ecall-from-M 陷阱；`ebreak`/`c.ebreak` 走标准 breakpoint 陷阱
+- **退出约定**：M-mode `ecall` 且 `a7 == 0xCAFE_0000`（`EXIT_MAGIC`）为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`；syscon poweroff 发出 `EmuEvent::PowerOff`（退出码 0），reboot 发出 `EmuEvent::Reboot`（退出码 2）。其余 `ecall`（含 `a7 == -1` 的 AM yield）走标准 ecall-from-M 陷阱；`ebreak`/`c.ebreak` 走标准 breakpoint 陷阱
 
 ## 架构
 

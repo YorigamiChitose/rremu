@@ -312,6 +312,9 @@ impl EventSink for RingCollector {
                 self.uart.push_back(ev);
             }
             EmuEvent::Halt { code } => self.halt = Some(code),
+            EmuEvent::PowerOff => self.halt = Some(0),
+            // 重启不是关机：用非零退出码区分，避免把 reboot 当成 poweroff。
+            EmuEvent::Reboot => self.halt = Some(2),
         }
     }
 }

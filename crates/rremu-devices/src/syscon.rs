@@ -1,8 +1,8 @@
 //! QEMU virt syscon/test 设备：poweroff / reboot 写入触发模拟器停机。
 //!
 //! QEMU virt 的 `sifive,test0` 位于 `0x0010_0000`：
-//! - 写 `0x5555` → poweroff
-//! - 写 `0x7777` → reboot（本模拟器统一按停机处理）
+//! - 写 `0x5555` → poweroff（宿主退出码 0）
+//! - 写 `0x7777` → reboot（宿主退出码 2，与 poweroff 区分）
 
 use rremu_bus::{AccessSize, BusDevice, BusError, EmuEvent, EventSink};
 
@@ -30,8 +30,10 @@ impl BusDevice for Syscon {
         if addr - self.base != 0 {
             return Ok(());
         }
-        if data == POWEROFF || data == REBOOT {
-            sink.emit(EmuEvent::Halt { code: 0 });
+        if data == POWEROFF {
+            sink.emit(EmuEvent::PowerOff);
+        } else if data == REBOOT {
+            sink.emit(EmuEvent::Reboot);
         }
         Ok(())
     }
@@ -68,9 +70,23 @@ mod tests {
         let mut syscon = Syscon::new(BASE);
         let mut sink = Sink(Vec::new());
         syscon.write(BASE, AccessSize::Word, POWEROFF, &mut sink).unwrap();
-        assert_eq!(sink.0, vec![EmuEvent::Halt { code: 0 }]);
+        assert_eq!(sink.0, vec![EmuEvent::PowerOff]);
         let mut null = NullSink;
         syscon.write(BASE, AccessSize::Word, 0x1234, &mut null).unwrap();
         assert_eq!(sink.0.len(), 1);
+    }
+
+    #[test]
+    fn reboot_emits_distinct_event() {
+        struct Sink(Vec<EmuEvent>);
+        impl EventSink for Sink {
+            fn emit(&mut self, ev: EmuEvent) {
+                self.0.push(ev);
+            }
+        }
+        let mut syscon = Syscon::new(BASE);
+        let mut sink = Sink(Vec::new());
+        syscon.write(BASE, AccessSize::Word, REBOOT, &mut sink).unwrap();
+        assert_eq!(sink.0, vec![EmuEvent::Reboot]);
     }
 }
