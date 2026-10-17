@@ -1,7 +1,7 @@
 # ROADMAP: RT-Thread → OpenSBI → Linux
 
 > 目标：让 rremu 从「能跑 RT-Thread」逐步演进到「能跑 Linux」。
-> 状态：**S0 / S1 / S2 已完成**；**S3.0 已完成（待合并）**；**S3.1+ 待做**。
+> 状态：**S0 / S1 / S2 / S3.0 已完成**；**S3.1+ 待做**。
 
 ## 阶段与状态
 
@@ -11,7 +11,7 @@
 | S1 | UART RX 中断 → PLIC，TUI/CLI 与 RT-Thread 交互 | ✅ 已合并 |
 | — | UART 终端视图重构（ANSI 状态机：C0/CSI/SGR/UTF-8） | ✅ 已合并 |
 | S2 | Supervisor / S-mode CSR / 委派 / PMP / DTB / `sfence.vma` / `sret`，**跑起 OpenSBI** | ✅ 已合并 |
-| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 设备与启动 | ⏳ 待做（分阶段） |
+| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 设备与启动 | 🟡 S3.0 已完成；S3.1+ 待做 |
 
 ## 已具备能力
 
@@ -37,14 +37,14 @@
 
 ## S3 计划（Linux 与 S-mode 完整化）
 
-> **当前进度：S3.0 已完成（待合并）**；下一阶段为 S3.1 Sv32。
+> **当前进度：S3.0 已完成**；下一阶段为 S3.1 Sv32。
 
 > 每个阶段结束都必须同时满足：
 > `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、
 > `rremu-test` 全量通过、OpenSBI smoke test 不回归。功能与端到端用例同阶段交付，
 > 不接受「先上功能、测试后补」。
 
-### S3.0 S-mode 基线与 S2 测试补强（✅ 已完成，待合并）
+### S3.0 S-mode 基线与 S2 测试补强（✅ 已完成）
 
 先修正 S2 遗留的语义问题，再进入 MMU；避免在错误的 S-mode 语义上叠加 Sv32。
 
