@@ -332,24 +332,40 @@ CONFIG_CMDLINE="console=ttyS0 earlycon keep_bootcon"
 - 若某个选项被核心依赖强制打开，记录实际值，不视为配置漂移。
 - 不启用 `initcall_debug`。
 
-#### 3.3.1 已接受的 forced selects
+#### 3.3.1 已接受的 forced selects（A+）
 
-以下选项在 `rv32_defconfig` + 固定 fragment 后被 Kconfig 强制保留，已确认接受：
+决策：**A+，接受当前完整冻结 `.config`，不再继续与 Kconfig 依赖裁剪对抗。**
+
+以下选项在 `rv32_defconfig` + 固定 fragment 后仍被启用，已确认接受：
 
 ```text
 CONFIG_RISCV_APLIC=y
 CONFIG_RISCV_IMSIC=y
 CONFIG_INPUT=y
 CONFIG_DEBUG_KERNEL=y
+CONFIG_VIRTIO=y
+CONFIG_PINCTRL=y
+CONFIG_GPIOLIB=y
+CONFIG_OVERLAY_FS=y
+CONFIG_AUTOFS_FS=y
 ```
+
+构建日志中还会出现其他由 defconfig/select 带入的核心子系统（如 RPMSG、IIO、
+EXTCON、NVMEM、MAILBOX、DEVFREQ 等）；它们同样按 A+ 接受，不视为 rremu
+实际具备对应设备。
 
 处理约定：
 
-- `RISCV_APLIC` / `RISCV_IMSIC`：RISC-V 架构 `select` 强制项；DTS 不提供对应节点，驱动不会实际 probe。
-- `INPUT`：被核心依赖选中；不提供 input 设备/DTS 节点。
-- `DEBUG_KERNEL`：仅配置开关保留；不启用 `initcall_debug` 或其他主动调试选项。
-- 这四项记录为“forced accepted”，不属于 rremu 实际设备能力。
-- 完整冻结配置保存在 `platforms/linux-test/rremu_rv32_test.config`。
+- 实际可使用的设备仍只有：UART、RTC、syscon、PLIC、CLINT（M/OpenSBI）、RAM。
+- `RISCV_APLIC` / `RISCV_IMSIC`：RISC-V 架构 `select` 强制项；DTS 不提供对应节点。
+- `INPUT` / `PINCTRL` / `GPIOLIB`：无对应 input/pinctrl/gpio DTS 设备。
+- `VIRTIO=y` 只是核心依赖项；`VIRTIO_MMIO` / `VIRTIO_BLK` / `VIRTIO_CONSOLE` 仍关闭，
+  S3.4a 不使用 virtio。
+- `OVERLAY_FS` / `AUTOFS_FS` 不参与 initramfs 启动路径。
+- `DEBUG_KERNEL` 仅配置开关保留；不启用 `initcall_debug` 或其他主动调试选项。
+- 以上均为 `forced accepted`，不属于 rremu 实际设备能力。
+- 完整冻结配置保存在 `platforms/linux-test/rremu_rv32_test.config`；
+  后续不再以“最小化配置”为目标继续裁剪。
 
 ### 3.4 固定 DTS
 
