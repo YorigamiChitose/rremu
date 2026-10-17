@@ -1,7 +1,7 @@
 # ROADMAP: RT-Thread → OpenSBI → Linux
 
 > 目标：让 rremu 从「能跑 RT-Thread」逐步演进到「能跑 Linux」。
-> 状态：**S0 / S1 / S2 / S3.0–S3.4a / S3.6 已完成**；磁盘/真实块设备已移出计划。
+> 状态：**S0 / S1 / S2 / S3 已完成**；磁盘/真实块设备已移出计划。
 
 ## 阶段与状态
 
@@ -11,7 +11,7 @@
 | S1 | UART RX 中断 → PLIC，TUI/CLI 与 RT-Thread 交互 | ✅ 已合并 |
 | — | UART 终端视图重构（ANSI 状态机：C0/CSI/SGR/UTF-8） | ✅ 已合并 |
 | S2 | Supervisor / S-mode CSR / 委派 / PMP / DTB / `sfence.vma` / `sret`，**跑起 OpenSBI** | ✅ 已合并 |
-| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 最小启动 | ✅ S3.0–S3.4a、S3.6 已完成 |
+| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 最小启动、回归 | ✅ 已完成 |
 
 ## 已具备能力
 
@@ -34,7 +34,7 @@
 
 ## S3 计划（Linux 与 S-mode 完整化）
 
-> **当前进度：S3.4a、S3.6 已完成**（Linux 进入 init 并 poweroff）；下一阶段 S3.5 回归与清理。
+> **当前进度：S3.5 已完成**；S3 全部完成（Linux 进入 init 并 poweroff）。
 
 > 每个阶段结束都必须同时满足：
 > `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、
@@ -99,12 +99,19 @@
   `bootargs`、`stdout-path`；OpenSBI `FW_PAYLOAD`；新增 `platforms/run-linux.sh`。
   验收：Linux 启动日志、initramfs `/init`、`poweroff` 停机。
 
-### S3.5 回归与清理
+### S3.5 回归与清理（✅ 已完成）
 
-- 为 S2/S3 已修复缺陷各留一条永久用例：S-mode ecall、CSR 权限、委派、PMP、
-  MMU page fault、S 中断。
-- 更新 README / ROADMAP / rremu-test 用例清单。
-- 评估 vectored `mtvec/stvec`、`wfi` idle 优化；非 Linux 必需项可继续标注限制。
+- 永久回归用例已补齐：
+  - S-mode ecall：`smode_delegate_ecall`
+  - CSR 权限 / 委派：`smode_illegal_mcsr` / `smode_csr` / `smode_delegate_ecall`
+  - PMP：`pmp_enforce_load` / `pmp_enforce_store`
+  - MMU page fault：`sv32_page_fault` / `sv32_store_page_fault`
+  - S 中断：`s_irq_software` / `s_irq_timer` / `s_irq_external`
+  - CSR 存在性（S3.6）：`csr_unimplemented`
+- 更新 README / ROADMAP / rremu-test 用例清单（53 个）。
+- 限制保留：
+  - vectored `mtvec/stvec` 未实现；`cte_vectored_mtvec` 继续断言 Fault。
+  - `wfi` 按 NOP 执行；当前不影响 Linux idle/唤醒，暂不做 idle 优化。
 
 ### S3.6 定时器/唤醒正确性（REGULATOR + DETECT_HUNG_TASK，✅ 已完成）
 
