@@ -3,7 +3,7 @@
 //! 有状态、逐字节推进；支持 C0、常用 CSI（`J/K/H/f/A-D/G/d/s/u/h/l/m`）、
 //! UTF-8（含双宽字符）与 SGR 颜色。输出为 scrollback 行 + 光标，供 TUI 渲染。
 //!
-//! 范围见 `PLAN-UART-TERM.md`：阶段 1 + 2 + SGR；阶段 3（滚动区域/备用屏幕等）不做。
+//! 范围：C0 + 常用 CSI + SGR + UTF-8；滚动区域（DECSTBM）、备用屏幕等不做。
 
 use unicode_width::UnicodeWidthChar;
 
