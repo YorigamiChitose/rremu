@@ -335,21 +335,18 @@ impl Cpu {
         }
     }
 
-    /// 取指单元(IFU)：取回 `pc` 处完整小端 4 字节指令字。
+    /// 取指单元(IFU)：取回 `pc` 处的指令字，高位在需要时补入。
     ///
-    /// 跨 XLEN 拆分策略属于 CPU/ISA（总线原语 `inst_read` 只做单次对齐读）：
-    /// - `pc & 3 == 0`：一次对齐 `Word` 读（一条 `IF W`）。
-    /// - `pc & 3 == 2`（仅 RVC 允许 2 字节对齐）：指令横跨两个对齐 Word，按两次
-    ///   对齐 `Half` 读 `pc` 与 `pc+2`（各一条 `IF H`），拼成 `lo | (hi << 16)`。
+    /// 跨页策略：4 字节对齐地址的 Word 读不会跨 4KiB 页；`pc & 3 == 2` 时
+    /// 先读低半字判断长度，只有 32 位指令才读取 `pc+2`。这样页尾的 16 位
+    /// 指令不会误触发下一页的 page fault。
     ///
     /// 调用前 `pc` 已保证偶数；返回 Err 为取指异常 cause。
-    /// RV64 扩展点：拆分序列需随 XLEN=8 调整。
     fn fetch_word<B: Bus, E: EventSink>(&self, bus: &mut B, pc: u32, sink: &mut E) -> Result<u32, u32> {
         // 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT
         fn map(e: rremu_bus::BusError) -> u32 {
             Cpu::cause_of(&e, cause::INSTR_MISALIGNED, cause::INSTR_ACCESS_FAULT)
         }
-        // 地址翻译（当前 bare 直通）
         let pa = match self.translate(bus, sink, pc, AccessType::Fetch) {
             Ok(pa) => pa,
             Err(t) => return Err(t.cause),
@@ -357,26 +354,156 @@ impl Cpu {
         if pc & 3 == 0 {
             return bus.inst_read(pa, AccessSize::Word, sink).map_err(map);
         }
-        // pc & 3 == 2：两次对齐 Half，物理位宽与 IF 事件严格一致
+
+        // pc & 3 == 2（仅 RVC 允许 2 字节对齐）：先读低半字。
         let lo = bus.inst_read(pa, AccessSize::Half, sink).map_err(map)?;
-        let hi = bus.inst_read(pa.wrapping_add(2), AccessSize::Half, sink).map_err(map)?;
+        if instr_len(lo as u16) == 2 {
+            return Ok(lo);
+        }
+        // 32 位指令：仅 pc 位于页尾 0xffe 时需要翻译下一页。
+        let hi_pa = if pc & 0xfff == 0xffe {
+            match self.translate(bus, sink, pc.wrapping_add(2), AccessType::Fetch) {
+                Ok(pa) => pa,
+                Err(t) => return Err(t.cause),
+            }
+        } else {
+            pa.wrapping_add(2)
+        };
+        let hi = bus.inst_read(hi_pa, AccessSize::Half, sink).map_err(map)?;
         Ok(lo | (hi << 16))
     }
 
     /// 虚拟地址 → 物理地址翻译的**唯一收口**。
     ///
-    /// 当前为 bare 直通；后续 Sv32（S-mode，satp）将在此展开页表遍历，
-    /// 并可能返回 page-fault 原因。所有取指/访存路径都已经此函数，
-    /// 使 MMU 的加入无需改动调用点。
+    /// 支持 Sv32：S/U（以及 MPRV 下的 M 数据访问）在 `satp.MODE=1` 时走
+    /// 两级页表；其余情况保持 bare 直通。所有取指/访存路径都经过此函数。
     #[inline]
     fn translate<B: Bus>(
         &self,
-        _bus: &mut B,
-        _sink: &mut dyn EventSink,
+        bus: &mut B,
+        sink: &mut dyn EventSink,
         va: u32,
-        _access: AccessType,
+        access: AccessType,
     ) -> Result<u32, TrapErr> {
-        Ok(va)
+        let priv_ = self.effective_priv(access);
+        if priv_ == Priv::Machine || (self.csr.satp & csr::SATP_MODE_MASK) == 0 {
+            return Ok(va);
+        }
+
+        let root_ppn = self.csr.satp & csr::SATP_PPN_MASK;
+        let root = root_ppn << 12;
+        let vpn1 = (va >> 22) & 0x3ff;
+        let pte_addr1 = root.wrapping_add(vpn1 << 2);
+        let pte1 = self.read_pte(bus, sink, pte_addr1, va, access)?;
+        if pte1 & PTE_V == 0 {
+            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        }
+
+        if pte1 & (PTE_R | PTE_W | PTE_X) == 0 {
+            // 非叶 PTE：走第二级。
+            let ppn = (pte1 >> 10) & csr::SATP_PPN_MASK;
+            let vpn0 = (va >> 12) & 0x3ff;
+            let pte_addr0 = (ppn << 12).wrapping_add(vpn0 << 2);
+            let pte0 = self.read_pte(bus, sink, pte_addr0, va, access)?;
+            if pte0 & PTE_V == 0 || pte0 & (PTE_R | PTE_W | PTE_X) == 0 {
+                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            }
+            return self.translate_leaf(bus, sink, va, access, priv_, pte_addr0, pte0, false);
+        }
+
+        // 一级叶 PTE：4MiB 大页。
+        self.translate_leaf(bus, sink, va, access, priv_, pte_addr1, pte1, true)
+    }
+
+    /// MPRV 下 M-mode 数据访问按 MPP 指定的特权级翻译；取指始终按当前特权级。
+    fn effective_priv(&self, access: AccessType) -> Priv {
+        if self.priv_ == Priv::Machine
+            && access != AccessType::Fetch
+            && (self.csr.mstatus & csr::MSTATUS_MPRV) != 0
+        {
+            return match (self.csr.mstatus >> csr::MSTATUS_MPP_SHIFT) & 0b11 {
+                0b00 => Priv::User,
+                0b01 => Priv::Supervisor,
+                _ => Priv::Machine,
+            };
+        }
+        self.priv_
+    }
+
+    fn read_pte<B: Bus>(
+        &self,
+        bus: &mut B,
+        sink: &mut dyn EventSink,
+        addr: u32,
+        va: u32,
+        access: AccessType,
+    ) -> Result<u32, TrapErr> {
+        bus.data_read(addr, AccessSize::Word, sink)
+            .map_err(|_| TrapErr { cause: access.access_fault(), mtval: va })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn translate_leaf<B: Bus>(
+        &self,
+        bus: &mut B,
+        sink: &mut dyn EventSink,
+        va: u32,
+        access: AccessType,
+        priv_: Priv,
+        pte_addr: u32,
+        pte: u32,
+        superpage: bool,
+    ) -> Result<u32, TrapErr> {
+        let r = pte & PTE_R != 0;
+        let w = pte & PTE_W != 0;
+        let x = pte & PTE_X != 0;
+        if (w && !r) || (!r && !w && !x) {
+            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        }
+
+        let user = pte & PTE_U != 0;
+        if priv_ == Priv::User && !user {
+            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        }
+        if priv_ == Priv::Supervisor
+            && user
+            && access != AccessType::Fetch
+            && (self.csr.mstatus & csr::MSTATUS_SUM) == 0
+        {
+            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        }
+
+        let mxr = self.csr.mstatus & csr::MSTATUS_MXR != 0;
+        let allowed = match access {
+            AccessType::Fetch => x,
+            AccessType::Load => r || (mxr && x),
+            AccessType::Store => w,
+        };
+        if !allowed {
+            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        }
+
+        let ppn = (pte >> 10) & csr::SATP_PPN_MASK;
+        let pa = if superpage {
+            // 4MiB 大页要求 PPN[0] 为零。
+            if ppn & 0x3ff != 0 {
+                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            }
+            (ppn << 12) | (va & 0x3f_ffff)
+        } else {
+            (ppn << 12) | (va & 0xfff)
+        };
+
+        // A/D 硬件更新；写 PTE 失败按 page fault 处理。
+        let mut new_pte = pte | PTE_A;
+        if access == AccessType::Store {
+            new_pte |= PTE_D;
+        }
+        if new_pte != pte {
+            bus.data_write(pte_addr, AccessSize::Word, new_pte, sink)
+                .map_err(|_| TrapErr { cause: access.page_fault(), mtval: va })?;
+        }
+        Ok(pa)
     }
 
     /// 执行一条已解码指令；成功返回下一 pc，失败返回 trap 原因。
@@ -866,7 +993,35 @@ enum AccessType {
     Store,
 }
 
+impl AccessType {
+    fn page_fault(self) -> u32 {
+        match self {
+            AccessType::Fetch => cause::INSTR_PAGE_FAULT,
+            AccessType::Load => cause::LOAD_PAGE_FAULT,
+            AccessType::Store => cause::STORE_PAGE_FAULT,
+        }
+    }
+
+    fn access_fault(self) -> u32 {
+        match self {
+            AccessType::Fetch => cause::INSTR_ACCESS_FAULT,
+            AccessType::Load => cause::LOAD_ACCESS_FAULT,
+            AccessType::Store => cause::STORE_ACCESS_FAULT,
+        }
+    }
+}
+
+// Sv32 PTE 位。
+const PTE_V: u32 = 1 << 0;
+const PTE_R: u32 = 1 << 1;
+const PTE_W: u32 = 1 << 2;
+const PTE_X: u32 = 1 << 3;
+const PTE_U: u32 = 1 << 4;
+const PTE_A: u32 = 1 << 6;
+const PTE_D: u32 = 1 << 7;
+
 /// 执行期内部 trap 信号（bus 错误 → cause 映射已完成）。
+#[derive(Debug)]
 struct TrapErr {
     cause: u32,
     mtval: u32,
@@ -942,8 +1097,12 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
+            Self::new_with_ram(0x1000)
+        }
+
+        fn new_with_ram(size: u32) -> Self {
             let mut bus = BusRouter::new();
-            bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+            bus.map(BASE..BASE + size, Box::new(MockRam::new(BASE, size as usize))).unwrap();
             Self { cpu: Cpu::new(BASE), bus, sink: Sink(Vec::new()) }
         }
         /// 把指令/数据写入内存后复位 CPU。
@@ -2207,4 +2366,135 @@ mod tests {
         }
         assert_eq!((misa >> 30) & 0b11, 0b01); // MXL=RV32
     }
+    // ---- Sv32 测试辅助 ----
+    const MMU_VA: u32 = 0x4000_0000;
+    const ROOT_PA: u32 = BASE + 0x1000;
+    const L1_PA: u32 = BASE + 0x2000;
+    const DATA_PA: u32 = BASE + 0x3000;
+
+    fn write_u32(h: &mut Harness, addr: u32, val: u32) {
+        h.bus.write_bytes(addr, &val.to_le_bytes()).unwrap();
+    }
+
+    fn read_u32(h: &mut Harness, addr: u32) -> u32 {
+        h.bus.peek(addr, AccessSize::Word).unwrap()
+    }
+
+    fn pte_ppn(pa: u32) -> u32 {
+        (pa >> 12) & csr::SATP_PPN_MASK
+    }
+
+    fn enable_sv32(h: &mut Harness, root: u32) {
+        h.cpu.priv_ = Priv::Supervisor;
+        h.cpu.csr_write(csr::SATP, csr::SATP_MODE_SV32 | pte_ppn(root));
+    }
+
+    /// 建立 4KiB 映射，返回第二级 PTE 地址。
+    fn map_4k(h: &mut Harness, va: u32, pa: u32, flags: u32) -> u32 {
+        let root_pte = ROOT_PA + ((va >> 22) & 0x3ff) * 4;
+        write_u32(h, root_pte, PTE_V | (pte_ppn(L1_PA) << 10));
+        let leaf = L1_PA + ((va >> 12) & 0x3ff) * 4;
+        write_u32(h, leaf, PTE_V | flags | (pte_ppn(pa) << 10));
+        leaf
+    }
+
+    #[test]
+    fn sv32_fetch_translates_and_sets_accessed() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let leaf = map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_W | PTE_X);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x0000_0013]); // nop
+        h.cpu.pc = MMU_VA;
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), MMU_VA + 4);
+        assert_ne!(read_u32(&mut h, leaf) & PTE_A, 0);
+    }
+
+    #[test]
+    fn sv32_invalid_pte_raises_instruction_page_fault() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let leaf = map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_W | PTE_X);
+        write_u32(&mut h, leaf, 0);
+        enable_sv32(&mut h, ROOT_PA);
+        h.cpu.pc = MMU_VA;
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::INSTR_PAGE_FAULT });
+        assert_eq!(h.cpu.csr_state().mtval, MMU_VA);
+    }
+
+    #[test]
+    fn sv32_load_sets_accessed_and_store_requires_write() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let leaf = map_4k(&mut h, MMU_VA, DATA_PA, PTE_R);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x1234_5678]);
+        let v = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).unwrap();
+        assert_eq!(v, 0x1234_5678);
+        assert_ne!(read_u32(&mut h, leaf) & PTE_A, 0);
+        assert_eq!(read_u32(&mut h, leaf) & PTE_D, 0);
+
+        let err = h.cpu.store(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word, 1).err().unwrap();
+        assert_eq!(err.cause, cause::STORE_PAGE_FAULT);
+        assert_eq!(err.mtval, MMU_VA);
+    }
+
+    #[test]
+    fn sv32_sum_controls_supervisor_access_to_user_page() {
+        let mut h = Harness::new_with_ram(0x10000);
+        map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_U);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x55]);
+        let err = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).err().unwrap();
+        assert_eq!(err.cause, cause::LOAD_PAGE_FAULT);
+
+        h.cpu.csr_write(csr::SSTATUS, csr::MSTATUS_SUM);
+        let v = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).unwrap();
+        assert_eq!(v, 0x55);
+    }
+
+    #[test]
+    fn sv32_superpage_maps_4mib() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let root_pte = ROOT_PA + ((MMU_VA >> 22) & 0x3ff) * 4;
+        write_u32(&mut h, root_pte, PTE_V | PTE_R | PTE_W | PTE_X | (pte_ppn(BASE) << 10));
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(BASE, &[0x0000_0013]);
+        h.cpu.pc = MMU_VA;
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), MMU_VA + 4);
+    }
+
+    #[test]
+    fn sv32_32bit_instruction_crossing_page_uses_two_translations() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let va = MMU_VA + 0xffe;
+        map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_W | PTE_X);
+        map_4k(&mut h, MMU_VA + 0x1000, BASE + 0x4000, PTE_R | PTE_W | PTE_X);
+        // addi x1, x0, 1 = 0x00100093：低半字在页尾，高半字在下一页。
+        h.bus.write_bytes(DATA_PA + 0xffe, &0x0093u16.to_le_bytes()).unwrap();
+        h.bus.write_bytes(BASE + 0x4000, &0x0010u16.to_le_bytes()).unwrap();
+        enable_sv32(&mut h, ROOT_PA);
+        h.cpu.pc = va;
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.reg(1), 1);
+        assert_eq!(h.cpu.pc(), MMU_VA + 0x1002);
+    }
+
+    #[test]
+    fn sv32_compressed_instruction_at_page_end_does_not_fetch_next_page() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let va = MMU_VA + 0xffe;
+        map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_W | PTE_X);
+        // c.nop = 0x0001，下一页未映射也不应被读取。
+        h.bus.write_bytes(DATA_PA + 0xffe, &0x0001u16.to_le_bytes()).unwrap();
+        enable_sv32(&mut h, ROOT_PA);
+        h.cpu.pc = va;
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), MMU_VA + 0x1000);
+    }
+
 }
