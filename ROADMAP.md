@@ -1,7 +1,7 @@
 # ROADMAP: RT-Thread → OpenSBI → Linux
 
 > 目标：让 rremu 从「能跑 RT-Thread」逐步演进到「能跑 Linux」。
-> 状态：**S0 / S1 / S2 / S3.0 / S3.1 / S3.2 已完成**；**S3.3 已完成（待合并）**；**S3.4+ 待做**。
+> 状态：**S0 / S1 / S2 / S3.0–S3.4a / S3.6 已完成**；磁盘/真实块设备已移出计划。
 
 ## 阶段与状态
 
@@ -11,7 +11,7 @@
 | S1 | UART RX 中断 → PLIC，TUI/CLI 与 RT-Thread 交互 | ✅ 已合并 |
 | — | UART 终端视图重构（ANSI 状态机：C0/CSI/SGR/UTF-8） | ✅ 已合并 |
 | S2 | Supervisor / S-mode CSR / 委派 / PMP / DTB / `sfence.vma` / `sret`，**跑起 OpenSBI** | ✅ 已合并 |
-| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 设备与启动 | 🟡 S3.0–S3.2 已完成；S3.3 待合并；S3.4+ 待做 |
+| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 最小启动 | ✅ S3.0–S3.4a、S3.6 已完成 |
 
 ## 已具备能力
 
@@ -21,19 +21,20 @@
 - **CSR**：M-mode 全套（含 `mtval`/`medeleg`/`mideleg`/`pmpcfg`/`pmpaddr`）、
   S-mode（`sstatus/sie/sip/stvec/sscratch/sepc/scause/stval/satp`）、
   非特权计数器（`cycle/time/instret/timeh`）。
-- **陷阱**：中断优先级 MEI>MSI>MTI；按 `medeleg/mideleg` 委派到 S；`trap` 写全现场。
-- **设备**：RAM、UART(NS16550A 子集，含 RX 中断)、CLINT、PLIC、Framebuffer。
+- **陷阱**：中断优先级 MEI>MSI>MTI>SEI>SSI>STI；按 `medeleg/mideleg` 委派到 S；`trap` 写全现场。
+- **设备**：RAM、UART(NS16550A 子集，含 RX 中断)、CLINT、PLIC、Goldfish RTC、
+  syscon(poweroff/reboot)、Framebuffer。
 - **启动**：ELF 加载、PIE 按基址加载（`--load-base`）、DTB 加载并以 `a1` 传递（`--dtb`）、
   `a0=hartid`。
 - **诊断**：结构化 dump（JSON）+ `rremu-report` 人可读报告；ANSI 终端视图。
 
 ## 已知限制（S3 处理）
 
-- virtio 设备尚未实现（S3.4b）；Linux 启动需要外部 RV32 Image。
+- 磁盘、真实块设备、virtio-blk、rootfs 已移出计划；Linux 使用内置 initramfs。
 
 ## S3 计划（Linux 与 S-mode 完整化）
 
-> **当前进度：S3.3 已完成（待合并）**；下一阶段为 S3.4 Linux 设备与启动。
+> **当前进度：S3.4a、S3.6 已完成**（Linux 进入 init 并 poweroff）；下一阶段 S3.5 回归与清理。
 
 > 每个阶段结束都必须同时满足：
 > `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、
@@ -90,15 +91,13 @@
 - **用例**：NAPOT 允许/拒绝、TOR 边界、locked、U 访问非 U 页失败、U syscall、
   OpenSBI 启动回归。
 
-### S3.4 Linux 设备与启动（🟡 S3.4a 设备/脚本完成，待 Linux Image 实测）
+### S3.4 Linux 设备与最小启动（✅ S3.4a 已完成）
 
-拆成两个小阶段，避免 virtio 拖慢主线。
+磁盘、真实块设备、virtio-blk、rootfs 明确移出本计划；Linux 使用内置 initramfs。
 
-- **S3.4a 最小启动**：goldfish RTC、syscon/test（poweroff/reset）；DTS 增加 RTC/syscon、
-  `bootargs`、`stdout-path`；OpenSBI `FW_JUMP` + Linux Image（或 `FW_PAYLOAD`）；
-  新增 `platforms/run-linux.sh`。验收：Linux 启动日志、initramfs shell、`poweroff` 停机。
-- **S3.4b virtio**：virtio-mmio、virtio-blk（可选 console/net）；DTS 增加 virtio 节点。
-  验收：从 virtio-blk 挂载 rootfs 并进入用户态。
+- **S3.4a 最小启动（✅ 已完成）**：goldfish RTC、syscon/test（poweroff/reset）；DTS 增加 RTC/syscon、
+  `bootargs`、`stdout-path`；OpenSBI `FW_PAYLOAD`；新增 `platforms/run-linux.sh`。
+  验收：Linux 启动日志、initramfs `/init`、`poweroff` 停机。
 
 ### S3.5 回归与清理
 
@@ -106,6 +105,41 @@
   MMU page fault、S 中断。
 - 更新 README / ROADMAP / rremu-test 用例清单。
 - 评估 vectored `mtvec/stvec`、`wfi` idle 优化；非 Linux 必需项可继续标注限制。
+
+### S3.6 定时器/唤醒正确性（REGULATOR + DETECT_HUNG_TASK，✅ 已完成）
+
+冻结配置已启用：
+
+```text
+CONFIG_REGULATOR=y
+CONFIG_DETECT_HUNG_TASK=y
+```
+
+根因不在 CLINT 定时器本身，而在 CSR 存在性探测：
+
+- rremu 对未实现 CSR 的读取返回 0，而不是触发 illegal instruction。
+- OpenSBI 通过“能否读取 CSR”探测可选扩展，因此误判 SSTC 可用。
+- OpenSBI 随后把 SBI timer 写入 `stimecmp` CSR；该 CSR 实际未实现，写入被忽略。
+- CLINT `mtimecmp` 从未被编程，Linux 收不到定时器中断，delayed work / `khungtaskd` 永远不被唤醒。
+
+修复：
+
+- 未实现 CSR 读写一律触发 illegal instruction。
+- 补齐 OpenSBI 启动所需的 RV32 `mstatush`、`sstatush`。
+- 补齐只读机器 ID CSR：`mvendorid`、`marchid`、`mimpid`。
+- 增加未实现 CSR 读写回归测试。
+
+验证：冻结配置同时启用两项后，30 秒内完成：
+
+```text
+debug_vm_pgtable
+clk: Disabling unused clocks
+Run /init as init process
+reboot: Power down
+Program exited with code 0.
+```
+
+详细记录见 `ROADMAP-S3.6.md`。
 
 ## 开发流程（分支与最小提交）
 

@@ -1,12 +1,12 @@
 # S3.4 子规划：Linux 启动与设备
 
-> 状态：**S3.4a 进行中，未合并**
+> 状态：**S3.4a 已完成（Linux 进入 init 并 poweroff）；磁盘/块设备已移出计划**
 > 目标分支：`test/s3.4-linux-devices`（三个仓库）
 > 前置：S3.0–S3.3 已合并；CLI UART 直出已合并到 `main`
 
 ## 1. 目标与边界
 
-S3.4 分两个子阶段：
+S3.4a 的范围：
 
 ### S3.4a：最小 Linux 启动
 
@@ -30,14 +30,16 @@ S3.4 分两个子阶段：
 - 完整 Linux defconfig
 - virtio
 
-### S3.4b：virtio 与 rootfs
+### 明确移出计划
 
-只有 S3.4a 达到验收后，才开始：
+以下内容不再属于 S3.4 计划：
 
-- virtio-mmio
-- virtio-blk
-- rootfs
-- 用户态 shell
+- 磁盘 rootfs
+- 真实块设备
+- virtio-mmio / virtio-blk
+- 基于块设备的完整用户态 rootfs
+
+Linux 测试继续使用内置 initramfs。若未来需要持久化 rootfs，另行立项。
 
 ## 2. 当前基线
 
@@ -360,7 +362,7 @@ EXTCON、NVMEM、MAILBOX、DEVFREQ 等）；它们同样按 A+ 接受，不视�
 - `RISCV_APLIC` / `RISCV_IMSIC`：RISC-V 架构 `select` 强制项；DTS 不提供对应节点。
 - `INPUT` / `PINCTRL` / `GPIOLIB`：无对应 input/pinctrl/gpio DTS 设备。
 - `VIRTIO=y` 只是核心依赖项；`VIRTIO_MMIO` / `VIRTIO_BLK` / `VIRTIO_CONSOLE` 仍关闭，
-  S3.4a 不使用 virtio。
+  本计划不使用 virtio-blk/真实块设备。
 - `OVERLAY_FS` / `AUTOFS_FS` 不参与 initramfs 启动路径。
 - `DEBUG_KERNEL` 仅配置开关保留；不启用 `initcall_debug` 或其他主动调试选项。
 - 以上均为 `forced accepted`，不属于 rremu 实际设备能力。
@@ -386,6 +388,28 @@ EXTCON、NVMEM、MAILBOX、DEVFREQ 等）；它们同样按 A+ 接受，不视�
 `CRYPTO_SEQIV` / `CRYPTO_ECHAINIV` 这两个 `CRYPTO_RNG_DEFAULT` 的来源。
 
 该变更不影响当前 initramfs `/init` 的 write/reboot 路径。
+
+#### 3.3.3 定时/唤醒项（S3.6 已解决）
+
+S3.4a 期间曾临时关闭：
+
+```text
+# CONFIG_DETECT_HUNG_TASK is not set
+# CONFIG_REGULATOR is not set
+```
+
+S3.6 已定位并修复根因：rremu 对未实现 CSR 的读取返回 0，导致 OpenSBI 误判
+SSTC 可用并把定时器写入未实现的 `stimecmp`；CLINT `mtimecmp` 从未被编程，
+Linux 收不到定时器中断。
+
+当前冻结配置已恢复：
+
+```text
+CONFIG_REGULATOR=y
+CONFIG_DETECT_HUNG_TASK=y
+```
+
+并已在 30 秒内完成 `/init` 与 poweroff。
 
 ### 3.4 固定 DTS
 
@@ -531,14 +555,9 @@ timeout -s INT 5 ./target/release/rremu \
 
 达标后才合并 S3.4a。
 
-### P6：S3.4b virtio
+### 范围外
 
-S3.4a 通过后：
-
-- virtio-mmio
-- virtio-blk
-- rootfs
-- 用户态 shell
+磁盘、真实块设备、virtio-blk、rootfs 已移出计划，不再作为 S3.4 的后续阶段。
 
 ## 6. 分支与提交规则
 
@@ -566,10 +585,10 @@ S3.4a 通过后：
 
 - [ ] 将 initramfs 与配置脚本移入 `platforms/linux-test/`
 - [ ] 移除 DTS 中 RTC 的 IRQ 属性
-- [ ] 固定并保存完整 `.config`
-- [ ] 固定 bootargs
-- [ ] 用 5 秒协议确认 Linux 停止点
-- [ ] 按失败分类单点修复
-- [ ] 达到 init 与 poweroff
-- [ ] 合并 S3.4a
-- [ ] 开始 S3.4b virtio
+- [x] 固定并保存完整 `.config`
+- [x] 固定 bootargs
+- [x] 用 5 秒协议确认 Linux 停止点
+- [x] 按失败分类单点修复
+- [x] 达到 init 与 poweroff
+- [ ] 合并 S3.4a（待审查）
+- [x] 磁盘/块设备已移出计划
