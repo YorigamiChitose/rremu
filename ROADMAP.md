@@ -44,6 +44,22 @@
 5. **构建**：OpenSBI `FW_PAYLOAD`（或 `FW_JUMP` + Linux Image）；SBI `shutdown` 统一停机。
 6. **DTB**：扩展 `platforms/rremu.dts`（新增 RTC/virtio 节点、`bootargs`）。
 
+## 持续任务：测试补强（rremu-test）
+
+后续将落大量新功能/新提交，`rremu-test` 的端到端覆盖必须同步跟上。
+
+- **原则**：每个新功能合并时至少补一个 `guest/src/bin/*.rs` + `Tests.toml` 条目，
+  保持「功能 = 用例」可追溯，避免只靠 rremu 单测。
+- **当前覆盖**：34 用例，集中在 M-mode ISA / CTE / CSR / 设备（见 `rremu-test/README.md`）。
+- **待补缺口**（按优先级）：
+  1. **S-mode**：`sret` 回 S/U、`sfence.vma`、S-CSR（sstatus/sie/sip/stvec/sepc/scause/stval/satp）。
+  2. **委派与中断**：`medeleg/mideleg` 委派后陷阱在 S 处理；PLIC → MEI 链路；S 级中断注入。
+  3. **PMP**：配置后的访问控制（S3 强制实现后）。
+  4. **启动注入**：`--dtb` 传入 `a1`、`a0=hartid`、`--load-base` PIE 加载。
+  5. **dump 正确性**：寄存器/CSR/trace/last_trap/sha256 字段与 `rremu-report` 解析。
+  6. **RV32A/边界**：`lr`/`sc` 失败语义、AMO 溢出、非对齐、CLINT `mtimecmp` 边界。
+  7. **回归**：为已修复缺陷各留一条永久用例（防回退）。
+
 ## 关键约定
 
 - **退出协议**：M-mode `ecall` + `a7 = 0xCAFE_0000`，以 `a0` 为退出码。
