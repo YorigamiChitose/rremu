@@ -350,7 +350,10 @@ impl Cpu {
             Cpu::cause_of(&e, cause::INSTR_MISALIGNED, cause::INSTR_ACCESS_FAULT)
         }
         // 地址翻译（当前 bare 直通）
-        let pa = self.translate(pc);
+        let pa = match self.translate(bus, sink, pc, AccessType::Fetch) {
+            Ok(pa) => pa,
+            Err(t) => return Err(t.cause),
+        };
         if pc & 3 == 0 {
             return bus.inst_read(pa, AccessSize::Word, sink).map_err(map);
         }
@@ -366,8 +369,14 @@ impl Cpu {
     /// 并可能返回 page-fault 原因。所有取指/访存路径都已经此函数，
     /// 使 MMU 的加入无需改动调用点。
     #[inline]
-    fn translate(&self, va: u32) -> u32 {
-        va
+    fn translate<B: Bus>(
+        &self,
+        _bus: &mut B,
+        _sink: &mut dyn EventSink,
+        va: u32,
+        _access: AccessType,
+    ) -> Result<u32, TrapErr> {
+        Ok(va)
     }
 
     /// 执行一条已解码指令；成功返回下一 pc，失败返回 trap 原因。
@@ -728,7 +737,7 @@ impl Cpu {
         addr: u32,
         size: AccessSize,
     ) -> Result<u32, TrapErr> {
-        let pa = self.translate(addr);
+        let pa = self.translate(bus, sink, addr, AccessType::Load)?;
         bus.data_read(pa, size, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
             mtval: addr,
@@ -745,7 +754,7 @@ impl Cpu {
         data: u32,
     ) -> Result<(), TrapErr> {
         self.reservation = None; // 任何 store 都使 lr.w 保留失效
-        let pa = self.translate(addr);
+        let pa = self.translate(bus, sink, addr, AccessType::Store)?;
         bus.data_write(pa, size, data, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
             mtval: addr,
@@ -847,6 +856,14 @@ impl Cpu {
         let mask = csr::MIP_MSIP | csr::MIP_MTIP | csr::MIP_MEIP;
         self.csr.mip = (self.csr.mip & !mask) | dev;
     }
+}
+
+/// 地址翻译的访问类型（决定 page fault cause 与权限检查）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AccessType {
+    Fetch,
+    Load,
+    Store,
 }
 
 /// 执行期内部 trap 信号（bus 错误 → cause 映射已完成）。
