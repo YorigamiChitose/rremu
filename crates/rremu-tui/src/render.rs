@@ -22,6 +22,8 @@ pub struct RenderData<'a> {
     pub disasm: &'a [DisasmLine],
     pub fb: Option<&'a FramebufferFrame<'a>>,
     pub speed: SpeedTier,
+    /// 实测执行速度（instructions/s）。
+    pub actual_ips: f64,
     pub running: bool,
     pub input_mode: bool,
     pub fb_view: bool,
@@ -44,7 +46,7 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
                 Constraint::Length(1), // status bar
             ])
             .split(area);
-        draw_top_bar(f, main[0], data.snap, data.speed, data.running);
+        draw_top_bar(f, main[0], data.snap, data.speed, data.actual_ips, data.running);
         draw_uart(f, main[1], data.terminal, data.input_mode);
         draw_status_bar(f, main[2], data.input_mode, data.panel_level);
         return;
@@ -60,7 +62,7 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
         ])
         .split(area);
 
-    draw_top_bar(f, main[0], data.snap, data.speed, data.running);
+    draw_top_bar(f, main[0], data.snap, data.speed, data.actual_ips, data.running);
     let panels = Panels::from_level(data.panel_level);
     draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view, panels);
     draw_uart(f, main[2], data.terminal, data.input_mode);
@@ -82,7 +84,14 @@ impl Panels {
     }
 }
 
-fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedTier, running: bool) {
+fn draw_top_bar(
+    f: &mut Frame,
+    area: Rect,
+    snap: &MachineSnapshot,
+    speed: SpeedTier,
+    actual_ips: f64,
+    running: bool,
+) {
     let state_str = if running {
         "running"
     } else {
@@ -91,15 +100,41 @@ fn draw_top_bar(f: &mut Frame, area: Rect, snap: &MachineSnapshot, speed: SpeedT
             RunState::Running => "running",
             RunState::Paused => "paused",
             RunState::Exited(c) => return draw_bar(f, area, vec![
-                span(format!(" rremu │ cycle={} │ speed={} │ EXITED({})", snap.cycle, speed.label(), c), Color::Yellow),
+                span(
+                    format!(
+                        " rremu │ cycle={} │ speed={} │ ips={} │ EXITED({c})",
+                        snap.cycle,
+                        speed.label(),
+                        format_rate(actual_ips)
+                    ),
+                    Color::Yellow,
+                ),
             ]),
             RunState::Faulted(reason) => return draw_bar(f, area, vec![
-                span(format!(" rremu │ cycle={} │ speed={} │ FAULTED: {}", snap.cycle, speed.label(), reason), Color::Red),
+                span(
+                    format!(
+                        " rremu │ cycle={} │ speed={} │ ips={} │ FAULTED: {reason}",
+                        snap.cycle,
+                        speed.label(),
+                        format_rate(actual_ips)
+                    ),
+                    Color::Red,
+                ),
             ]),
         }
     };
     draw_bar(f, area, vec![
-        span(format!(" rremu │ cycle={} │ speed={} │ {} │ pc={:#010x}", snap.cycle, speed.label(), state_str, snap.pc), Color::Cyan),
+        span(
+            format!(
+                " rremu │ cycle={} │ speed={} │ ips={} │ {} │ pc={:#010x}",
+                snap.cycle,
+                speed.label(),
+                format_rate(actual_ips),
+                state_str,
+                snap.pc
+            ),
+            Color::Cyan,
+        ),
     ]);
 }
 
@@ -425,3 +460,30 @@ fn span(text: String, color: Color) -> Span<'static> {
 }
 
 
+
+/// 实测速率的人类可读格式。
+fn format_rate(ips: f64) -> String {
+    if ips >= 1e9 {
+        format!("{:.2}G", ips / 1e9)
+    } else if ips >= 1e6 {
+        format!("{:.2}M", ips / 1e6)
+    } else if ips >= 1e3 {
+        format!("{:.1}K", ips / 1e3)
+    } else {
+        format!("{ips:.0}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_rate;
+
+    #[test]
+    fn formats_instruction_rates() {
+        assert_eq!(format_rate(0.0), "0");
+        assert_eq!(format_rate(30.0), "30");
+        assert_eq!(format_rate(7_800.0), "7.8K");
+        assert_eq!(format_rate(1_250_000.0), "1.25M");
+        assert_eq!(format_rate(2_500_000_000.0), "2.50G");
+    }
+}

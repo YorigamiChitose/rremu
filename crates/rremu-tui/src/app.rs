@@ -37,6 +37,10 @@ pub struct TuiApp {
     cfg: rremu_config::Config,
     /// 面板信息档位（`p` 单键循环）：0=全开 1=关指令 2=关指令+读写 3=全关。
     panel_level: u8,
+    /// 最近一次实测执行速度（instructions/s），暂停时保留最后测量值。
+    actual_ips: f64,
+    /// 速度测量的采样窗口起点（时间, instret）。
+    speed_sample: Option<(Instant, u64)>,
 }
 
 impl TuiApp {
@@ -55,6 +59,8 @@ impl TuiApp {
             fb_dims: (0, 0),
             cfg,
             panel_level: 0,
+            actual_ips: 0.0,
+            speed_sample: None,
         }
     }
 
@@ -121,6 +127,7 @@ impl TuiApp {
             };
             // 档位 ≥1（关指令面板）时不做反汇编采集（省去内存 peek 与格式化）
             let disasm = if self.panel_level < 1 { self.collect_disasm(snap.pc) } else { Vec::new() };
+            self.update_actual_speed(Instant::now(), snap.csrs.minstret);
             let fb = if self.fb_view {
                 Some(FramebufferFrame {
                     width: self.fb_dims.0,
@@ -135,6 +142,7 @@ impl TuiApp {
                 disasm: &disasm,
                 fb: fb.as_ref(),
                 speed: self.speed,
+                actual_ips: self.actual_ips,
                 running: self.running,
                 input_mode: self.input_mode,
                 fb_view: self.fb_view,
@@ -144,6 +152,33 @@ impl TuiApp {
             terminal.draw(|f| render::draw(f, &data))?;
         }
         Ok(())
+    }
+
+    /// 维护实测执行速度：500ms 采样窗口，暂停时保留最后测量值。
+    fn update_actual_speed(&mut self, now: Instant, instret: u64) {
+        const WINDOW: Duration = Duration::from_millis(500);
+        if !self.running {
+            self.speed_sample = None;
+            return;
+        }
+        let Some((last_time, last_instret)) = self.speed_sample else {
+            self.speed_sample = Some((now, instret));
+            return;
+        };
+        let elapsed = now.duration_since(last_time);
+        if elapsed < WINDOW {
+            return;
+        }
+        let delta = instret.saturating_sub(last_instret);
+        self.actual_ips = delta as f64 / elapsed.as_secs_f64();
+        self.speed_sample = Some((now, instret));
+    }
+
+    /// 切换速度档并重置测量窗口，避免新旧档位混入同一采样。
+    fn set_speed(&mut self, speed: SpeedTier) {
+        self.speed = speed;
+        self.actual_ips = 0.0;
+        self.speed_sample = None;
     }
 
     /// 推进机器：固定档每帧执行一批；全速档在帧预算内连续批量执行。
@@ -237,7 +272,7 @@ impl TuiApp {
             }
             KeyCode::Char('f') if !self.exited && self.fault_reason.is_none() => {
                 // 直达全速档
-                self.speed = SpeedTier::Full;
+                self.set_speed(SpeedTier::Full);
                 self.running = true;
             }
             KeyCode::Char('i') if !self.exited && self.fault_reason.is_none() => {
@@ -255,6 +290,8 @@ impl TuiApp {
                     // 缓存失效：下一帧按重置后的设备全量重填
                     self.fb_dims = (0, 0);
                     self.fb_cache.clear();
+                    self.actual_ips = 0.0;
+                    self.speed_sample = None;
                 }
             }
             KeyCode::Char('b') => {
@@ -271,11 +308,11 @@ impl TuiApp {
             }
             KeyCode::Left => {
                 // Speed down
-                self.speed = self.speed.prev();
+                self.set_speed(self.speed.prev());
             }
             KeyCode::Right => {
                 // Speed up
-                self.speed = self.speed.next();
+                self.set_speed(self.speed.next());
             }
             _ => {}
         }
