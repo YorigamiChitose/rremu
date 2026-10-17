@@ -320,12 +320,17 @@ impl EventSink for RingCollector {
 struct MachineSink<'a> {
     collector: &'a mut RingCollector,
     terminal: &'a mut Terminal,
+    /// CLI 直出回调：UART 输出字节在进入事件环前同步转发。
+    uart_sink: &'a mut Option<Box<dyn FnMut(u8)>>,
 }
 
 impl EventSink for MachineSink<'_> {
     fn emit(&mut self, ev: EmuEvent) {
         if let EmuEvent::UartOutput { byte } = ev {
             self.terminal.feed(byte);
+            if let Some(sink) = self.uart_sink.as_mut() {
+                sink(byte);
+            }
         }
         self.collector.emit(ev);
     }
@@ -439,6 +444,7 @@ impl Machine {
             entry,
             state: RunState::Idle,
             terminal: Terminal::new(),
+            uart_sink: None,
             trace: VecDeque::new(),
             trace_capacity: cfg.diag.trace_capacity,
             last_trap: None,
@@ -468,6 +474,8 @@ pub struct Machine {
     state: RunState,
     /// UART 终端视图（有状态，逐字节推进）。
     terminal: Terminal,
+    /// CLI 直出 UART 字节的回调；TUI/默认关闭。
+    uart_sink: Option<Box<dyn FnMut(u8)>>,
     trace: VecDeque<TraceEntry>,
     /// 指令 trace 环形缓冲容量（来自配置）。
     trace_capacity: usize,
@@ -534,7 +542,11 @@ impl Machine {
         self.dbg.clear_suppress();
 
         let stepped = {
-            let mut sink = MachineSink { collector: &mut self.collector, terminal: &mut self.terminal };
+            let mut sink = MachineSink {
+                collector: &mut self.collector,
+                terminal: &mut self.terminal,
+                uart_sink: &mut self.uart_sink,
+            };
             self.cpu.step(&mut self.bus, &mut sink)
         };
         match stepped {
@@ -655,6 +667,11 @@ impl Machine {
             r.reset();
         }
         Ok(())
+    }
+
+    /// 设置 UART 直出回调（CLI 用）；传 None 关闭。
+    pub fn set_uart_sink(&mut self, sink: Option<Box<dyn FnMut(u8)>>) {
+        self.uart_sink = sink;
     }
 
     /// 机器快照（前端唯一状态视图），包含事件环。

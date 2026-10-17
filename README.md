@@ -120,6 +120,12 @@ rremu --tui <ELF>
 | `dump FILE` | 写出结构化机器状态 dump（JSON）到 FILE |
 | `help` / `q` | 帮助 / 退出 |
 
+CLI 模式下 UART 输出会实时直写 stdout，不再等待暂停；可直接重定向保存：
+
+```sh
+rremu firmware.elf -c c > uart.log
+```
+
 ### TUI 按键
 
 | 按键 | 功能 |

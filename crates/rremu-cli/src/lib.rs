@@ -38,6 +38,8 @@ pub struct Repl {
     display: Option<Box<dyn FbDisplay>>,
     /// 窗口工厂：尚无窗口且 fb 产生写入时调用；开窗失败或用户关窗后丢弃。
     window_factory: Option<WindowFactory>,
+    /// UART 输出已在 machine 事件路径直出，暂停时不再重复 flush。
+    uart_direct: bool,
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -54,12 +56,20 @@ const WINDOW_BATCH: u64 = 1024;
 
 impl Repl {
     pub fn new(
-        machine: Machine,
+        mut machine: Machine,
         cfg: Config,
         pause_flag: Arc<AtomicBool>,
         window_factory: Option<WindowFactory>,
     ) -> Self {
-        Self { machine, cfg, pause_flag, display: None, window_factory }
+        // CLI 模式 UART 直出：字节随事件流实时写 stdout，便于 `rremu -c c > log`。
+        machine.set_uart_sink(Some(Box::new(|byte| {
+            let mut out = io::stdout();
+            let _ = out.write_all(&[byte]);
+            if byte == b'\n' {
+                let _ = out.flush();
+            }
+        })));
+        Self { machine, cfg, pause_flag, display: None, window_factory, uart_direct: true }
     }
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
@@ -436,6 +446,12 @@ impl Repl {
     }
 
     fn flush_uart(&mut self) {
+        if self.uart_direct {
+            // 已实时写出；确保未换行的尾部字节也到达 stdout。
+            let _ = io::stdout().flush();
+            let _ = self.machine.drain_uart();
+            return;
+        }
         let bytes = self.machine.drain_uart();
         if !bytes.is_empty() {
             let _ = io::stdout().flush();
