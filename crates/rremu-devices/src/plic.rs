@@ -11,7 +11,7 @@
 //!
 //! context：单 hart 假设下 ctx0=M、ctx1=S（与 qemu-virt 一致）。
 //! 设备侧可经 `set_pending` 抬高/清除某 source 的 pending；
-//! `check_interrupt` 在有 pending 且被 M context 使能时返回 MEI（外部中断）。
+//! `check_interrupt` 分别检查 M/S context，返回 MEI / SEI。
 
 use rremu_bus::{AccessSize, BusDevice, BusError, EventSink};
 
@@ -30,6 +30,8 @@ pub const PLIC_SIZE: u32 = 0x40_0000;
 
 /// 机器外部中断 cause（M_EI，bit31 置位）。
 const CAUSE_M_EI: u32 = 0x8000_000b;
+/// 监督者外部中断 cause（S_EI，bit31 置位）。
+const CAUSE_S_EI: u32 = 0x8000_0009;
 
 pub struct Plic {
     base: u32,
@@ -192,13 +194,14 @@ impl BusDevice for Plic {
     }
 
     fn check_interrupt(&self) -> Vec<u32> {
-        // M context(0) 有使能且 pending 的 source → 外部中断
-        for w in 0..WORDS {
-            if self.pending[w] & self.enable[0][w] != 0 {
-                return vec![CAUSE_M_EI];
+        let mut causes = Vec::new();
+        // ctx0 = M，ctx1 = S；两个 context 的使能/pending 独立。
+        for (ctx, cause) in [(0, CAUSE_M_EI), (1, CAUSE_S_EI)] {
+            if (0..WORDS).any(|w| self.pending[w] & self.enable[ctx][w] != 0) {
+                causes.push(cause);
             }
         }
-        Vec::new()
+        causes
     }
 
     /// 接收设备 IRQ 断言：置对应 source 的 pending。
@@ -260,4 +263,20 @@ mod tests {
         assert_eq!(p.read(BASE + 0x3000, AccessSize::Word, &mut sink).unwrap(), 0);
         p.write(BASE + 0x3000, AccessSize::Word, 0xDEAD, &mut sink).unwrap();
     }
+    #[test]
+    fn s_context_claim_returns_s_ei() {
+        let mut p = Plic::new(BASE);
+        let mut sink = rremu_bus::NullSink;
+        // 只 enable S context(1) 的 source 10
+        p.write(BASE + ENABLE_BASE + ENABLE_STRIDE, AccessSize::Word, 1 << 10, &mut sink).unwrap();
+        p.write(BASE + 10 * 4, AccessSize::Word, 7, &mut sink).unwrap();
+        p.set_pending(10, true);
+        assert_eq!(p.check_interrupt(), vec![CAUSE_S_EI]);
+        let claim = p
+            .read(BASE + CONTEXT_BASE + CONTEXT_STRIDE + 4, AccessSize::Word, &mut sink)
+            .unwrap();
+        assert_eq!(claim, 10);
+        assert!(p.check_interrupt().is_empty());
+    }
+
 }
