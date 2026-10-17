@@ -75,8 +75,6 @@
         rtc@101000 {
             compatible = "google,goldfish-rtc";
             reg = <0x00101000 0x1000>;
-            interrupts = <11>;
-            interrupt-parent = <&plic>;
         };
     };
     poweroff {
