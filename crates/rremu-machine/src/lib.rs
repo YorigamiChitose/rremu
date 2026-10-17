@@ -7,7 +7,7 @@ use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
 use rremu_config::Config;
 use rremu_cpu::{Cpu, StepOutcome};
 use rremu_decode::{decode16, decode32, instr_len};
-use rremu_devices::{Clint, Framebuffer, Plic, Ram, Uart};
+use rremu_devices::{Clint, Framebuffer, Plic, Ram, Rtc, Syscon, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::{csr, Address, Word};
 use rremu_loader::Image;
@@ -386,6 +386,12 @@ impl Machine {
         }
         if let Some(d) = cfg.layout.plic {
             bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Plic::new(d.base)))?;
+        }
+        if let Some(d) = cfg.layout.syscon {
+            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Syscon::new(d.base)))?;
+        }
+        if let Some(d) = cfg.layout.rtc {
+            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Rtc::new(d.base)))?;
         }
         if let Some(f) = cfg.layout.fb {
             let fb_size = f

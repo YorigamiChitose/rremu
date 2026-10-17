@@ -23,6 +23,10 @@ pub const DEFAULT_UART_BASE: u32 = 0x1000_0000;
 pub const DEFAULT_CLINT_BASE: u32 = 0x0200_0000;
 /// 默认 PLIC 基址（qemu-virt）。
 pub const DEFAULT_PLIC_BASE: u32 = 0x0c00_0000;
+/// 默认 syscon/test 基址（qemu-virt poweroff/reboot）。
+pub const DEFAULT_SYSCON_BASE: u32 = 0x0010_0000;
+/// 默认 Goldfish RTC 基址（qemu-virt）。
+pub const DEFAULT_RTC_BASE: u32 = 0x0010_1000;
 /// 默认 Framebuffer 基址。
 pub const DEFAULT_FB_BASE: u32 = 0x2000_0000;
 /// 默认 Framebuffer 宽度。
@@ -36,6 +40,10 @@ pub const UART_SIZE: u32 = 8;
 pub const CLINT_SIZE: u32 = 0xC000;
 /// PLIC 映射尺寸（qemu-virt）。
 pub const PLIC_SIZE: u32 = 0x40_0000;
+/// syscon/test 映射尺寸。
+pub const SYSCON_SIZE: u32 = 0x1000;
+/// Goldfish RTC 映射尺寸。
+pub const RTC_SIZE: u32 = 0x1000;
 /// Framebuffer 每像素字节数（RGB565）。
 pub const FB_BPP: u32 = 2;
 /// DTB 放置在 RAM 顶部下方保留的字节数。
@@ -80,6 +88,10 @@ pub struct Layout {
     pub clint: Option<Device>,
     /// `None` 表示不映射 PLIC。
     pub plic: Option<Device>,
+    /// `None` 表示不映射 syscon/test。
+    pub syscon: Option<Device>,
+    /// `None` 表示不映射 Goldfish RTC。
+    pub rtc: Option<Device>,
     /// `None` 表示不映射 Framebuffer。
     pub fb: Option<FbLayout>,
 }
@@ -128,6 +140,8 @@ impl Default for Layout {
             uart: Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }),
             clint: Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }),
             plic: Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }),
+            syscon: Some(Device { base: DEFAULT_SYSCON_BASE, size: SYSCON_SIZE }),
+            rtc: Some(Device { base: DEFAULT_RTC_BASE, size: RTC_SIZE }),
             fb: Some(FbLayout {
                 base: DEFAULT_FB_BASE,
                 width: DEFAULT_FB_WIDTH,
@@ -303,6 +317,8 @@ mod tests {
         assert_eq!(c.layout.uart, Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }));
         assert_eq!(c.layout.clint, Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }));
         assert_eq!(c.layout.plic, Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }));
+        assert_eq!(c.layout.syscon, Some(Device { base: DEFAULT_SYSCON_BASE, size: SYSCON_SIZE }));
+        assert_eq!(c.layout.rtc, Some(Device { base: DEFAULT_RTC_BASE, size: RTC_SIZE }));
         assert_eq!(
             c.layout.fb,
             Some(FbLayout {
