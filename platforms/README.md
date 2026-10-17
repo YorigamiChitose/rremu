@@ -6,9 +6,11 @@
 
 | 文件 | 说明 |
 |---|---|
-| `rremu.dts` | rremu 平台设备树源（RAM/CLINT/PLIC/UART/CPU，RV32） |
-| `rremu.dtb` | 由 `rremu.dts` 编译出的二进制设备树（`dtc` 产物） |
+| `rremu.dts` | rremu 平台设备树源（RAM/CLINT/PLIC/UART/RTC/syscon/CPU，RV32） |
+| `rremu-linux.dts` | Linux 启动用设备树源（128MiB RAM、`bootargs`） |
+| `rremu.dtb` / `rremu-linux.dtb` | 由对应 DTS 编译出的二进制设备树 |
 | `run-opensbi.sh` | 一键：编译 DTB → 构建 OpenSBI（RV32 FW_JUMP）→ 在 rremu 上运行 |
+| `run-linux.sh` | 一键：构建 OpenSBI FW_PAYLOAD（嵌入 Linux Image）→ 启动 Linux |
 
 ## 依赖
 
@@ -63,3 +65,23 @@ Boot HART Base ISA          : rv32imac
 ```
 
 之后跳转到空的 `0x80200000`（尚无 payload/Linux），符合预期。
+
+
+## 运行 Linux
+
+需要一份 RV32 Linux Image，建议内核内置 initramfs：
+
+```sh
+cd platforms
+LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
+```
+
+脚本使用：
+
+- `rremu-linux.dts`：128MiB RAM，`bootargs = "console=ttyS0 earlycon"`
+- OpenSBI `FW_PAYLOAD`，payload offset `0x200000`
+- DTB/FDT 地址 `0x87f00000`
+- rremu `-m 128M`
+
+如果 Linux Image 未内置 initramfs，需要自行构建带 initramfs 的内核或改用其他
+initrd 注入方案。

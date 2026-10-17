@@ -29,7 +29,7 @@
 
 ## 已知限制（S3 处理）
 
-- 无 RTC / virtio 等 Linux 常用设备。
+- virtio 设备尚未实现（S3.4b）；Linux 启动需要外部 RV32 Image。
 
 ## S3 计划（Linux 与 S-mode 完整化）
 
@@ -90,7 +90,7 @@
 - **用例**：NAPOT 允许/拒绝、TOR 边界、locked、U 访问非 U 页失败、U syscall、
   OpenSBI 启动回归。
 
-### S3.4 Linux 设备与启动
+### S3.4 Linux 设备与启动（🟡 S3.4a 设备/脚本完成，待 Linux Image 实测）
 
 拆成两个小阶段，避免 virtio 拖慢主线。
 

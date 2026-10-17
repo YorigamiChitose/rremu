@@ -20,7 +20,8 @@
   - TUI：ratatui 多面板（寄存器 / 反汇编 / 内存事件 / UART）+ 键盘控制
   - 独立帧缓冲窗口（minifb，X11），**懒启动**：首次写 fb 才弹窗
 - **设备**：RAM、UART（NS16550A 子集）、CLINT（mtime/mtimecmp/msip）、
-  Framebuffer（RGB565 → 0x00RRGGBB），均经 `BusDevice` trait 接入总线。
+  PLIC、Goldfish RTC、syscon（poweroff/reboot）、Framebuffer（RGB565 → 0x00RRGGBB），
+  均经 `BusDevice` trait 接入总线。
   CLINT `mtimecmp` 复位为 `u32::MAX`（避免虚假定时器中断）；
   `mip` 的 MSIP/MTIP/MEIP 位由设备 pending 投影（软件只读）
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
@@ -150,6 +151,8 @@ rremu firmware.elf -c c > uart.log
 | 基址 | 设备 | 范围 |
 |---|---|---|
 | `0x0200_0000` | CLINT | 0xC000（msip / mtimecmp / mtime） |
+| `0x0010_0000` | syscon/test | 0x1000（poweroff/reboot） |
+| `0x0010_1000` | Goldfish RTC | 0x1000 |
 | `0x0c00_0000` | PLIC | 0x400000（priority/pending/enable/claim） |
 | `0x1000_0000` | UART | 8 字节 |
 | `0x2000_0000` | Framebuffer | 640×480 ×2 字节（RGB565） |
@@ -165,6 +168,13 @@ cd platforms && ./run-opensbi.sh        # 或 --tui
 ```
 
 路线图（RT-Thread → OpenSBI → Linux）与已知限制见 [`ROADMAP.md`](ROADMAP.md)。
+
+Linux 启动脚本（需要 RV32 Linux Image，建议内置 initramfs）：
+
+```sh
+cd platforms
+LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
+```
 
 ## 测试
 
