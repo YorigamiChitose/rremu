@@ -123,10 +123,7 @@ fn try_main() -> anyhow::Result<i32> {
     let mut image = load_elf(&bytes)
         .with_context(|| format!("failed to parse ELF: {}", args.elf))?;
     if let Some(lb) = args.load_base {
-        for seg in &mut image.segments {
-            seg.addr = seg.addr.wrapping_add(lb);
-        }
-        image.entry = image.entry.wrapping_add(lb);
+        image.relocate(lb);
     }
 
     let mut machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;

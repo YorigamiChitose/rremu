@@ -17,6 +17,17 @@ pub struct Image {
     pub entry: u32,
 }
 
+impl Image {
+    /// 将镜像整体平移到 `base`：所有段地址与入口同步偏移。
+    /// 用于 PIE/可重定位镜像（如 OpenSBI）。
+    pub fn relocate(&mut self, base: u32) {
+        for seg in &mut self.segments {
+            seg.addr = seg.addr.wrapping_add(base);
+        }
+        self.entry = self.entry.wrapping_add(base);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LoaderError {
     #[error("ELF parse failed: {0}")]
@@ -107,6 +118,16 @@ mod tests {
         assert_eq!(img.segments.len(), 1);
         assert_eq!(img.segments[0].addr, 0x8000_0000);
         assert_eq!(img.segments[0].data, code.to_vec());
+    }
+
+    #[test]
+    fn relocate_shifts_segments_and_entry() {
+        let code = [0x13u8, 0x00, 0x00, 0x00];
+        let bytes = minimal_elf(0x1000, 0x1000, &code);
+        let mut img = load_elf(&bytes).unwrap();
+        img.relocate(0x8000_0000);
+        assert_eq!(img.entry, 0x8000_1000);
+        assert_eq!(img.segments[0].addr, 0x8000_1000);
     }
 
     #[test]
