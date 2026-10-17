@@ -1,7 +1,7 @@
 # ROADMAP: RT-Thread → OpenSBI → Linux
 
 > 目标：让 rremu 从「能跑 RT-Thread」逐步演进到「能跑 Linux」。
-> 状态：**S0 / S1 / S2 / S3.0 已完成**；**S3.1+ 待做**。
+> 状态：**S0 / S1 / S2 / S3.0 / S3.1 已完成**；**S3.2 已完成（待合并）**；**S3.3+ 待做**。
 
 ## 阶段与状态
 
@@ -11,7 +11,7 @@
 | S1 | UART RX 中断 → PLIC，TUI/CLI 与 RT-Thread 交互 | ✅ 已合并 |
 | — | UART 终端视图重构（ANSI 状态机：C0/CSI/SGR/UTF-8） | ✅ 已合并 |
 | S2 | Supervisor / S-mode CSR / 委派 / PMP / DTB / `sfence.vma` / `sret`，**跑起 OpenSBI** | ✅ 已合并 |
-| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 设备与启动 | 🟡 S3.0 已完成；S3.1+ 待做 |
+| S3 | S-mode 基线、Sv32、S 中断、U/PMP、Linux 设备与启动 | 🟡 S3.0/S3.1 已完成；S3.2 待合并；S3.3+ 待做 |
 
 ## 已具备能力
 
@@ -30,14 +30,11 @@
 ## 已知限制（S3 处理）
 
 - **PMP 仅存储、不强制访问控制**（OpenSBI 能配置，但 S/U 越权不被拦截）。
-- **`satp` 仅存储**，未实现 Sv32 页表遍历（`Cpu::translate` 仍 bare 直通）。
-- **S 级中断未注入**：`mideleg` 已存，但中断仍全部在 M 处理；CLINT/PLIC 中断未转成
-  `sip`/`scause` 交 S。
 - 无 RTC / virtio 等 Linux 常用设备。
 
 ## S3 计划（Linux 与 S-mode 完整化）
 
-> **当前进度：S3.0 已完成**；下一阶段为 S3.1 Sv32。
+> **当前进度：S3.2 已完成（待合并）**；下一阶段为 S3.3 U-mode 与 PMP。
 
 > 每个阶段结束都必须同时满足：
 > `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、
@@ -59,7 +56,7 @@
   `smode_delegate_ecall`、`smode_illegal_mcsr`、`smode_sfence`、`boot_args`、`load_base_pie`。
 - **验收**：现有 34 用例 + 新增 S-mode 用例全过；OpenSBI 启动日志不回归。
 
-### S3.1 Sv32 地址翻译
+### S3.1 Sv32 地址翻译（✅ 已完成）
 
 - `Cpu::translate` 改为携带访问类型的结果：`(va, Fetch|Load|Store) -> Result<pa, TrapErr>`。
 - `satp.MODE=0` 或 M-mode（未启用 MPRV）保持 bare；`MODE=1` 执行 Sv32 两级页表遍历。
@@ -72,7 +69,7 @@
   切换 `satp`、页边界取指。
 - **验收**：旧用例与 OpenSBI 不回归；MMU 用例全过。
 
-### S3.2 S 级中断注入
+### S3.2 S 级中断注入（✅ 已完成，待合并）
 
 - CPU 中断仲裁完整化：MEI > MSI > MTI > SEI > SSI > STI；已委派中断不在 M 处理；
   S 中断需 `mstatus.SIE` + `sie` + `sip` 同时成立。
