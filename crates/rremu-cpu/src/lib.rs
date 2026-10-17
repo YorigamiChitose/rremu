@@ -280,17 +280,8 @@ impl Cpu {
         // 设备 pending 同步到 mip（软件读 mip 可见），并在取指成功后检查中断
         let pending = bus.pending_interrupts();
         self.sync_mip(&pending);
-        if (self.csr.mstatus & csr::MSTATUS_MIE) != 0 {
-            // spec 优先级：MEI(11) > MSI(3) > MTI(7)
-            const PRIORITY: [u32; 3] = [cause::M_EI, cause::M_SI, cause::M_TI];
-            for &c in &PRIORITY {
-                if pending.contains(&c) {
-                    let int_id = c & 0x7fff_ffff;
-                    if (self.csr.mie >> int_id) & 1 == 1 {
-                        return self.trap(sink, c, 0);
-                    }
-                }
-            }
+        if let Some(cause) = self.pending_interrupt() {
+            return self.trap(sink, cause, 0);
         }
 
         let lo = word as u16;
@@ -968,8 +959,8 @@ impl Cpu {
         Ok(StepOutcome::Trapped { cause })
     }
 
-    /// 将设备 pending 中断投影到 mip 的 MSIP/MTIP/MEIP 位（软件只读）。
-    /// 其余位（如 SSIP）保留软件可写值，不被设备覆盖。
+    /// 将设备 pending 中断投影到 mip 的设备位。
+    /// SSIP/STIP 由软件写入（如 OpenSBI 注入 S timer），不被设备覆盖。
     fn sync_mip(&mut self, pending: &[u32]) {
         let mut dev = 0u32;
         for &c in pending {
@@ -977,11 +968,51 @@ impl Cpu {
                 cause::M_SI => csr::MIP_MSIP,
                 cause::M_TI => csr::MIP_MTIP,
                 cause::M_EI => csr::MIP_MEIP,
+                cause::S_EI => csr::MIP_SEIP,
                 _ => 0,
             };
         }
-        let mask = csr::MIP_MSIP | csr::MIP_MTIP | csr::MIP_MEIP;
+        let mask = csr::MIP_MSIP | csr::MIP_MTIP | csr::MIP_MEIP | csr::MIP_SEIP;
         self.csr.mip = (self.csr.mip & !mask) | dev;
+    }
+
+    /// 按规范优先级选择当前可接收的中断。
+    ///
+    /// 目标为 M 的中断：当前 `< M` 时全局使能；当前为 M 时需 MIE。
+    /// 目标为 S 的中断：当前 `< S` 时全局使能；当前为 S 时需 SIE；
+    /// 当前为 M 时不接收已委派给 S 的中断。
+    fn pending_interrupt(&self) -> Option<u32> {
+        const PRIORITY: [u32; 6] = [
+            cause::M_EI,
+            cause::M_SI,
+            cause::M_TI,
+            cause::S_EI,
+            cause::S_SI,
+            cause::S_TI,
+        ];
+        for &cause in &PRIORITY {
+            let code = cause & 0x7fff_ffff;
+            if (self.csr.mip >> code) & 1 == 0 || (self.csr.mie >> code) & 1 == 0 {
+                continue;
+            }
+            let delegated = (self.csr.mideleg >> code) & 1 == 1;
+            let enabled = if delegated {
+                match self.priv_ {
+                    Priv::Machine => false,
+                    Priv::Supervisor => (self.csr.mstatus & csr::MSTATUS_SIE) != 0,
+                    Priv::User => true,
+                }
+            } else {
+                match self.priv_ {
+                    Priv::Machine => (self.csr.mstatus & csr::MSTATUS_MIE) != 0,
+                    _ => true,
+                }
+            };
+            if enabled {
+                return Some(cause);
+            }
+        }
+        None
     }
 }
 
@@ -2495,6 +2526,88 @@ mod tests {
         let out = h.step();
         assert!(matches!(out, StepOutcome::Executed { .. }));
         assert_eq!(h.cpu.pc(), MMU_VA + 0x1000);
+    }
+
+    #[test]
+    fn supervisor_software_interrupt_delegated_to_s() {
+        let mut h = Harness::new();
+        h.load(BASE, &[0x0000_0013]); // nop
+        h.cpu.priv_ = Priv::Supervisor;
+        h.cpu.csr_write(csr::MSTATUS, csr::MSTATUS_SIE);
+        h.cpu.csr_write(csr::MIE, csr::SIE_SSIE);
+        h.cpu.csr_write(csr::MIDELEG, 1 << 1);
+        h.cpu.csr_write(csr::MIP, csr::MIP_SSIP);
+        h.cpu.csr_write(csr::STVEC, BASE + 0x100);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::S_SI });
+        assert_eq!(h.cpu.pc(), BASE + 0x100);
+        assert_eq!(h.cpu.csr_read(csr::SCAUSE), cause::S_SI);
+        assert_eq!(h.cpu.csr_read(csr::STVAL), 0);
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, csr::MSTATUS_SPP);
+    }
+
+    #[test]
+    fn delegated_s_interrupt_is_not_taken_in_m() {
+        let mut h = Harness::new();
+        h.load(BASE, &[0x0000_0013]); // nop
+        h.cpu.csr_write(csr::MSTATUS, csr::MSTATUS_MIE);
+        h.cpu.csr_write(csr::MIE, csr::SIE_SSIE);
+        h.cpu.csr_write(csr::MIDELEG, 1 << 1);
+        h.cpu.csr_write(csr::MIP, csr::MIP_SSIP);
+        let out = h.step();
+        assert!(matches!(out, StepOutcome::Executed { .. }));
+        assert_eq!(h.cpu.pc(), BASE + 4);
+    }
+
+    #[test]
+    fn delegated_s_interrupt_taken_in_u_without_sie() {
+        let mut h = Harness::new();
+        h.load(BASE, &[0x0000_0013]); // nop
+        h.cpu.priv_ = Priv::User;
+        h.cpu.csr_write(csr::MIE, csr::SIE_SSIE);
+        h.cpu.csr_write(csr::MIDELEG, 1 << 1);
+        h.cpu.csr_write(csr::MIP, csr::MIP_SSIP);
+        h.cpu.csr_write(csr::STVEC, BASE + 0x100);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::S_SI });
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+    }
+
+    #[test]
+    fn m_interrupt_taken_in_s_without_mie() {
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::M_TI))).unwrap();
+        let mut cpu = Cpu::new(BASE);
+        cpu.priv_ = Priv::Supervisor;
+        cpu.csr_write(csr::MIE, csr::MIE_MTIE);
+        cpu.csr_write(csr::MTVEC, BASE + 0x100);
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        h.load(BASE, &[0x0000_0013]); // nop
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::M_TI });
+        assert_eq!(h.cpu.priv_(), Priv::Machine);
+        assert_eq!(h.cpu.csr_read(csr::MSTATUS) & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_S);
+    }
+
+    #[test]
+    fn plic_external_irq_injected_as_s_ei() {
+        let mut bus = BusRouter::new();
+        bus.map(BASE..BASE + 0x1000, Box::new(MockRam::new(BASE, 0x1000))).unwrap();
+        bus.map(0x0200_0000..0x0200_0010, Box::new(MockIrq::new(cause::S_EI))).unwrap();
+        let mut cpu = Cpu::new(BASE);
+        cpu.priv_ = Priv::Supervisor;
+        cpu.csr_write(csr::MSTATUS, csr::MSTATUS_SIE);
+        cpu.csr_write(csr::MIE, csr::SIE_SEIE);
+        cpu.csr_write(csr::MIDELEG, 1 << 9);
+        cpu.csr_write(csr::STVEC, BASE + 0x100);
+        let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
+        h.load(BASE, &[0x0000_0013]); // nop
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::S_EI });
+        assert_eq!(h.cpu.csr_read(csr::SIP) & csr::SIE_SEIE, csr::SIE_SEIE);
     }
 
 }
