@@ -1,2 +1,4 @@
 /target
 /.trae
+# generated device tree blob
+platforms/*.dtb

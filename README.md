@@ -9,8 +9,11 @@
 ## 特性
 
 - **ISA**：RV32I + M（乘除）+ A（原子 lr/sc + AMO）+ C（压缩指令）+ Zicsr；
-  最简 M-mode 陷阱（ecall / ebreak / mret，mstatus / mtvec / mepc / mcause /
-  mtval / mie / mip）；`fence.i` 按无缓存实现为 NOP
+  **M/S/U 三级特权**，`mret`/`sret`、`sfence.vma`/`wfi`（按 NOP）；
+  `mstatus`（MPP/MPIE/MIE、SPP/SPIE/SIE）、`mepc/mcause/mtval`、`mie/mip`、
+  `medeleg/mideleg` 陷阱委派、**PMP**（`pmpcfg/pmpaddr`，仅存储未强制）、
+  S-mode CSR（sstatus/sie/sip/stvec/sscratch/sepc/scause/stval/satp）；
+  `fence.i` 按无缓存实现为 NOP
 - **执行模型**：单周期（一条指令 = 一个 cycle）
 - **前端**
   - CLI：rustyline 交互式 REPL，加载 ELF 后暂停在入口，`c` 开始运行
@@ -96,6 +99,8 @@ rremu --tui <ELF>
 | `--entry <ADDR>` | 覆盖 ELF 入口 |
 | `--no-fb` | 不映射 framebuffer 设备，也不开窗 |
 | `--dump-on-exit <FILE>` | 程序终止时自动写出机器状态 dump（JSON，默认关闭） |
+| `--dtb <FILE>` | 加载设备树 DTB 到 RAM 并以 boot `a1` 传给 guest（OpenSBI/Linux 需要） |
+| `--load-base <ADDR>` | 为 PIE/可重定位镜像指定加载基址（段与入口整体偏移；OpenSBI 用） |
 | `-v...` | 日志级别：-v info / -vv debug / -vvv trace |
 
 ### REPL 命令
@@ -125,6 +130,7 @@ rremu --tui <ELF>
 | `←` / `→` | 切换速度档（1/2/4/8/16/32/64/full） |
 | `i` | 进入 UART 输入模式（`Esc` 返回；输入模式下 Ctrl+C 仍可退出） |
 | `b` | 切换内嵌 framebuffer 视图 |
+| `p` | 循环面板信息档：full → no-insn → no-insn,io → uart-full（全屏 UART） |
 | `D` | 写 dump（需配置 `--dump-on-exit` 路径） |
 | `r` | 复位机器 |
 | `q` / `Ctrl+C` | 退出 |
@@ -136,9 +142,21 @@ rremu --tui <ELF>
 | 基址 | 设备 | 范围 |
 |---|---|---|
 | `0x0200_0000` | CLINT | 0xC000（msip / mtimecmp / mtime） |
+| `0x0c00_0000` | PLIC | 0x400000（priority/pending/enable/claim） |
 | `0x1000_0000` | UART | 8 字节 |
 | `0x2000_0000` | Framebuffer | 640×480 ×2 字节（RGB565） |
 | `0x8000_0000` | RAM | 默认 16 MiB |
+
+## 运行外部固件（OpenSBI）
+
+rremu 已具备运行 **OpenSBI v1.9（RV32 generic FW_JUMP）** 的能力（S-mode 启动、PMP、委派）。
+平台定义与一键脚本在 [`platforms/`](platforms/)：
+
+```sh
+cd platforms && ./run-opensbi.sh        # 或 --tui
+```
+
+路线图（RT-Thread → OpenSBI → Linux）与已知限制见 [`ROADMAP.md`](ROADMAP.md)。
 
 ## 测试
 
