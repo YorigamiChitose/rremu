@@ -109,8 +109,16 @@ impl TuiApp {
                 }
             }
 
-            self.sync_fb_cache();
-            let snap = self.machine.snapshot();
+            // UART 全屏时 framebuffer 面板不可见，停止同步其缓存。
+            if self.fb_view && self.panel_level < 3 {
+                self.sync_fb_cache();
+            }
+            // 档位 ≥2 时内存事件面板不可见，用不克隆事件环的轻量快照。
+            let snap = if self.panel_level >= 2 {
+                self.machine.snapshot_compact()
+            } else {
+                self.machine.snapshot()
+            };
             // 档位 ≥1（关指令面板）时不做反汇编采集（省去内存 peek 与格式化）
             let disasm = if self.panel_level < 1 { self.collect_disasm(snap.pc) } else { Vec::new() };
             let fb = if self.fb_view {
