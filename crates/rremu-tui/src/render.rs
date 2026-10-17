@@ -377,7 +377,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8)
         " Esc: exit input mode | type to send to UART ".to_owned()
     } else {
         format!(
-            " Space:run/pause  s:step  ←→:speed  f:fastest  i:input  p:panels[{level_label}]  r:reset  b:fb  q:quit "
+            " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:panels[{level_label}]  r:reset  b:fb  q:quit "
         )
     };
     draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);

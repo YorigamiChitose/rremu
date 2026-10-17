@@ -100,7 +100,7 @@ impl TuiApp {
             }
 
             if self.running {
-                self.tick_machine();
+                self.tick_machine(frame_start);
                 // 帧节奏：Steps 档每帧恰好一批，提前完成则等满预算；
                 // Full 档在预算内循环，通常已用满。
                 let elapsed = frame_start.elapsed();
@@ -146,10 +146,20 @@ impl TuiApp {
         Ok(())
     }
 
-    /// 推进机器：每帧执行当前档位对应的一批指令。
-    fn tick_machine(&mut self) {
-        let rr = self.machine.step_n(self.speed.steps());
-        self.apply_run_result(rr);
+    /// 推进机器：固定档每帧执行一批；全速档在帧预算内连续批量执行。
+    fn tick_machine(&mut self, frame_start: Instant) {
+        match self.speed {
+            SpeedTier::Steps(n) => {
+                let rr = self.machine.step_n(n);
+                self.apply_run_result(rr);
+            }
+            SpeedTier::Full => {
+                while self.running && frame_start.elapsed() < FRAME_BUDGET {
+                    let rr = self.machine.step_n(SpeedTier::Full.batch());
+                    self.apply_run_result(rr);
+                }
+            }
+        }
     }
 
     /// 统一处理执行结果（tick_machine 与 single_step 共用）。
@@ -226,8 +236,8 @@ impl TuiApp {
                 self.single_step();
             }
             KeyCode::Char('f') if !self.exited && self.fault_reason.is_none() => {
-                // 直达最快档
-                self.speed = SpeedTier::FASTEST;
+                // 直达全速档
+                self.speed = SpeedTier::Full;
                 self.running = true;
             }
             KeyCode::Char('i') if !self.exited && self.fault_reason.is_none() => {
