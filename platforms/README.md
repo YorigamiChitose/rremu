@@ -14,7 +14,7 @@
 
 - `dtc`（device tree compiler）
 - `scons`（RT-Thread 用；本目录不需要）
-- OpenSBI 源码（默认 `/home/yori/yori-riscv-util/opensbi`，可用 `OPENSBI_DIR` 覆盖）
+- OpenSBI 源码（默认 rremu 同级的 `../opensbi`，可用 `OPENSBI_DIR` 覆盖）
 - 交叉工具链：`riscv64-linux-gnu-`（**必须**——OpenSBI 强制 PIE，`riscv64-unknown-elf` 的 ld 不支持 `-pie`）
 
 ## 手动运行

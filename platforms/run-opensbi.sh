@@ -5,7 +5,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RREMU_ROOT="$(cd "$HERE/.." && pwd)"
-OPENSBI_DIR="${OPENSBI_DIR:-/home/yori/yori-riscv-util/opensbi}"
+OPENSBI_DIR="${OPENSBI_DIR:-$RREMU_ROOT/../opensbi}"
+OPENSBI_DIR="$(cd "$OPENSBI_DIR" && pwd)"
 FW="$OPENSBI_DIR/build/platform/generic/firmware/fw_jump.elf"
 DTS="$HERE/rremu.dts"
 DTB="$HERE/rremu.dtb"
