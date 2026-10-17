@@ -1,42 +1,38 @@
-//! 速度档位：1/2/4/8/16/32/64/全速（←/→ 切换）。
+//! 速度档位：1/4/16/64/256（←/→ 切换）。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedTier {
     Steps(u64),
-    Full,
 }
 
 impl SpeedTier {
-    /// 8 档，索引 0..6 为步进，7 为全速。
-    pub const ALL: [SpeedTier; 8] = [
+    /// 5 档步进。
+    pub const ALL: [SpeedTier; 5] = [
         SpeedTier::Steps(1),
-        SpeedTier::Steps(2),
         SpeedTier::Steps(4),
-        SpeedTier::Steps(8),
         SpeedTier::Steps(16),
-        SpeedTier::Steps(32),
         SpeedTier::Steps(64),
-        SpeedTier::Full,
+        SpeedTier::Steps(256),
     ];
 
-    pub fn batch(self) -> u64 {
+    /// 最快档，供 `f` 快捷键使用。
+    pub const FASTEST: SpeedTier = SpeedTier::Steps(256);
+
+    /// 每帧执行的指令批大小。
+    pub fn steps(self) -> u64 {
         match self {
             SpeedTier::Steps(n) => n,
-            SpeedTier::Full => 4096,
         }
     }
 
     pub fn label(self) -> &'static str {
-        match self {
-            SpeedTier::Steps(1) => "1",
-            SpeedTier::Steps(2) => "2",
-            SpeedTier::Steps(4) => "4",
-            SpeedTier::Steps(8) => "8",
-            SpeedTier::Steps(16) => "16",
-            SpeedTier::Steps(32) => "32",
-            SpeedTier::Steps(64) => "64",
-            SpeedTier::Steps(_) => "?",
-            SpeedTier::Full => "full",
+        match self.steps() {
+            1 => "1",
+            4 => "4",
+            16 => "16",
+            64 => "64",
+            256 => "256",
+            _ => "?",
         }
     }
 
@@ -59,25 +55,30 @@ mod tests {
     #[test]
     fn next_cycles_through_all_tiers() {
         let mut s = SpeedTier::Steps(1);
-        for _ in 0..7 {
+        for _ in 0..4 {
             s = s.next();
         }
-        assert_eq!(s, SpeedTier::Full);
-        // Full stays Full
-        assert_eq!(s.next(), SpeedTier::Full);
+        assert_eq!(s, SpeedTier::FASTEST);
+        // 最快档保持最快档
+        assert_eq!(s.next(), SpeedTier::FASTEST);
     }
 
     #[test]
     fn prev_cycles_backwards() {
-        let s = SpeedTier::Full.prev();
+        let s = SpeedTier::FASTEST.prev();
         assert_eq!(s, SpeedTier::Steps(64));
         let s = SpeedTier::Steps(1).prev();
         assert_eq!(s, SpeedTier::Steps(1)); // clamped
     }
 
     #[test]
-    fn batch_returns_step_count_or_large_for_full() {
-        assert_eq!(SpeedTier::Steps(8).batch(), 8);
-        assert_eq!(SpeedTier::Full.batch(), 4096);
+    fn steps_and_labels() {
+        assert_eq!(SpeedTier::Steps(1).steps(), 1);
+        assert_eq!(SpeedTier::Steps(256).steps(), 256);
+        assert_eq!(SpeedTier::Steps(1).label(), "1");
+        assert_eq!(SpeedTier::Steps(4).label(), "4");
+        assert_eq!(SpeedTier::Steps(16).label(), "16");
+        assert_eq!(SpeedTier::Steps(64).label(), "64");
+        assert_eq!(SpeedTier::FASTEST.label(), "256");
     }
 }
