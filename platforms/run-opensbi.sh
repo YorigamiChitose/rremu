@@ -25,8 +25,10 @@ echo "==> build OpenSBI (RV32 generic FW_JUMP)"
        FW_JUMP_ADDR=0x80200000 FW_JUMP_FDT_ADDR=0x80F00000 >/dev/null)
 
 echo "==> run"
+# 默认保持运行，由用户自行控制退出（Ctrl+C / TUI q）。
+# 需要限时运行时可外部包裹：timeout -s INT 6 ./run-opensbi.sh
 if [[ "${1:-}" == "--tui" ]]; then
   exec "$BIN" "$FW" --load-base 0x80000000 --dtb "$DTB" --tui
 else
-  exec timeout -s INT 6 "$BIN" "$FW" --load-base 0x80000000 --dtb "$DTB" --no-fb -c c
+  exec "$BIN" "$FW" --load-base 0x80000000 --dtb "$DTB" --no-fb -c c
 fi
