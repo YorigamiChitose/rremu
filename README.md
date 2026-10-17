@@ -126,8 +126,8 @@ rremu --tui <ELF>
 |---|---|
 | `Space` | 运行 / 暂停 |
 | `s` | 单步一条 |
-| `f` | 直达全速档 |
-| `←` / `→` | 切换速度档（1/4/16/64/256/full） |
+| `f` | 直达 full 档 |
+| `←` / `→` | 切换速度档（single/slow/middle/fast/full） |
 | `i` | 进入 UART 输入模式（`Esc` 返回；输入模式下 Ctrl+C 仍可退出） |
 | `b` | 切换内嵌 framebuffer 视图 |
 | `p` | 循环面板信息档：full → no-insn → no-insn,io → uart-full（全屏 UART） |
@@ -135,8 +135,9 @@ rremu --tui <ELF>
 | `r` | 复位机器 |
 | `q` / `Ctrl+C` | 退出 |
 
-帧节奏约 30fps：步进档每帧执行固定批数，全速档在帧预算内连续批量执行。
-顶栏 `ips` 显示最近 500ms 的实测执行速度（instructions/s，K/M/G 缩写）；暂停时保留最后测量值。
+帧节奏约 30fps：`single` 每秒执行 1 条；`slow/middle/fast/full` 分别按帧预算的
+25%/50%/75%/100% 全速执行，即约为峰值速度的四档。
+顶栏 `ips` 显示最近 1s 的实测执行速度（instructions/s，K/M/G 缩写）；暂停时保留最后测量值。
 
 ## 设备内存地图
 

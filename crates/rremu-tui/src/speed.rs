@@ -1,39 +1,48 @@
-//! 速度档位：1/4/16/64/256/全速（←/→ 切换）。
+//! 速度档位：single/slow/middle/fast/full（←/→ 切换）。
+//!
+//! single 每秒只执行一条指令；其余档位按帧预算的时间占比节流：
+//! slow/middle/fast/full = 峰值的 25%/50%/75%/100%。
+
+/// 全速运行时的单批指令数。
+pub const FULL_BATCH: u64 = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeedTier {
-    Steps(u64),
+    Single,
+    Slow,
+    Middle,
+    Fast,
     Full,
 }
 
 impl SpeedTier {
-    /// 6 档：5 个固定步进档 + 全速。
-    pub const ALL: [SpeedTier; 6] = [
-        SpeedTier::Steps(1),
-        SpeedTier::Steps(4),
-        SpeedTier::Steps(16),
-        SpeedTier::Steps(64),
-        SpeedTier::Steps(256),
+    /// 5 档，按速度从低到高排列。
+    pub const ALL: [SpeedTier; 5] = [
+        SpeedTier::Single,
+        SpeedTier::Slow,
+        SpeedTier::Middle,
+        SpeedTier::Fast,
         SpeedTier::Full,
     ];
 
-    /// 每帧执行的指令批大小；全速档在帧预算内循环使用该批大小。
-    pub fn batch(self) -> u64 {
+    pub fn label(self) -> &'static str {
         match self {
-            SpeedTier::Steps(n) => n,
-            SpeedTier::Full => 4096,
+            SpeedTier::Single => "single",
+            SpeedTier::Slow => "slow",
+            SpeedTier::Middle => "middle",
+            SpeedTier::Fast => "fast",
+            SpeedTier::Full => "full",
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// 相对峰值的占空比；`single` 不使用占空比调度。
+    pub fn duty(self) -> Option<f64> {
         match self {
-            SpeedTier::Steps(1) => "1",
-            SpeedTier::Steps(4) => "4",
-            SpeedTier::Steps(16) => "16",
-            SpeedTier::Steps(64) => "64",
-            SpeedTier::Steps(256) => "256",
-            SpeedTier::Steps(_) => "?",
-            SpeedTier::Full => "full",
+            SpeedTier::Single => None,
+            SpeedTier::Slow => Some(0.25),
+            SpeedTier::Middle => Some(0.5),
+            SpeedTier::Fast => Some(0.75),
+            SpeedTier::Full => Some(1.0),
         }
     }
 
@@ -55,8 +64,8 @@ mod tests {
 
     #[test]
     fn next_cycles_through_all_tiers() {
-        let mut s = SpeedTier::Steps(1);
-        for _ in 0..5 {
+        let mut s = SpeedTier::Single;
+        for _ in 0..4 {
             s = s.next();
         }
         assert_eq!(s, SpeedTier::Full);
@@ -66,22 +75,21 @@ mod tests {
 
     #[test]
     fn prev_cycles_backwards() {
-        let s = SpeedTier::Full.prev();
-        assert_eq!(s, SpeedTier::Steps(256));
-        let s = SpeedTier::Steps(1).prev();
-        assert_eq!(s, SpeedTier::Steps(1)); // clamped
+        assert_eq!(SpeedTier::Full.prev(), SpeedTier::Fast);
+        assert_eq!(SpeedTier::Single.prev(), SpeedTier::Single); // clamped
     }
 
     #[test]
-    fn batch_and_labels() {
-        assert_eq!(SpeedTier::Steps(1).batch(), 1);
-        assert_eq!(SpeedTier::Steps(256).batch(), 256);
-        assert_eq!(SpeedTier::Full.batch(), 4096);
-        assert_eq!(SpeedTier::Steps(1).label(), "1");
-        assert_eq!(SpeedTier::Steps(4).label(), "4");
-        assert_eq!(SpeedTier::Steps(16).label(), "16");
-        assert_eq!(SpeedTier::Steps(64).label(), "64");
-        assert_eq!(SpeedTier::Steps(256).label(), "256");
+    fn labels_and_duty_ratios() {
+        assert_eq!(SpeedTier::Single.label(), "single");
+        assert_eq!(SpeedTier::Slow.label(), "slow");
+        assert_eq!(SpeedTier::Middle.label(), "middle");
+        assert_eq!(SpeedTier::Fast.label(), "fast");
         assert_eq!(SpeedTier::Full.label(), "full");
+        assert_eq!(SpeedTier::Single.duty(), None);
+        assert_eq!(SpeedTier::Slow.duty(), Some(0.25));
+        assert_eq!(SpeedTier::Middle.duty(), Some(0.5));
+        assert_eq!(SpeedTier::Fast.duty(), Some(0.75));
+        assert_eq!(SpeedTier::Full.duty(), Some(1.0));
     }
 }

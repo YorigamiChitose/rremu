@@ -12,7 +12,7 @@ use ratatui::Terminal;
 use rremu_machine::{FramebufferFrame, Machine, RunResult};
 
 use crate::render;
-use crate::speed::SpeedTier;
+use crate::speed::{FULL_BATCH, SpeedTier};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -41,6 +41,8 @@ pub struct TuiApp {
     actual_ips: f64,
     /// 速度测量的采样窗口起点（时间, instret）。
     speed_sample: Option<(Instant, u64)>,
+    /// single 档上一次单步的时间。
+    last_single_step: Option<Instant>,
 }
 
 impl TuiApp {
@@ -49,7 +51,7 @@ impl TuiApp {
             machine,
             running: false,
             exited: false,
-            speed: SpeedTier::Steps(1),
+            speed: SpeedTier::Single,
             input_mode: false,
             fb_view: false,
             should_quit: false,
@@ -61,6 +63,7 @@ impl TuiApp {
             panel_level: 0,
             actual_ips: 0.0,
             speed_sample: None,
+            last_single_step: None,
         }
     }
 
@@ -156,7 +159,7 @@ impl TuiApp {
 
     /// 维护实测执行速度：500ms 采样窗口，暂停时保留最后测量值。
     fn update_actual_speed(&mut self, now: Instant, instret: u64) {
-        const WINDOW: Duration = Duration::from_millis(500);
+        const WINDOW: Duration = Duration::from_secs(1);
         if !self.running {
             self.speed_sample = None;
             return;
@@ -179,21 +182,31 @@ impl TuiApp {
         self.speed = speed;
         self.actual_ips = 0.0;
         self.speed_sample = None;
+        self.last_single_step = None;
     }
 
-    /// 推进机器：固定档每帧执行一批；全速档在帧预算内连续批量执行。
+    /// 推进机器：single 每秒一条；其余档位按峰值速度的固定占比执行。
     fn tick_machine(&mut self, frame_start: Instant) {
-        match self.speed {
-            SpeedTier::Steps(n) => {
-                let rr = self.machine.step_n(n);
+        let Some(duty) = self.speed.duty() else {
+            // single：每秒只执行一条
+            let now = Instant::now();
+            let due = match self.last_single_step {
+                None => true,
+                Some(last) => now.duration_since(last) >= Duration::from_secs(1),
+            };
+            if due {
+                self.last_single_step = Some(now);
+                let rr = self.machine.step_n(1);
                 self.apply_run_result(rr);
             }
-            SpeedTier::Full => {
-                while self.running && frame_start.elapsed() < FRAME_BUDGET {
-                    let rr = self.machine.step_n(SpeedTier::Full.batch());
-                    self.apply_run_result(rr);
-                }
-            }
+            return;
+        };
+
+        // slow/middle/fast/full：在帧预算的 duty 比例内全速执行，剩余时间空闲。
+        let budget = FRAME_BUDGET.mul_f64(duty);
+        while self.running && frame_start.elapsed() < budget {
+            let rr = self.machine.step_n(FULL_BATCH);
+            self.apply_run_result(rr);
         }
     }
 
@@ -271,7 +284,7 @@ impl TuiApp {
                 self.single_step();
             }
             KeyCode::Char('f') if !self.exited && self.fault_reason.is_none() => {
-                // 直达全速档
+                // 直达 full 档
                 self.set_speed(SpeedTier::Full);
                 self.running = true;
             }
@@ -292,6 +305,7 @@ impl TuiApp {
                     self.fb_cache.clear();
                     self.actual_ips = 0.0;
                     self.speed_sample = None;
+                    self.last_single_step = None;
                 }
             }
             KeyCode::Char('b') => {
