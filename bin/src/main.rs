@@ -114,8 +114,7 @@ fn try_main() -> anyhow::Result<i32> {
         None => None,
     };
     if dtb.is_some() {
-        let ram_end = args.base.checked_add(mem_size).context("ram range overflow")?;
-        cfg.boot.dtb = Some((ram_end - 0x10_0000) & !7);
+        cfg.place_dtb().context("invalid DTB placement")?;
     }
 
     let bytes = std::fs::read(&args.elf)

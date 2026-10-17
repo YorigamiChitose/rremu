@@ -38,6 +38,8 @@ pub const CLINT_SIZE: u32 = 0xC000;
 pub const PLIC_SIZE: u32 = 0x40_0000;
 /// Framebuffer 每像素字节数（RGB565）。
 pub const FB_BPP: u32 = 2;
+/// DTB 放置在 RAM 顶部下方保留的字节数。
+pub const DTB_RESERVE: u32 = 0x10_0000;
 
 /// 默认指令 trace 深度。
 pub const DEFAULT_TRACE_CAPACITY: usize = 32;
@@ -173,6 +175,7 @@ pub enum ConfigError {
     RamOverflow { base: u32, size: u32 },
     FbZeroDim { width: u32, height: u32 },
     FbSizeOverflow { width: u32, height: u32, bpp: u32 },
+    DtbReserveTooLarge { ram_size: u32 },
 }
 
 impl fmt::Display for ConfigError {
@@ -187,6 +190,9 @@ impl fmt::Display for ConfigError {
             }
             ConfigError::FbSizeOverflow { width, height, bpp } => {
                 write!(f, "framebuffer size overflow ({width}x{height}x{bpp})")
+            }
+            ConfigError::DtbReserveTooLarge { ram_size } => {
+                write!(f, "ram size {ram_size:#x} smaller than DTB reserve {DTB_RESERVE:#x}")
             }
         }
     }
@@ -246,6 +252,24 @@ impl Config {
         Ok(())
     }
 
+    /// 将 DTB 放到 RAM 顶部下方 `DTB_RESERVE` 处（8 字节对齐），并写入 `boot.dtb`。
+    pub fn place_dtb(&mut self) -> Result<u32, ConfigError> {
+        let ram_end = self
+            .layout
+            .ram_base
+            .checked_add(self.layout.ram_size)
+            .ok_or(ConfigError::RamOverflow {
+                base: self.layout.ram_base,
+                size: self.layout.ram_size,
+            })?;
+        if self.layout.ram_size < DTB_RESERVE {
+            return Err(ConfigError::DtbReserveTooLarge { ram_size: self.layout.ram_size });
+        }
+        let addr = (ram_end - DTB_RESERVE) & !7;
+        self.boot.dtb = Some(addr);
+        Ok(addr)
+    }
+
     /// 解析入口：默认值 + 外部覆盖 + 校验 → 统一 `Config`。
     pub fn resolve(ov: Overrides) -> Result<Config, ConfigError> {
         let mut cfg = Config::default();
@@ -259,6 +283,17 @@ impl Config {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
 mod tests {
     use super::*;
+
+    #[test]
+    fn place_dtb_at_ram_top_reserve() {
+        let mut c = Config::default();
+        assert_eq!(c.place_dtb().unwrap(), 0x80f0_0000);
+        assert_eq!(c.boot.dtb, Some(0x80f0_0000));
+
+        let mut small = Config::default();
+        small.layout.ram_size = 0x1000;
+        assert!(matches!(small.place_dtb(), Err(ConfigError::DtbReserveTooLarge { .. })));
+    }
 
     #[test]
     fn default_layout_matches_consts() {
