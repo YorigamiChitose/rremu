@@ -355,7 +355,6 @@ pub struct MachineSnapshot {
     pub csrs: CsrSnapshot,
     pub state: RunState,
     pub mem_ring: VecDeque<EmuEvent>,
-    pub uart_out: Vec<u8>,
 }
 
 impl Machine {
@@ -658,8 +657,18 @@ impl Machine {
         Ok(())
     }
 
-    /// 机器快照（前端唯一状态视图）。
+    /// 机器快照（前端唯一状态视图），包含事件环。
     pub fn snapshot(&self) -> MachineSnapshot {
+        self.snapshot_inner(true)
+    }
+
+    /// 轻量快照：保留寄存器/CSR/状态，不克隆事件环。
+    /// 供隐藏了内存事件面板的前端档位使用（如 TUI 的 UART 全屏）。
+    pub fn snapshot_compact(&self) -> MachineSnapshot {
+        self.snapshot_inner(false)
+    }
+
+    fn snapshot_inner(&self, include_events: bool) -> MachineSnapshot {
         MachineSnapshot {
             cycle: self.cpu.cycle(),
             pc: self.cpu.pc(),
@@ -677,13 +686,11 @@ impl Machine {
                 minstret: self.cpu.instret(),
             },
             state: self.state.clone(),
-            mem_ring: self.collector.mem_ring().clone(),
-            uart_out: self
-                .collector
-                .uart_ring()
-                .iter()
-                .filter_map(RingCollector::as_uart_output)
-                .collect(),
+            mem_ring: if include_events {
+                self.collector.mem_ring().clone()
+            } else {
+                VecDeque::new()
+            },
         }
     }
 
@@ -952,6 +959,21 @@ mod tests {
         let machine = Machine::from_config(&cfg, Some(nop_image(base))).unwrap();
         assert_eq!(machine.cpu.reg(10), 3); // a0 = hartid
         assert_eq!(machine.cpu.reg(11), 0x8000_0900); // a1 = dtb
+    }
+
+    #[test]
+    fn compact_snapshot_skips_event_ring() {
+        let base = 0x8000_0000;
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
+        machine.step_n(1);
+        let full = machine.snapshot();
+        let compact = machine.snapshot_compact();
+        assert!(!full.mem_ring.is_empty());
+        assert!(compact.mem_ring.is_empty());
+        assert_eq!(full.cycle, compact.cycle);
+        assert_eq!(full.pc, compact.pc);
+        assert_eq!(full.gprs, compact.gprs);
+        assert_eq!(full.state, compact.state);
     }
 
     #[test]
