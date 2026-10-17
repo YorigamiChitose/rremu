@@ -166,8 +166,8 @@ impl Cpu {
     /// CSR 写入（CSR 指令执行用）。只读/未知 CSR 写入忽略。
     fn csr_write(&mut self, addr: u16, val: u32) {
         match addr {
-            csr::MSTATUS => self.csr.mstatus = val,
-            csr::MISA => self.csr.misa = val,
+            csr::MSTATUS => self.csr.mstatus = val & csr::MSTATUS_WRITE_MASK,
+            // misa 为只读/WARL：忽略写入。
             csr::MIE => self.csr.mie = val,
             csr::MTVEC => self.csr.mtvec = val,
             csr::MSCRATCH => self.csr.mscratch = val,
@@ -197,6 +197,26 @@ impl Cpu {
             }
             _ => {}
         }
+    }
+
+    /// 当前特权级对应的 CSR 地址 bit[9:8] 数值（U=0, S=1, M=3）。
+    fn priv_csr_level(&self) -> u32 {
+        match self.priv_ {
+            Priv::User => 0,
+            Priv::Supervisor => 1,
+            Priv::Machine => 3,
+        }
+    }
+
+    /// CSR 访问权限检查：特权级不足或写入只读 CSR 时触发 illegal instruction。
+    /// `write` 由具体指令决定（CSRRS/CSRRC 的 rs1=x0 不构成写）。
+    fn check_csr_access(&self, addr: u16, write: bool, raw: u32) -> Result<(), TrapErr> {
+        let required = u32::from((addr >> 8) & 0x3);
+        let read_only = (addr >> 10) & 0x3 == 0x3;
+        if required > self.priv_csr_level() || (write && read_only) {
+            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+        }
+        Ok(())
     }
 
     /// 总线错误 → 异常 cause：对齐违例返 `misalign`，其余（未映射/设备）返 `fault`。
@@ -293,7 +313,7 @@ impl Cpu {
             }
         };
 
-        match self.exec(bus, sink, pc, instr, len) {
+        match self.exec(bus, sink, pc, instr, len, if len == 2 { word & 0xffff } else { word }) {
             Ok(next_pc) => {
                 self.pc = next_pc;
                 self.cycle += 1;
@@ -358,6 +378,7 @@ impl Cpu {
         pc: u32,
         instr: Instruction,
         len: u8,
+        raw: u32,
     ) -> Result<u32, TrapErr> {
         let x = |c: &Self, i: u8| c.x[usize::from(i)];
         let mut next_pc = pc.wrapping_add(len as u32);
@@ -584,42 +605,48 @@ impl Cpu {
             }
             Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
             Instruction::Csrrw { rd, csr, rs1 } => {
+                self.check_csr_access(csr, true, raw)?;
                 let old = self.csr_read(csr);
                 self.csr_write(csr, x(self, rs1));
                 set!(rd, old);
             }
             Instruction::Csrrs { rd, csr, rs1 } => {
-                let old = self.csr_read(csr);
                 let mask = x(self, rs1);
+                self.check_csr_access(csr, mask != 0, raw)?;
+                let old = self.csr_read(csr);
                 if mask != 0 {
                     self.csr_write(csr, old | mask);
                 }
                 set!(rd, old);
             }
             Instruction::Csrrc { rd, csr, rs1 } => {
-                let old = self.csr_read(csr);
                 let mask = x(self, rs1);
+                self.check_csr_access(csr, mask != 0, raw)?;
+                let old = self.csr_read(csr);
                 if mask != 0 {
                     self.csr_write(csr, old & !mask);
                 }
                 set!(rd, old);
             }
             Instruction::Csrrwi { rd, csr, zimm } => {
+                self.check_csr_access(csr, true, raw)?;
                 let old = self.csr_read(csr);
                 self.csr_write(csr, u32::from(zimm));
                 set!(rd, old);
             }
             Instruction::Csrrsi { rd, csr, zimm } => {
-                let old = self.csr_read(csr);
                 let mask = u32::from(zimm);
+                self.check_csr_access(csr, mask != 0, raw)?;
+                let old = self.csr_read(csr);
                 if mask != 0 {
                     self.csr_write(csr, old | mask);
                 }
                 set!(rd, old);
             }
             Instruction::Csrrci { rd, csr, zimm } => {
-                let old = self.csr_read(csr);
                 let mask = u32::from(zimm);
+                self.check_csr_access(csr, mask != 0, raw)?;
+                let old = self.csr_read(csr);
                 if mask != 0 {
                     self.csr_write(csr, old & !mask);
                 }
@@ -1392,6 +1419,68 @@ mod tests {
         assert_eq!(h.cpu.reg(2), 0xF0); // mscratch was 0xF0 before csrrsi
         assert_eq!(h.cpu.reg(3), 0xFF); // mscratch was 0xFF before csrrci
         assert_eq!(h.cpu.csr_state().mscratch, 0xF0); // after csrrci
+    }
+
+    #[test]
+    fn csr_privilege_and_read_only_checks() {
+        // S-mode 访问 M-CSR → illegal，mtval 为指令编码
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        let instr = i_enc(0b1110011, 1, 0b010, 0, csr::MSTATUS as i32); // csrrs x1, mstatus, x0
+        h.load(BASE, &[instr]);
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
+        assert_eq!(h.cpu.csr_state().mtval, instr as u32);
+
+        // U-mode 访问 S-CSR → illegal
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::User;
+        h.load(BASE, &[i_enc(0b1110011, 1, 0b010, 0, csr::SSTATUS as i32)]);
+        assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
+
+        // M-mode 写只读 CSR（mhartid）→ illegal
+        let mut h = Harness::new();
+        h.load(BASE, &[i_enc(0b1110011, 0, 0b001, 0, csr::MHARTID as i32)]);
+        assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
+
+        // 只读 CSR 的 CSRRS rs1=x0 不算写，允许读取
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(0b1110011, 1, 0b010, 0, csr::CYCLE as i32),
+            i_enc(0b1110011, 2, 0b110, 1, csr::CYCLE as i32), // csrrsi x2, cycle, 1
+        ]);
+        assert!(matches!(h.step(), StepOutcome::Executed { .. }));
+        assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
+
+        // S-mode 访问 S-CSR 正常
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, 0x5A),
+            i_enc(0b1110011, 0, 0b001, 5, csr::SSCRATCH as i32),
+            i_enc(0b1110011, 1, 0b010, 0, csr::SSCRATCH as i32),
+        ]);
+        h.run(3);
+        assert_eq!(h.cpu.reg(1), 0x5A);
+    }
+
+    #[test]
+    fn misa_is_read_only_and_mstatus_write_is_masked() {
+        let mut h = Harness::new();
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, -1), // x5 = 0xffffffff
+            i_enc(0b1110011, 0, 0b001, 5, csr::MISA as i32),
+            i_enc(0b1110011, 0, 0b001, 5, csr::MSTATUS as i32),
+            i_enc(0b1110011, 1, 0b010, 0, csr::MISA as i32),
+            i_enc(0b1110011, 2, 0b010, 0, csr::MSTATUS as i32),
+        ]);
+        h.run(5);
+        let misa = h.cpu.csr_read(csr::MISA);
+        assert_eq!(misa & csr::MISA_I, csr::MISA_I);
+        assert_eq!(misa & csr::MISA_S, csr::MISA_S);
+        // mstatus 只接受已实现的可写位
+        assert_eq!(h.cpu.reg(2) & !csr::MSTATUS_WRITE_MASK, 0);
+        assert_eq!(h.cpu.reg(2) & csr::MSTATUS_WRITE_MASK, csr::MSTATUS_WRITE_MASK);
     }
 
     #[test]

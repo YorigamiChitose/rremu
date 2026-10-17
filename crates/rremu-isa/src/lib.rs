@@ -406,6 +406,9 @@ pub mod csr {
     pub const MSTATUS_MPP_U: u32 = 0b00 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_S: u32 = 0b01 << MSTATUS_MPP_SHIFT;
     pub const MSTATUS_MPP_M: u32 = 0b11 << MSTATUS_MPP_SHIFT;
+    /// mstatus 中当前实现接受的软件可写位（其余位保持原值）。
+    pub const MSTATUS_WRITE_MASK: u32 =
+        SSTATUS_MASK | MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK;
 
     // mie 使能位
     pub const MIE_MSIE: u32 = 1 << 3;  // Machine Software Interrupt Enable
