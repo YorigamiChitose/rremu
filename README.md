@@ -11,7 +11,7 @@
 - **ISA**：RV32I + M（乘除）+ A（原子 lr/sc + AMO）+ C（压缩指令）+ Zicsr；
   **M/S/U 三级特权**，`mret`/`sret`、`sfence.vma`/`wfi`（按 NOP）；
   `mstatus`（MPP/MPIE/MIE、SPP/SPIE/SIE）、`mepc/mcause/mtval`、`mie/mip`、
-  `medeleg/mideleg` 陷阱委派、**PMP**（`pmpcfg/pmpaddr`，仅存储未强制）、
+  `medeleg/mideleg` 陷阱委派、**PMP**（`pmpcfg/pmpaddr`，S/U 强制访问控制）、
   S-mode CSR（sstatus/sie/sip/stvec/sscratch/sepc/scause/stval/satp）；
   `fence.i` 按无缓存实现为 NOP
 - **执行模型**：单周期（一条指令 = 一个 cycle）
