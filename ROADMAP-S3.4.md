@@ -364,8 +364,28 @@ EXTCON、NVMEM、MAILBOX、DEVFREQ 等）；它们同样按 A+ 接受，不视�
 - `OVERLAY_FS` / `AUTOFS_FS` 不参与 initramfs 启动路径。
 - `DEBUG_KERNEL` 仅配置开关保留；不启用 `initcall_debug` 或其他主动调试选项。
 - 以上均为 `forced accepted`，不属于 rremu 实际设备能力。
-- 完整冻结配置保存在 `platforms/linux-test/rremu_rv32_test.config`；
-  后续不再以“最小化配置”为目标继续裁剪。
+- 完整冻结配置保存在 `platforms/linux-test/rremu_rv32_test.config`。
+
+#### 3.3.2 已关闭 jitterentropy / DRBG 链
+
+启动定位确认 SHA3 热点来自 `jent_hash_time`（jitterentropy），不是 crypto self-test。
+为避免启动期熵源初始化消耗大量指令，固定关闭：
+
+```text
+# CONFIG_CRYPTO_SEQIV is not set
+# CONFIG_CRYPTO_ECHAINIV is not set
+# CONFIG_CRYPTO_RNG_DEFAULT is not set
+# CONFIG_CRYPTO_DRBG_MENU is not set
+# CONFIG_CRYPTO_DRBG is not set
+# CONFIG_CRYPTO_DRBG_HMAC is not set
+# CONFIG_CRYPTO_JITTERENTROPY is not set
+```
+
+原因：`CRYPTO_RNG_DEFAULT → CRYPTO_DRBG_MENU → CRYPTO_DRBG → CRYPTO_JITTERENTROPY`
+存在 Kconfig select 链；仅关闭 jitterentropy 不会生效，需要同时关闭
+`CRYPTO_SEQIV` / `CRYPTO_ECHAINIV` 这两个 `CRYPTO_RNG_DEFAULT` 的来源。
+
+该变更不影响当前 initramfs `/init` 的 write/reboot 路径。
 
 ### 3.4 固定 DTS
 
