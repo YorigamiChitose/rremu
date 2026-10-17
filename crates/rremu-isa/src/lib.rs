@@ -358,6 +358,12 @@ pub mod csr {
     pub const SIP: u16 = 0x144;
     pub const SATP: u16 = 0x180;
 
+    // satp 布局（RV32）
+    pub const SATP_MODE_MASK: u32 = 1 << 31;
+    pub const SATP_MODE_SV32: u32 = 1 << 31;
+    pub const SATP_ASID_MASK: u32 = 0x1ff << 22;
+    pub const SATP_PPN_MASK: u32 = 0x3f_ffff;
+
     // ---- M-mode 委派 ----
     pub const MEDELEG: u16 = 0x302;
     pub const MIDELEG: u16 = 0x303;
@@ -392,9 +398,12 @@ pub mod csr {
     pub const MSTATUS_SPIE: u32 = 1 << 5;
     pub const MSTATUS_MPIE: u32 = 1 << 7;
     pub const MSTATUS_SPP: u32 = 1 << 8;
+    pub const MSTATUS_MPRV: u32 = 1 << 17;
+    pub const MSTATUS_SUM: u32 = 1 << 18;
+    pub const MSTATUS_MXR: u32 = 1 << 19;
 
     /// sstatus 是 mstatus 的视图，仅暴露 S 相关位。
-    pub const SSTATUS_MASK: u32 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP;
+    pub const SSTATUS_MASK: u32 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_SUM | MSTATUS_MXR;
 
     // S 级中断位（sie/sip 的 S 部分：SSIE/STIE/SEIE）
     pub const SIE_SSIE: u32 = 1 << 1;
@@ -408,7 +417,7 @@ pub mod csr {
     pub const MSTATUS_MPP_M: u32 = 0b11 << MSTATUS_MPP_SHIFT;
     /// mstatus 中当前实现接受的软件可写位（其余位保持原值）。
     pub const MSTATUS_WRITE_MASK: u32 =
-        SSTATUS_MASK | MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK;
+        SSTATUS_MASK | MSTATUS_MIE | MSTATUS_MPIE | MSTATUS_MPP_MASK | MSTATUS_MPRV;
 
     // mie 使能位
     pub const MIE_MSIE: u32 = 1 << 3;  // Machine Software Interrupt Enable
@@ -435,6 +444,9 @@ pub mod cause {
     pub const ECALL_FROM_U: u32 = 8;
     pub const ECALL_FROM_S: u32 = 9;
     pub const ECALL_FROM_M: u32 = 11;
+    pub const INSTR_PAGE_FAULT: u32 = 12;
+    pub const LOAD_PAGE_FAULT: u32 = 13;
+    pub const STORE_PAGE_FAULT: u32 = 15;
 
     // 中断（bit31=1）
     pub const M_SI: u32 = 0x8000_0003; // Machine Software Interrupt
@@ -464,6 +476,9 @@ pub mod cause {
                 ECALL_FROM_U => "environment call from U-mode",
                 ECALL_FROM_S => "environment call from S-mode",
                 ECALL_FROM_M => "environment call from M-mode",
+                INSTR_PAGE_FAULT => "instruction page fault",
+                LOAD_PAGE_FAULT => "load page fault",
+                STORE_PAGE_FAULT => "store/AMO page fault",
                 _ => "unknown exception",
             }
         }
@@ -564,6 +579,9 @@ mod tests {
         assert_eq!(cause::cause_name(cause::LOAD_ACCESS_FAULT), "load access fault");
         assert_eq!(cause::cause_name(cause::ECALL_FROM_M), "environment call from M-mode");
         assert_eq!(cause::cause_name(cause::ECALL_FROM_S), "environment call from S-mode");
+        assert_eq!(cause::cause_name(cause::INSTR_PAGE_FAULT), "instruction page fault");
+        assert_eq!(cause::cause_name(cause::LOAD_PAGE_FAULT), "load page fault");
+        assert_eq!(cause::cause_name(cause::STORE_PAGE_FAULT), "store/AMO page fault");
         assert_eq!(cause::cause_name(cause::M_TI), "machine timer interrupt");
         assert_eq!(cause::cause_name(cause::M_SI), "machine software interrupt");
         assert_eq!(cause::cause_name(99), "unknown exception");
