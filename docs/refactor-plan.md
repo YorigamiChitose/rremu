@@ -14,7 +14,8 @@
   - tests 已按关注点拆分
   - exec memory/AMO 已拆出
   - exec system helper 已拆出
-  - exec CSR/ALU 进一步细分仍可选
+  - exec CSR helper 已拆出
+  - exec ALU 仍保留在 mod.rs（约 294 行，可选继续拆）
 ```
 
 本阶段提交：
