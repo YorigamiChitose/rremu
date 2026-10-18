@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use rremu_bus::{AccessSize, BusDevice, BusRouter, EmuEvent, EventSink, NullSink};
+use rremu_bus::{AccessSize, BusDevice, BusRouter, EmuEvent, EventSink};
 use rremu_decode::encode_c;
 use rremu_isa::{cause, csr, Instruction, Priv, Word};
 
