@@ -16,6 +16,8 @@ pub struct CsrState {
     pub mcause: u32,
     pub mtval: u32,
     pub mip: u32,
+    pub mcounteren: u32,
+    pub scounteren: u32,
     pub mhartid: u32,
     pub medeleg: u32,
     pub mideleg: u32,
@@ -48,6 +50,8 @@ impl CsrState {
             mcause: 0,
             mtval: 0,
             mip: 0,
+            mcounteren: 0,
+            scounteren: 0,
             mhartid: 0,
             medeleg: 0,
             mideleg: 0,
@@ -78,6 +82,8 @@ impl Cpu {
             csr::MCAUSE => self.csr.mcause,
             csr::MTVAL => self.csr.mtval,
             csr::MIP => self.csr.mip,
+            csr::MCOUNTEREN => self.csr.mcounteren,
+            csr::SCOUNTEREN => self.csr.scounteren,
             csr::MEDELEG => self.csr.medeleg,
             csr::MIDELEG => self.csr.mideleg,
             csr::SSTATUS => self.csr.mstatus & csr::SSTATUS_MASK,
@@ -111,6 +117,16 @@ impl Cpu {
         Ok(self.debug_csr_read(addr).unwrap_or(0))
     }
 
+    fn pmp_entry_locked(&self, i: usize) -> bool {
+        let cfg = (self.csr.pmpcfg[i / 4] >> ((i % 4) * 8)) & 0xff;
+        cfg & 0x80 != 0
+    }
+
+    fn pmp_entry_mode(&self, i: usize) -> u32 {
+        let cfg = (self.csr.pmpcfg[i / 4] >> ((i % 4) * 8)) & 0xff;
+        (cfg >> 3) & 0x3
+    }
+
     /// CSR 写入（CSR 指令执行用）。只读/未知 CSR 写入忽略。
     pub(crate) fn csr_write(&mut self, addr: u16, val: u32) {
         match addr {
@@ -125,6 +141,10 @@ impl Cpu {
             csr::MCAUSE => self.csr.mcause = val,
             csr::MTVAL => self.csr.mtval = val,
             csr::MIP => self.csr.mip = val,
+            csr::MCYCLE => self.cycle = (self.cycle & !0xffff_ffff) | u64::from(val),
+            csr::MINSTRET => self.instret = (self.instret & !0xffff_ffff) | u64::from(val),
+            csr::MCOUNTEREN => self.csr.mcounteren = val,
+            csr::SCOUNTEREN => self.csr.scounteren = val,
             csr::MEDELEG => self.csr.medeleg = val,
             csr::MIDELEG => self.csr.mideleg = val,
             csr::SSTATUS => {
@@ -132,7 +152,7 @@ impl Cpu {
                     (self.csr.mstatus & !csr::SSTATUS_MASK) | (val & csr::SSTATUS_MASK)
             }
             csr::SIE => self.csr.mie = (self.csr.mie & !csr::SIE_S_MASK) | (val & csr::SIE_S_MASK),
-            csr::SIP => self.csr.mip = (self.csr.mip & !csr::SIE_S_MASK) | (val & csr::SIE_S_MASK),
+            csr::SIP => self.csr.mip = (self.csr.mip & !csr::MIP_SSIP) | (val & csr::MIP_SSIP),
             csr::STVEC => self.csr.stvec = val,
             csr::SSCRATCH => self.csr.sscratch = val,
             csr::SEPC => self.csr.sepc = val,
@@ -140,10 +160,32 @@ impl Cpu {
             csr::STVAL => self.csr.stval = val,
             csr::SATP => self.csr.satp = val,
             a if (csr::PMPCFG0..csr::PMPCFG0 + 4).contains(&a) => {
-                self.csr.pmpcfg[(a - csr::PMPCFG0) as usize] = val;
+                let idx = (a - csr::PMPCFG0) as usize;
+                let old = self.csr.pmpcfg[idx];
+                let mut new = val;
+                // 锁定 entry 的整字节配置保持不变。
+                for byte in 0..4 {
+                    let shift = byte * 8;
+                    if (old >> shift) & 0x80 != 0 {
+                        let mask = 0xffu32 << shift;
+                        new = (new & !mask) | (old & mask);
+                    }
+                }
+                self.csr.pmpcfg[idx] = new;
             }
             a if (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&a) => {
-                self.csr.pmpaddr[(a - csr::PMPADDR0) as usize] = val;
+                let i = (a - csr::PMPADDR0) as usize;
+                if self.pmp_entry_locked(i) {
+                    return;
+                }
+                // entry i+1 为锁定 TOR 时，pmpaddr[i] 是其下界，忽略写入。
+                if i + 1 < 16
+                    && self.pmp_entry_locked(i + 1)
+                    && self.pmp_entry_mode(i + 1) == 1
+                {
+                    return;
+                }
+                self.csr.pmpaddr[i] = val;
             }
             _ => {}
         }
@@ -173,12 +215,14 @@ impl Cpu {
                 | csr::MCAUSE
                 | csr::MTVAL
                 | csr::MIP
+                | csr::MCOUNTEREN
                 | csr::MEDELEG
                 | csr::MIDELEG
                 | csr::SSTATUS
                 | csr::SSTATUSH
                 | csr::SIE
                 | csr::SIP
+                | csr::SCOUNTEREN
                 | csr::STVEC
                 | csr::SSCRATCH
                 | csr::SEPC
@@ -199,6 +243,28 @@ impl Cpu {
             || (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&addr)
     }
 
+    /// 计数器对应的 mcounteren/scounteren 位。
+    fn counter_enable_bit(addr: u16) -> Option<u32> {
+        match addr {
+            csr::CYCLE => Some(csr::COUNTEREN_CY),
+            csr::TIME | csr::TIMEH => Some(csr::COUNTEREN_TM),
+            csr::INSTRET => Some(csr::COUNTEREN_IR),
+            _ => None,
+        }
+    }
+
+    /// S/U 读取计数器时检查 mcounteren/scounteren；M-mode 不受限制。
+    fn counter_access_allowed(&self, addr: u16) -> bool {
+        let Some(bit) = Self::counter_enable_bit(addr) else { return true };
+        match self.priv_ {
+            Priv::Machine => true,
+            Priv::Supervisor => self.csr.mcounteren & bit != 0,
+            Priv::User => {
+                self.csr.mcounteren & bit != 0 && self.csr.scounteren & bit != 0
+            }
+        }
+    }
+
     /// CSR 访问权限检查：CSR 不存在、特权级不足或写入只读 CSR 时触发
     /// illegal instruction。`write` 由具体指令决定（CSRRS/CSRRC 的 rs1=x0
     /// 不构成写）。
@@ -209,6 +275,9 @@ impl Cpu {
         let required = u32::from((addr >> 8) & 0x3);
         let read_only = (addr >> 10) & 0x3 == 0x3;
         if required > self.priv_csr_level() || (write && read_only) {
+            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+        }
+        if !write && !self.counter_access_allowed(addr) {
             return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
         }
         Ok(())

@@ -74,3 +74,25 @@ use super::*;
         // 有锁定项且无匹配 → M 也拒绝
         assert!(!h.cpu.pmp_check(BASE + 0x1000, AccessType::Load));
     }
+
+    #[test]
+    fn locked_pmp_cfg_and_addr_ignore_writes() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpaddr[0] = (BASE >> 2) | ((1 << 9) - 1);
+        h.cpu.csr.pmpcfg[0] = 0x99; // L + NAPOT + R
+        h.cpu.csr_write(csr::PMPCFG0, 0x1f);
+        h.cpu.csr_write(csr::PMPADDR0, 0x1234);
+        assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x99);
+        assert_eq!(h.cpu.csr.pmpaddr[0], (BASE >> 2) | ((1 << 9) - 1));
+    }
+
+    #[test]
+    fn locked_tor_protects_previous_pmpaddr() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpaddr[0] = 0x100;
+        h.cpu.csr.pmpcfg[0] = 0x8f00; // entry1: L + TOR + R/W
+        h.cpu.csr_write(csr::PMPADDR0, 0x200);
+        assert_eq!(h.cpu.csr.pmpaddr[0], 0x100);
+    }

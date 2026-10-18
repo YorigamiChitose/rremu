@@ -129,3 +129,15 @@ use super::*;
         assert!(matches!(out, StepOutcome::Executed { .. }));
         assert_eq!(h.cpu.pc(), MMU_VA + 0x1000);
     }
+
+    #[test]
+    fn sv32_supervisor_cannot_fetch_user_page() {
+        let mut h = Harness::new_with_ram(0x10000);
+        map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_X | PTE_U);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x0000_0013]); // nop
+        h.cpu.pc = MMU_VA;
+        let out = h.step();
+        assert_eq!(out, StepOutcome::Trapped { cause: cause::INSTR_PAGE_FAULT });
+        assert_eq!(h.cpu.csr_state().mtval, MMU_VA);
+    }

@@ -11,6 +11,8 @@
     pub const MCAUSE: u16 = 0x342;
     pub const MTVAL: u16 = 0x343;
     pub const MIP: u16 = 0x344;
+    /// 机器模式计数器使能。
+    pub const MCOUNTEREN: u16 = 0x306;
     // ---- S-mode CSR ----
     pub const SSTATUS: u16 = 0x100;
     /// RV32：sstatus 的高 32 位（当前恒为 0）。
@@ -23,6 +25,8 @@
     pub const STVAL: u16 = 0x143;
     pub const SIP: u16 = 0x144;
     pub const SATP: u16 = 0x180;
+    /// 监督者模式计数器使能。
+    pub const SCOUNTEREN: u16 = 0x106;
 
     // satp 布局（RV32）
     pub const SATP_MODE_MASK: u32 = 1 << 31;
@@ -103,3 +107,8 @@
     pub const MIP_STIP: u32 = 1 << 5;
     pub const MIP_SEIP: u32 = 1 << 9;
     pub const MIP_S_MASK: u32 = MIP_SSIP | MIP_STIP | MIP_SEIP;
+
+    // counter-enable 位（mcounteren / scounteren）
+    pub const COUNTEREN_CY: u32 = 1 << 0;
+    pub const COUNTEREN_TM: u32 = 1 << 1;
+    pub const COUNTEREN_IR: u32 = 1 << 2;

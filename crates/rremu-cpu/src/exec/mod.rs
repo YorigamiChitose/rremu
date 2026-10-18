@@ -222,7 +222,10 @@ impl Cpu {
                 let spp = (sstatus >> isa_csr::MSTATUS_SPP.trailing_zeros()) & 1;
                 let spie = (sstatus >> isa_csr::MSTATUS_SPIE.trailing_zeros()) & 1;
                 // SPP=0, SIE=SPIE, SPIE=1
-                self.csr.mstatus &= !(isa_csr::MSTATUS_SPP | isa_csr::MSTATUS_SIE | isa_csr::MSTATUS_SPIE);
+                self.csr.mstatus &= !(isa_csr::MSTATUS_SPP
+                    | isa_csr::MSTATUS_SIE
+                    | isa_csr::MSTATUS_SPIE
+                    | isa_csr::MSTATUS_MPRV);
                 self.csr.mstatus |= (spie << isa_csr::MSTATUS_SIE.trailing_zeros())
                     | (1 << isa_csr::MSTATUS_SPIE.trailing_zeros());
                 self.priv_ = if spp == 1 { Priv::Supervisor } else { Priv::User };
@@ -296,6 +299,10 @@ impl Cpu {
                 let mpie = (mstatus >> isa_csr::MSTATUS_MPIE.trailing_zeros()) & 1;
                 // MPP = 0 (U-mode), MIE = MPIE, MPIE = 1
                 self.update_mstatus(0, mpie, 1);
+                if mpp != 0b11 {
+                    // xRET 返回低于 M 时清除 MPRV。
+                    self.csr.mstatus &= !isa_csr::MSTATUS_MPRV;
+                }
                 self.priv_ = match mpp {
                     0b11 => Priv::Machine,
                     0b01 => Priv::Supervisor,

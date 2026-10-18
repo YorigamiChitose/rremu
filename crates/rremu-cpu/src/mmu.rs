@@ -133,12 +133,14 @@ impl Cpu {
         if priv_ == Priv::User && !user {
             return Err(TrapErr { cause: access.page_fault(), mtval: va });
         }
-        if priv_ == Priv::Supervisor
-            && user
-            && access != AccessType::Fetch
-            && (self.csr.mstatus & csr::MSTATUS_SUM) == 0
-        {
-            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+        if priv_ == Priv::Supervisor && user {
+            if access == AccessType::Fetch {
+                // S-mode 永不执行 U 页；SUM 只影响 load/store。
+                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            }
+            if (self.csr.mstatus & csr::MSTATUS_SUM) == 0 {
+                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            }
         }
 
         let mxr = self.csr.mstatus & csr::MSTATUS_MXR != 0;

@@ -342,3 +342,62 @@ use super::*;
     }
 
     // ---- M extension tests ----
+
+    #[test]
+    fn mret_clears_mprv_when_returning_to_s() {
+        let mut h = Harness::new();
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_MPP_S;
+        h.cpu.csr.mepc = BASE + 4;
+        h.load(BASE, &[0x3020_0073]); // mret
+        h.step();
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.csr_state().mstatus & csr::MSTATUS_MPRV, 0);
+    }
+
+    #[test]
+    fn sret_clears_mprv() {
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_SPP; // return S
+        h.cpu.csr.sepc = BASE + 4;
+        h.load(BASE, &[0x1020_0073]); // sret
+        h.step();
+        assert_eq!(h.cpu.priv_(), Priv::Supervisor);
+        assert_eq!(h.cpu.csr_state().mstatus & csr::MSTATUS_MPRV, 0);
+    }
+
+    #[test]
+    fn sip_only_allows_ssip_write() {
+        let mut h = Harness::new();
+        h.cpu.csr.mip = csr::MIP_STIP | csr::MIP_SEIP;
+        h.cpu.csr_write(csr::SIP, csr::MIP_SSIP | csr::MIP_STIP | csr::MIP_SEIP);
+        assert_ne!(h.cpu.csr.mip & csr::MIP_SSIP, 0);
+        assert_ne!(h.cpu.csr.mip & csr::MIP_STIP, 0);
+        assert_ne!(h.cpu.csr.mip & csr::MIP_SEIP, 0);
+        h.cpu.csr_write(csr::SIP, 0);
+        assert_eq!(h.cpu.csr.mip & csr::MIP_STIP, csr::MIP_STIP);
+        assert_eq!(h.cpu.csr.mip & csr::MIP_SEIP, csr::MIP_SEIP);
+        assert_eq!(h.cpu.csr.mip & csr::MIP_SSIP, 0);
+    }
+
+    #[test]
+    fn counter_access_respects_counteren() {
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        assert!(h.cpu.check_csr_access(csr::CYCLE, false, 0).is_err());
+        h.cpu.csr.mcounteren = csr::COUNTEREN_CY;
+        assert!(h.cpu.check_csr_access(csr::CYCLE, false, 0).is_ok());
+        h.cpu.priv_ = Priv::User;
+        assert!(h.cpu.check_csr_access(csr::CYCLE, false, 0).is_err());
+        h.cpu.csr.scounteren = csr::COUNTEREN_CY;
+        assert!(h.cpu.check_csr_access(csr::CYCLE, false, 0).is_ok());
+    }
+
+    #[test]
+    fn machine_counters_accept_low_word_writes() {
+        let mut h = Harness::new();
+        h.cpu.csr_write(csr::MCYCLE, 0x1234);
+        h.cpu.csr_write(csr::MINSTRET, 0x5678);
+        assert_eq!(h.cpu.cycle() & 0xffff_ffff, 0x1234);
+        assert_eq!(h.cpu.instret() & 0xffff_ffff, 0x5678);
+    }
