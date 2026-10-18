@@ -32,6 +32,9 @@ ec083fc refactor(cpu): move trap and interrupt logic into modules
 d978ba0 refactor(cpu): move execution and memory operations into exec module
 e18914f refactor(cpu): split unit tests by concern
 ceb5d4e refactor(cpu): split memory and AMO operations from exec
+0a2ae79 refactor(machine): move debugger state into debugger module
+8a78d72 refactor(machine): move framebuffer access into framebuffer module
+25b67fc refactor(machine): split events and snapshots into modules
 ```
 
 ## 1. 原则
