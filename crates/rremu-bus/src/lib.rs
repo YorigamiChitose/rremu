@@ -277,23 +277,23 @@ mod tests {
     }
 
     #[test]
-    fn pending_interrupts_collects_all_causes() {
+    fn service_interrupts_collects_all_causes() {
         // 设备侧不裁剪：所有 pending cause 原样返回，CPU 侧按 spec 序裁决
         let mut bus = BusRouter::new();
         // MSI=0x8000_0003, MTI=0x8000_0007
         bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::new(0x8000_0003))).unwrap();
         bus.map(0x2000_0000..0x2000_0010, Box::new(MockIrq::new(0x8000_0007))).unwrap();
-        let causes = bus.pending_interrupts();
+        let causes = bus.service_interrupts();
         assert!(causes.contains(&0x8000_0003));
         assert!(causes.contains(&0x8000_0007));
     }
 
     #[test]
-    fn pending_interrupts_empty_when_no_device_has_irq() {
+    fn service_interrupts_empty_when_no_device_has_irq() {
         let mut bus = BusRouter::new();
         bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::none())).unwrap();
         bus.map(0x2000_0000..0x2000_0010, Box::new(MockRam::new(0x2000_0000, 0x10, "ram"))).unwrap();
-        assert!(bus.pending_interrupts().is_empty());
+        assert!(bus.service_interrupts().is_empty());
     }
 
     #[test]

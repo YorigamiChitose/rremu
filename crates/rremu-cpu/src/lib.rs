@@ -129,7 +129,7 @@ impl Cpu {
         };
 
         // 设备 pending 同步到 mip（软件读 mip 可见），并在取指成功后检查中断
-        let pending = bus.pending_interrupts();
+        let pending = bus.service_interrupts();
         self.sync_mip(&pending);
         if let Some(cause) = self.pending_interrupt() {
             return self.trap(sink, cause, 0);

@@ -122,7 +122,7 @@ Machine::step_once
   → bus.set_cycle(cpu.cycle)
   → Cpu::step
       → fetch
-      → bus.pending_interrupts
+      → bus.service_interrupts
       → exec
           → bus.inst/data read/write
           → MMU translate
@@ -137,9 +137,9 @@ Machine::step_once
 
 ### 当前偏差
 
-- `Machine::step_once()` 和 `Cpu::step()` 都调用 `bus.set_cycle()`。
-- `BusRouter::pending_interrupts()` 不是只读函数：它会读取设备 IRQ line 并调用 `irq_assert` 更新 PLIC pending。
-- `Cpu::csr_read()` 同时服务调试/快照和 CSR 指令路径，未知 CSR 返回 0；CSR 指令路径另有 illegal 检查。
+- `Cpu::step()` 是 cycle 同步的唯一入口；`Machine::step_once()` 不再重复调用。
+- `BusRouter::service_interrupts()` 明确带有副作用：读取设备 IRQ line、调用 `irq_assert` 更新 PLIC pending，并返回 cause。
+- CSR 读取已拆为 `debug_csr_read()` 与 `architectural_csr_read()`；前者返回 `Option`，后者对未实现 CSR 返回 illegal。
 - `Machine` 仍直接包含调试、反序列化、帧缓冲与反汇编方法。
 
 这些偏差在 [`refactor-plan.md`](refactor-plan.md) 中有对应阶段。

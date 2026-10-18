@@ -44,21 +44,16 @@ Cpu::step<B: Bus, E: EventSink>(
 当前：
 
 ```rust
-Cpu::csr_read(&self, addr: u16) -> u32
+Cpu::debug_csr_read(&self, addr: u16) -> Option<u32>
+Cpu::architectural_csr_read(&self, addr: u16) -> Result<u32, TrapErr>
 ```
 
 语义：
 
-- 未知 CSR 返回 0。
+- 调试读：未知 CSR 返回 `None`。
+- 架构读：未实现 CSR 返回 illegal。
 - `sstatus/sie/sip` 是 `mstatus/mie/mip` 的掩码视图。
-- 供快照和调试使用。
-
-Target：
-
-```rust
-Cpu::debug_csr_read(&self, addr: u16) -> Option<u32>
-Cpu::architectural_csr_read(&self, addr: u16) -> Result<u32, TrapErr>
-```
+- 快照和调试使用调试读；CSR 指令路径使用架构读。
 
 规则：
 
@@ -175,14 +170,14 @@ BusDevice::tick(cycle)
 
 - `set_cycle` 把当前 cycle 下发给所有设备。
 - `tick` 只更新设备内部时序状态（如 CLINT mtime），不得访问 CPU。
-- Target：明确由 `Machine` 唯一负责在每步开始前调用 `set_cycle`；`Cpu::step` 不再重复调用。
+- 当前由 `Cpu::step` 在每步开始前调用 `set_cycle`；`Machine` 不再重复调用。
 
 ### 2.4 中断
 
 当前：
 
 ```rust
-Bus::pending_interrupts(&mut self) -> Vec<u32>
+Bus::service_interrupts(&mut self) -> Vec<u32>
 ```
 
 重要：这不是纯查询。
@@ -200,7 +195,7 @@ Bus::pending_interrupts(&mut self) -> Vec<u32>
 - `irq_assert` 只用于把 source 传给中断控制器。
 - `check_interrupt` 返回当前全部 pending cause，不裁剪优先级。
 - 优先级由 CPU 裁决。
-- Target：重命名或拆分为 `poll_interrupts()` + `service_interrupts()`，禁止把副作用隐藏在查询名下。
+- 当前名称为 `service_interrupts()`，明确表示有副作用。
 
 ## 3. BusDevice
 

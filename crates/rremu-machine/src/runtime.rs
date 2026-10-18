@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rremu_bus::{Bus, EmuEvent, EventSink};
+use rremu_bus::{EmuEvent, EventSink};
 use rremu_cpu::StepOutcome;
 
 use crate::events::MachineSink;
@@ -54,7 +54,6 @@ impl Machine {
     /// 重定向至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持
     /// Running，以便前端可继续 c/si；陷入信息经 EmuEvent::Trap 进入 mem 环。
     fn step_once(&mut self) -> Option<RunResult> {
-        self.bus.set_cycle(self.cpu.cycle());
         let pc_before = self.cpu.pc();
 
         // 断点：命中则不执行，直接返回；刚命中过的地址放行一次（越过断点）

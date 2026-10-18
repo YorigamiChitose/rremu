@@ -38,7 +38,7 @@ pub trait Bus {
     /// 并下发 tick 到所有设备（CLINT 等用此更新内部时序状态）。
     fn set_cycle(&mut self, cycle: u64);
     /// 聚合所有设备的全部 pending 中断 cause，由 CPU 侧按 spec 序裁决。
-    fn pending_interrupts(&mut self) -> Vec<u32>;
+    fn service_interrupts(&mut self) -> Vec<u32>;
 }
 
 struct Region {
@@ -200,7 +200,7 @@ impl Bus for BusRouter {
         }
     }
 
-    fn pending_interrupts(&mut self) -> Vec<u32> {
+    fn service_interrupts(&mut self) -> Vec<u32> {
         // 1) 收集各设备断言的 IRQ 源（level）；喂给中断控制器（PLIC）
         let asserted: Vec<u32> = self.regions.iter().filter_map(|r| r.device.irq_line()).collect();
         if !asserted.is_empty() {

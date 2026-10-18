@@ -17,14 +17,14 @@ fn uart_irq_routed_to_plic_when_rx_enabled() {
 
     // 未使能 RX 中断：注入数据也不产生 MEI
     bus.device_mut(UART_BASE).unwrap().as_input_sink().unwrap().push_input(b'A');
-    assert!(!bus.pending_interrupts().contains(&CAUSE_M_EI), "no MEI before enabling RX");
+    assert!(!bus.service_interrupts().contains(&CAUSE_M_EI), "no MEI before enabling RX");
 
     // 使能 UART RX 中断（IER bit0）与 PLIC source 10（ctx0 word0 bit10）
     bus.data_write(UART_BASE + 1, AccessSize::Byte, 0x01, &mut sink).unwrap();
     bus.data_write(PLIC_BASE + 0x2000, AccessSize::Word, 1 << 10, &mut sink).unwrap();
 
     assert!(
-        bus.pending_interrupts().contains(&CAUSE_M_EI),
+        bus.service_interrupts().contains(&CAUSE_M_EI),
         "UART RX should raise MEI via PLIC"
     );
 }
