@@ -118,3 +118,22 @@ use super::*;
         assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x1f);
         assert_eq!((h.cpu.csr.pmpcfg[0] >> 8) & 0xff, 0x80);
     }
+
+    #[test]
+    fn locked_pmp_is_protected_through_csr_instructions() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpaddr[0] = 0x123;
+        h.cpu.csr.pmpcfg[0] = 0x80; // L, A=OFF
+        // addi t0, x0, 0x1f; csrw pmpcfg0, t0
+        h.load(BASE, &[
+            i_enc(OP_IMM, 5, 0b000, 0, 0x1f),
+            i_enc(0b1110011, 0, 0b001, 5, i32::from(csr::PMPCFG0)),
+            // addi t0, x0, 0x200; csrw pmpaddr0, t0
+            i_enc(OP_IMM, 5, 0b000, 0, 0x200),
+            i_enc(0b1110011, 0, 0b001, 5, i32::from(csr::PMPADDR0)),
+        ]);
+        h.run(4);
+        assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x80);
+        assert_eq!(h.cpu.csr.pmpaddr[0], 0x123);
+    }

@@ -155,3 +155,23 @@ use super::*;
             StepOutcome::Trapped { cause: cause::INSTR_PAGE_FAULT }
         );
     }
+
+    #[test]
+    fn mprv_uses_mpp_for_m_mode_data_translation() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let leaf = map_4k(&mut h, MMU_VA, DATA_PA, PTE_R);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x1234_5678]);
+
+        // MPRV=1, MPP=S: M-mode data access must use Sv32 translation.
+        h.cpu.priv_ = Priv::Machine;
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_MPP_S;
+        let v = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).unwrap();
+        assert_eq!(v, 0x1234_5678);
+        assert_ne!(read_u32(&mut h, leaf) & PTE_A, 0);
+
+        // MPRV=0: M-mode access is bare, so the same VA is not mapped.
+        h.cpu.csr.mstatus = csr::MSTATUS_MPP_S;
+        let err = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).err().unwrap();
+        assert_eq!(err.cause, cause::LOAD_ACCESS_FAULT);
+    }
