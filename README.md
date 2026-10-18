@@ -3,6 +3,12 @@
 > ⚠️ **AI 产物声明**：本仓库的代码与文档主要由 AI 在人工需求约束、审查与测试下生成，
 > 仅供学习/实验用途；不保证工程质量与长期维护。请以源码和测试结果为准。
 
+## 相关仓库
+
+- [rremu](https://github.com/YorigamiChitose/rremu) — RV32 RISC-V 模拟器与调试器
+- [rremu-am](https://github.com/YorigamiChitose/rremu-am) — RISC-V 抽象机器层 / HAL
+- [rremu-test](https://github.com/YorigamiChitose/rremu-test) — 端到端固件级测试工程
+
 一个 **RV32IMAC_Zicsr（M/S/U 三级特权）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
 提供 GDB 风格 CLI 调试器与 ratatui TUI 两种前端，设备经 trait 可插拔。
 
