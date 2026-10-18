@@ -401,3 +401,66 @@ use super::*;
         assert_eq!(h.cpu.cycle() & 0xffff_ffff, 0x1234);
         assert_eq!(h.cpu.instret() & 0xffff_ffff, 0x5678);
     }
+
+    #[test]
+    fn mret_keeps_mprv_when_returning_to_m() {
+        let mut h = Harness::new();
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_MPP_M;
+        h.cpu.csr.mepc = BASE + 4;
+        h.load(BASE, &[0x3020_0073]); // mret
+        h.step();
+        assert_eq!(h.cpu.priv_(), Priv::Machine);
+        assert_ne!(h.cpu.csr_state().mstatus & csr::MSTATUS_MPRV, 0);
+    }
+
+    #[test]
+    fn counter_csr_read_is_gated_by_counteren() {
+        // S-mode, mcounteren clear: csrr cycle -> illegal
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        h.load(BASE, &[i_enc(0b1110011, 5, 0b010, 0, i32::from(csr::CYCLE))]);
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+
+        // S-mode with mcounteren.CY set: allowed
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        h.cpu.csr.mcounteren = csr::COUNTEREN_CY;
+        h.load(BASE, &[i_enc(0b1110011, 5, 0b010, 0, i32::from(csr::CYCLE))]);
+        assert!(matches!(h.step(), StepOutcome::Executed { .. }));
+
+        // U-mode requires both mcounteren and scounteren.
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::User;
+        h.cpu.csr.mcounteren = csr::COUNTEREN_CY;
+        h.load(BASE, &[i_enc(0b1110011, 5, 0b010, 0, i32::from(csr::CYCLE))]);
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::User;
+        h.cpu.csr.mcounteren = csr::COUNTEREN_CY;
+        h.cpu.csr.scounteren = csr::COUNTEREN_CY;
+        h.load(BASE, &[i_enc(0b1110011, 5, 0b010, 0, i32::from(csr::CYCLE))]);
+        assert!(matches!(h.step(), StepOutcome::Executed { .. }));
+    }
+
+    #[test]
+    fn counter_enable_bits_cover_time_and_instret() {
+        let mut h = Harness::new();
+        h.cpu.priv_ = Priv::Supervisor;
+        for (addr, bit) in [
+            (csr::TIME, csr::COUNTEREN_TM),
+            (csr::TIMEH, csr::COUNTEREN_TM),
+            (csr::INSTRET, csr::COUNTEREN_IR),
+        ] {
+            h.cpu.csr.mcounteren = 0;
+            assert!(h.cpu.check_csr_access(addr, false, 0).is_err(), "S {addr:#x}");
+            h.cpu.csr.mcounteren = bit;
+            assert!(h.cpu.check_csr_access(addr, false, 0).is_ok(), "S {addr:#x}");
+        }
+    }

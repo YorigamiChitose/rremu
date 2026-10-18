@@ -141,3 +141,17 @@ use super::*;
         assert_eq!(out, StepOutcome::Trapped { cause: cause::INSTR_PAGE_FAULT });
         assert_eq!(h.cpu.csr_state().mtval, MMU_VA);
     }
+
+    #[test]
+    fn sv32_supervisor_fetch_user_page_faults_even_with_sum() {
+        let mut h = Harness::new_with_ram(0x10000);
+        map_4k(&mut h, MMU_VA, DATA_PA, PTE_R | PTE_X | PTE_U);
+        enable_sv32(&mut h, ROOT_PA);
+        h.cpu.csr_write(csr::SSTATUS, csr::MSTATUS_SUM);
+        h.load(DATA_PA, &[0x0000_0013]);
+        h.cpu.pc = MMU_VA;
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::INSTR_PAGE_FAULT }
+        );
+    }

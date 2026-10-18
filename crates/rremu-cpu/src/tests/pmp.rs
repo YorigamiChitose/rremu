@@ -96,3 +96,25 @@ use super::*;
         h.cpu.csr_write(csr::PMPADDR0, 0x200);
         assert_eq!(h.cpu.csr.pmpaddr[0], 0x100);
     }
+
+    #[test]
+    fn locked_pmp_entry_with_off_mode_still_ignores_writes() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpaddr[0] = 0x123;
+        h.cpu.csr.pmpcfg[0] = 0x80; // L=1, A=OFF
+        h.cpu.csr_write(csr::PMPCFG0, 0x1f);
+        h.cpu.csr_write(csr::PMPADDR0, 0x456);
+        assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x80);
+        assert_eq!(h.cpu.csr.pmpaddr[0], 0x123);
+    }
+
+    #[test]
+    fn pmpcfg_preserves_only_locked_bytes() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        h.cpu.csr.pmpcfg[0] = 0x80 << 8; // entry1 locked, entry0 writable
+        h.cpu.csr_write(csr::PMPCFG0, 0x1f1f);
+        assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x1f);
+        assert_eq!((h.cpu.csr.pmpcfg[0] >> 8) & 0xff, 0x80);
+    }
