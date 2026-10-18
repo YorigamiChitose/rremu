@@ -244,14 +244,14 @@ impl Cpu {
             Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
             Instruction::Csrrw { rd, csr, rs1 } => {
                 self.check_csr_access(csr, true, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 self.csr_write(csr, x(self, rs1));
                 set!(rd, old);
             }
             Instruction::Csrrs { rd, csr, rs1 } => {
                 let mask = x(self, rs1);
                 self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 if mask != 0 {
                     self.csr_write(csr, old | mask);
                 }
@@ -260,7 +260,7 @@ impl Cpu {
             Instruction::Csrrc { rd, csr, rs1 } => {
                 let mask = x(self, rs1);
                 self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 if mask != 0 {
                     self.csr_write(csr, old & !mask);
                 }
@@ -268,14 +268,14 @@ impl Cpu {
             }
             Instruction::Csrrwi { rd, csr, zimm } => {
                 self.check_csr_access(csr, true, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 self.csr_write(csr, u32::from(zimm));
                 set!(rd, old);
             }
             Instruction::Csrrsi { rd, csr, zimm } => {
                 let mask = u32::from(zimm);
                 self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 if mask != 0 {
                     self.csr_write(csr, old | mask);
                 }
@@ -284,7 +284,7 @@ impl Cpu {
             Instruction::Csrrci { rd, csr, zimm } => {
                 let mask = u32::from(zimm);
                 self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.csr_read(csr);
+                let old = self.architectural_csr_read(csr)?;
                 if mask != 0 {
                     self.csr_write(csr, old & !mask);
                 }

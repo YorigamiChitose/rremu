@@ -118,19 +118,19 @@ use super::*;
         let mut h = Harness::new();
         h.load(BASE, &[0x0000_0013, 0x0000_0013, 0x0000_0013]); // 3 nop
         h.run(3);
-        assert_eq!(h.cpu.csr_read(csr::CYCLE), 3);
-        assert_eq!(h.cpu.csr_read(csr::TIME), 3);
-        assert_eq!(h.cpu.csr_read(csr::INSTRET), 3);
-        assert_eq!(h.cpu.csr_read(csr::TIMEH), 0);
+        assert_eq!(h.cpu.debug_csr_read(csr::CYCLE).unwrap(), 3);
+        assert_eq!(h.cpu.debug_csr_read(csr::TIME).unwrap(), 3);
+        assert_eq!(h.cpu.debug_csr_read(csr::INSTRET).unwrap(), 3);
+        assert_eq!(h.cpu.debug_csr_read(csr::TIMEH).unwrap(), 0);
         // 只读：写入被忽略
         h.cpu.csr_write(csr::TIME, 0xDEAD);
-        assert_eq!(h.cpu.csr_read(csr::TIME), 3);
+        assert_eq!(h.cpu.debug_csr_read(csr::TIME).unwrap(), 3);
     }
 
     #[test]
     fn misa_advertises_extensions() {
         let h = Harness::new();
-        let misa = h.cpu.csr_read(csr::MISA);
+        let misa = h.cpu.debug_csr_read(csr::MISA).unwrap();
         for bit in [csr::MISA_I, csr::MISA_M, csr::MISA_A, csr::MISA_C, csr::MISA_U] {
             assert_eq!(misa & bit, bit, "missing misa bit {bit:#x}");
         }

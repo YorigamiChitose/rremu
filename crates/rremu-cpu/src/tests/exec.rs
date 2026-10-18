@@ -183,7 +183,7 @@ use super::*;
             i_enc(0b1110011, 2, 0b010, 0, csr::MSTATUS as i32),
         ]);
         h.run(5);
-        let misa = h.cpu.csr_read(csr::MISA);
+        let misa = h.cpu.debug_csr_read(csr::MISA).unwrap();
         assert_eq!(misa & csr::MISA_I, csr::MISA_I);
         assert_eq!(misa & csr::MISA_S, csr::MISA_S);
         // mstatus 只接受已实现的可写位

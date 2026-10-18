@@ -64,10 +64,10 @@ impl CsrState {
 }
 
 impl Cpu {
-    /// CSR 视图读取（快照 + CSR 指令共用）。未知 CSR 返回 0。
+    /// 调试/快照读取：未实现 CSR 返回 None，不触发架构 trap。
     /// `sstatus`/`sie`/`sip` 是 `mstatus`/`mie`/`mip` 的 S 位掩码视图。
-    pub fn csr_read(&self, addr: u16) -> u32 {
-        match addr {
+    pub fn debug_csr_read(&self, addr: u16) -> Option<u32> {
+        Some(match addr {
             csr::MSTATUS => self.csr.mstatus,
             csr::MSTATUSH | csr::SSTATUSH => 0,
             csr::MISA => self.csr.misa,
@@ -99,8 +99,16 @@ impl Cpu {
             a if (csr::PMPADDR0..csr::PMPADDR0 + 16).contains(&a) => {
                 self.csr.pmpaddr[(a - csr::PMPADDR0) as usize]
             }
-            _ => 0,
+            _ => return None,
+        })
+    }
+
+    /// 架构读取：未实现 CSR 必须 illegal。仅用于 CSR 指令路径。
+    pub(crate) fn architectural_csr_read(&self, addr: u16) -> Result<u32, TrapErr> {
+        if !Self::csr_implemented(addr) {
+            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: 0 });
         }
+        Ok(self.debug_csr_read(addr).unwrap_or(0))
     }
 
     /// CSR 写入（CSR 指令执行用）。只读/未知 CSR 写入忽略。

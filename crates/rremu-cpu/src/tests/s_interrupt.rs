@@ -14,10 +14,10 @@ use super::interrupt::MockIrq;
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::S_SI });
         assert_eq!(h.cpu.pc(), BASE + 0x100);
-        assert_eq!(h.cpu.csr_read(csr::SCAUSE), cause::S_SI);
-        assert_eq!(h.cpu.csr_read(csr::STVAL), 0);
+        assert_eq!(h.cpu.debug_csr_read(csr::SCAUSE).unwrap(), cause::S_SI);
+        assert_eq!(h.cpu.debug_csr_read(csr::STVAL).unwrap(), 0);
         assert_eq!(h.cpu.priv_(), Priv::Supervisor);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, csr::MSTATUS_SPP);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap() & csr::MSTATUS_SPP, csr::MSTATUS_SPP);
     }
 
     #[test]
@@ -45,7 +45,7 @@ use super::interrupt::MockIrq;
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::S_SI });
         assert_eq!(h.cpu.priv_(), Priv::Supervisor);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap() & csr::MSTATUS_SPP, 0);
     }
 
     #[test]
@@ -64,7 +64,7 @@ use super::interrupt::MockIrq;
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::M_TI });
         assert_eq!(h.cpu.priv_(), Priv::Machine);
-        assert_eq!(h.cpu.csr_read(csr::MSTATUS) & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_S);
+        assert_eq!(h.cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_S);
     }
 
     #[test]
@@ -84,7 +84,7 @@ use super::interrupt::MockIrq;
         h.load(BASE, &[0x0000_0013]); // nop
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::S_EI });
-        assert_eq!(h.cpu.csr_read(csr::SIP) & csr::SIE_SEIE, csr::SIE_SEIE);
+        assert_eq!(h.cpu.debug_csr_read(csr::SIP).unwrap() & csr::SIE_SEIE, csr::SIE_SEIE);
     }
 
     // ---- PMP tests ----

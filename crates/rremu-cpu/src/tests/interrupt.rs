@@ -194,7 +194,7 @@ use super::*;
         h.load(BASE, &[i_enc(LOAD, 5, 0b010, 0, 0x234)]);
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::LOAD_ACCESS_FAULT });
-        assert_eq!(h.cpu.csr_read(csr::MTVAL), 0x234);
+        assert_eq!(h.cpu.debug_csr_read(csr::MTVAL).unwrap(), 0x234);
     }
 
     #[test]
@@ -203,7 +203,7 @@ use super::*;
         h.load(BASE, &[0xffff_ffff]);
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR });
-        assert_eq!(h.cpu.csr_read(csr::MTVAL), 0xffff_ffff);
+        assert_eq!(h.cpu.debug_csr_read(csr::MTVAL).unwrap(), 0xffff_ffff);
     }
 
     #[test]
@@ -252,7 +252,7 @@ use super::*;
         let mut h = Harness { cpu, bus, sink: Sink(Vec::new()) };
         h.load(BASE, &[0x0000_0013]); // NOP
         h.step();
-        assert_eq!(h.cpu.csr_read(csr::MIP) & csr::MIP_MSIP, csr::MIP_MSIP);
+        assert_eq!(h.cpu.debug_csr_read(csr::MIP).unwrap() & csr::MIP_MSIP, csr::MIP_MSIP);
     }
 
     // ---- A extension tests ----

@@ -166,7 +166,7 @@ use super::*;
         h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]); // ecall
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_U });
-        let mstatus = h.cpu.csr_read(csr::MSTATUS);
+        let mstatus = h.cpu.debug_csr_read(csr::MSTATUS).unwrap();
         assert_eq!(mstatus & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_U);
         // 陷入后特权级升至 M
         assert_eq!(h.cpu.priv_(), Priv::Machine);
@@ -179,7 +179,7 @@ use super::*;
         h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]); // ecall
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_M });
-        let mstatus = h.cpu.csr_read(csr::MSTATUS);
+        let mstatus = h.cpu.debug_csr_read(csr::MSTATUS).unwrap();
         assert_eq!(mstatus & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_M);
     }
 
@@ -191,7 +191,7 @@ use super::*;
         h.load(BASE, &[i_enc(0b1110011, 0, 0b000, 0, 0)]); // ecall
         let out = h.step();
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_S });
-        let mstatus = h.cpu.csr_read(csr::MSTATUS);
+        let mstatus = h.cpu.debug_csr_read(csr::MSTATUS).unwrap();
         assert_eq!(mstatus & csr::MSTATUS_MPP_MASK, csr::MSTATUS_MPP_S);
         assert_eq!(h.cpu.priv_(), Priv::Machine);
     }
@@ -270,12 +270,12 @@ use super::*;
     fn sstatus_sie_are_views_of_mstatus_mie() {
         let mut h = Harness::new();
         h.cpu.csr_write(csr::SSTATUS, csr::SSTATUS_MASK);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS), csr::SSTATUS_MASK);
-        assert_eq!(h.cpu.csr_read(csr::MSTATUS) & csr::SSTATUS_MASK, csr::SSTATUS_MASK);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap(), csr::SSTATUS_MASK);
+        assert_eq!(h.cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::SSTATUS_MASK, csr::SSTATUS_MASK);
         h.cpu.csr_write(csr::SIE, csr::SIE_S_MASK);
-        assert_eq!(h.cpu.csr_read(csr::MIE) & csr::SIE_S_MASK, csr::SIE_S_MASK);
+        assert_eq!(h.cpu.debug_csr_read(csr::MIE).unwrap() & csr::SIE_S_MASK, csr::SIE_S_MASK);
         h.cpu.csr_write(csr::SATP, 0x8000_0000);
-        assert_eq!(h.cpu.csr_read(csr::SATP), 0x8000_0000);
+        assert_eq!(h.cpu.debug_csr_read(csr::SATP).unwrap(), 0x8000_0000);
     }
 
     #[test]
@@ -287,8 +287,8 @@ use super::*;
         h.step();
         assert_eq!(h.cpu.priv_(), Priv::Supervisor);
         assert_eq!(h.cpu.pc(), BASE + 0x10);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SIE, csr::MSTATUS_SIE);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap() & csr::MSTATUS_SIE, csr::MSTATUS_SIE);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap() & csr::MSTATUS_SPP, 0);
     }
 
     #[test]
@@ -302,9 +302,9 @@ use super::*;
         assert_eq!(out, StepOutcome::Trapped { cause: cause::ECALL_FROM_U });
         assert_eq!(h.cpu.priv_(), Priv::Supervisor);
         assert_eq!(h.cpu.pc(), BASE + 0x100);
-        assert_eq!(h.cpu.csr_read(csr::SCAUSE), cause::ECALL_FROM_U);
-        assert_eq!(h.cpu.csr_read(csr::SEPC), BASE);
-        assert_eq!(h.cpu.csr_read(csr::SSTATUS) & csr::MSTATUS_SPP, 0);
+        assert_eq!(h.cpu.debug_csr_read(csr::SCAUSE).unwrap(), cause::ECALL_FROM_U);
+        assert_eq!(h.cpu.debug_csr_read(csr::SEPC).unwrap(), BASE);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap() & csr::MSTATUS_SPP, 0);
     }
 
     #[test]
@@ -323,9 +323,9 @@ use super::*;
         h.cpu.csr_write(csr::PMPADDR0, 0x8000_0000);
         h.cpu.csr_write(csr::PMPCFG0, 0x0F);
         h.cpu.csr_write(csr::PMPADDR0 + 15, 0xBEEF);
-        assert_eq!(h.cpu.csr_read(csr::PMPADDR0), 0x8000_0000);
-        assert_eq!(h.cpu.csr_read(csr::PMPCFG0), 0x0F);
-        assert_eq!(h.cpu.csr_read(csr::PMPADDR0 + 15), 0xBEEF);
+        assert_eq!(h.cpu.debug_csr_read(csr::PMPADDR0).unwrap(), 0x8000_0000);
+        assert_eq!(h.cpu.debug_csr_read(csr::PMPCFG0).unwrap(), 0x0F);
+        assert_eq!(h.cpu.debug_csr_read(csr::PMPADDR0 + 15).unwrap(), 0xBEEF);
     }
 
     #[test]
