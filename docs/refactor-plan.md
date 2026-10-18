@@ -9,9 +9,10 @@
 ```text
 阶段 1：文档与基线        完成
 阶段 2：Bus/Config/ISA 拆分 完成
-阶段 3：CPU 主体拆分       进行中
+阶段 3：CPU 主体拆分       基本完成
   - lib.rs、mmu、pmp、csr、trap、interrupt、fetch、exec 已拆出
-  - tests 与 exec 内部子模块仍待继续拆分
+  - tests 已按关注点拆分
+  - exec 内部 system/memory/alu 细分仍待继续
 ```
 
 本阶段提交：
@@ -28,6 +29,7 @@ ee4b666 refactor(cpu): move PMP checks into pmp module
 ec083fc refactor(cpu): move trap and interrupt logic into modules
 15a7d13 refactor(cpu): move instruction fetch into fetch module
 d978ba0 refactor(cpu): move execution and memory operations into exec module
+e18914f refactor(cpu): split unit tests by concern
 ```
 
 ## 1. 原则
