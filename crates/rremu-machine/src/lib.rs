@@ -462,10 +462,8 @@ mod tests {
 
     /// 测试辅助：自定义 RAM 基址/大小（其余用默认布局）+ 镜像。
     pub(crate) fn test_machine(ram_base: u32, ram_size: u32, image: Image) -> Machine {
-        let cfg = Config {
-            layout: rremu_config::Layout { ram_base, ram_size, ..Default::default() },
-            ..Config::default()
-        };
+        let cfg = Config::default()
+            .with_layout(rremu_config::Layout { ram_base, ram_size, ..Default::default() });
         Machine::from_config(&cfg, Some(image)).unwrap()
     }
 
@@ -475,10 +473,8 @@ mod tests {
             segments: vec![rremu_loader::Segment { addr: 0x9000_0000, data: vec![0; 16] }],
             entry: 0x9000_0000,
         };
-        let cfg = Config {
-            layout: rremu_config::Layout { ram_base: 0x8000_0000, ram_size: 0x1000, ..Default::default() },
-            ..Config::default()
-        };
+        let cfg = Config::default()
+            .with_layout(rremu_config::Layout { ram_base: 0x8000_0000, ram_size: 0x1000, ..Default::default() });
         let Err(err) = Machine::from_config(&cfg, Some(image)) else {
             panic!("from_config should reject out-of-range segment")
         };
@@ -488,11 +484,10 @@ mod tests {
     #[test]
     fn from_config_injects_boot_args() {
         let base = 0x8000_0000;
-        let mut cfg = Config::default();
-        cfg.layout.ram_base = base;
-        cfg.layout.ram_size = 0x1000;
-        cfg.boot.hartid = 3;
-        cfg.boot.dtb = Some(0x8000_0900);
+        let cfg = Config::default()
+            .with_layout(rremu_config::Layout { ram_base: base, ram_size: 0x1000, ..Default::default() })
+            .with_boot_hartid(3)
+            .with_boot_dtb_addr(Some(0x8000_0900));
         let machine = Machine::from_config(&cfg, Some(nop_image(base))).unwrap();
         assert_eq!(machine.cpu.reg(10), 3); // a0 = hartid
         assert_eq!(machine.cpu.reg(11), 0x8000_0900); // a1 = dtb

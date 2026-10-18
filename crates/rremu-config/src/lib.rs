@@ -14,7 +14,7 @@ pub mod error;
 pub mod layout;
 
 pub use boot::{Boot, Diag, Paths};
-pub use config::{Config, Overrides};
+pub use config::{Config, Overrides, ResolvedConfig};
 pub use defaults::*;
 pub use error::ConfigError;
 pub use layout::{Device, FbLayout, Layout};

@@ -3,17 +3,48 @@
 use crate::boot::{Boot, Diag, Paths};
 use crate::defaults::DTB_RESERVE;
 use crate::error::ConfigError;
-use crate::layout::Layout;
+use crate::layout::{FbLayout, Layout};
 
 /// 统一配置。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
-    pub layout: Layout,
-    pub diag: Diag,
-    pub paths: Paths,
-    pub boot: Boot,
+    pub(crate) layout: Layout,
+    pub(crate) diag: Diag,
+    pub(crate) paths: Paths,
+    pub(crate) boot: Boot,
     /// 覆盖 ELF 入口（`None` 时用镜像自身入口）。
-    pub entry: Option<u32>,
+    pub(crate) entry: Option<u32>,
+}
+
+/// 解析后的配置类型别名。字段对外只读，修改必须走消费式 builder。
+pub type ResolvedConfig = Config;
+
+impl Config {
+    pub fn layout(&self) -> &Layout { &self.layout }
+    pub fn diag(&self) -> &Diag { &self.diag }
+    pub fn paths(&self) -> &Paths { &self.paths }
+    pub fn boot(&self) -> &Boot { &self.boot }
+    pub fn entry(&self) -> Option<u32> { self.entry }
+
+    pub fn with_layout(mut self, layout: Layout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    pub fn with_fb(mut self, fb: Option<FbLayout>) -> Self {
+        self.layout.fb = fb;
+        self
+    }
+
+    pub fn with_boot_hartid(mut self, hartid: u32) -> Self {
+        self.boot.hartid = hartid;
+        self
+    }
+
+    pub fn with_boot_dtb_addr(mut self, dtb: Option<u32>) -> Self {
+        self.boot.dtb = dtb;
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -34,7 +65,7 @@ pub struct Overrides {
 
 impl Config {
     /// 应用外部覆盖（不校验）。
-    pub fn apply(&mut self, ov: &Overrides) {
+    fn apply(&mut self, ov: &Overrides) {
         if let Some(b) = ov.ram_base {
             self.layout.ram_base = b;
         }

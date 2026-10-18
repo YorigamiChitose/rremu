@@ -74,7 +74,7 @@ impl Repl {
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
     fn write_dump(&self, path: &str) {
-        let elf = self.cfg.paths.elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self.cfg.paths().elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
         match self.machine.dump(elf).to_json() {
             Ok(json) => match std::fs::write(path, json) {
                 Ok(()) => println!("Dump written to {path}."),
@@ -149,7 +149,7 @@ impl Repl {
             }
         };
         // 程序终止（退出/故障）时按配置自动写 dump
-        if let Some(path) = self.cfg.paths.dump_on_exit.clone()
+        if let Some(path) = self.cfg.paths().dump_on_exit.clone()
             && matches!(outcome, Outcome::ProgramExited(_) | Outcome::Faulted(_))
         {
             self.write_dump(&path);
@@ -249,7 +249,7 @@ impl Repl {
         self.flush_uart();
         let outcome = self.report_result(result);
         // 挂起（Ctrl+C/关窗/步数上限）也写 dump，便于排查死循环
-        if paused && let Some(path) = self.cfg.paths.dump_on_exit.clone() {
+        if paused && let Some(path) = self.cfg.paths().dump_on_exit.clone() {
             self.write_dump(&path);
         }
         outcome

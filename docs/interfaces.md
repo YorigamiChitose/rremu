@@ -305,9 +305,17 @@ Machine::peek / disasm_at / disasm_range / eval
 
 ```rust
 Config::default()
-Config::apply(&mut self, &Overrides)
 Config::validate(&self) -> Result<(), ConfigError>
 Config::resolve(Overrides) -> Result<Config, ConfigError>
+Config::layout(&self) -> &Layout
+Config::diag(&self) -> &Diag
+Config::paths(&self) -> &Paths
+Config::boot(&self) -> &Boot
+Config::entry(&self) -> Option<u32>
+Config::with_layout(self, Layout) -> Config
+Config::with_fb(self, Option<FbLayout>) -> Config
+Config::with_boot_hartid(self, u32) -> Config
+Config::with_boot_dtb_addr(self, Option<u32>) -> Config
 Config::dtb_address(&self) -> Result<u32, ConfigError>
 Config::with_boot_dtb(self) -> Result<Config, ConfigError>
 ```
@@ -315,13 +323,11 @@ Config::with_boot_dtb(self) -> Result<Config, ConfigError>
 当前契约：
 
 - `resolve` 合并默认值与覆盖项并校验。
+- `Config` 字段对外不可见；读取走 getter，修改走消费式 builder。
+- `ResolvedConfig` 是解析后配置的类型别名。
 - `dtb_address` 只计算地址，不修改配置。
 - `with_boot_dtb` 返回带 DTB 地址的新配置。
-- 不再提供 `&mut self` 的 `place_dtb()`。
-
-Target：
-
-- 完整的 `ResolvedConfig` 不可变边界仍待后续收口。
+- 不再提供公开的 `&mut self` 配置修改接口。
 
 ## 6. 错误语义
 

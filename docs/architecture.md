@@ -100,9 +100,9 @@ loader -> 无运行时依赖
 - host 路径
 - 覆盖后的解析结果
 
-当前 DTB 地址通过 `Config::dtb_address()` 纯计算，`Config::with_boot_dtb()` 返回新配置；不再提供 `&mut self` 的 `place_dtb()`。
-
-Target：完整的 `ResolvedConfig` 不可变边界仍待后续收口。
+当前 DTB 地址通过 `Config::dtb_address()` 纯计算，`Config::with_boot_dtb()` 返回新配置。
+`Config` 字段为 crate 内部可见，对外只提供只读 getter 与消费式 builder；
+并提供 `ResolvedConfig` 类型别名，表示解析后的配置。
 
 ### 2.5 Device
 

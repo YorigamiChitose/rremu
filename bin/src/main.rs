@@ -128,7 +128,7 @@ fn try_main() -> anyhow::Result<i32> {
     }
 
     let mut machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
-    if let (Some(bytes), Some(addr)) = (&dtb, cfg.boot.dtb) {
+    if let (Some(bytes), Some(addr)) = (&dtb, cfg.boot().dtb) {
         machine.write_mem(addr, bytes).context("failed to load DTB")?;
     }
 
@@ -151,7 +151,7 @@ fn try_main() -> anyhow::Result<i32> {
     // 以获得 X11 装饰条（标题栏/边框，可鼠标拖动）；Wayland 后端因
     // xdg-decoration 协议缺失会导致无边框窗口无法移动。
     // 无 fb（--no-fb）即无窗口工厂
-    let window_factory: Option<rremu_cli::WindowFactory> = cfg.layout.fb.map(|fb| {
+    let window_factory: Option<rremu_cli::WindowFactory> = cfg.layout().fb.map(|fb| {
         let factory: rremu_cli::WindowFactory = Box::new(move || {
             match Window::new(fb.width as usize, fb.height as usize, "rremu framebuffer") {
                 Ok(w) => Some(Box::new(FbWindow(w)) as Box<dyn FbDisplay>),

@@ -67,12 +67,12 @@ impl TuiApp {
         }
     }
 
-    /// 将当前机器状态写入 `cfg.paths.dump_on_exit`（TUI 下静默，失败忽略）。
+    /// 将当前机器状态写入 `cfg.paths().dump_on_exit`（TUI 下静默，失败忽略）。
     fn write_dump(&self) {
-        let Some(path) = self.cfg.paths.dump_on_exit.as_deref() else {
+        let Some(path) = self.cfg.paths().dump_on_exit.as_deref() else {
             return;
         };
-        let elf = self.cfg.paths.elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self.cfg.paths().elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
         if let Ok(json) = self.machine.dump(elf).to_json() {
             let _ = std::fs::write(path, json);
         }
