@@ -3,8 +3,8 @@
 //! | offset | 寄存器      | 行为 |
 //! |--------|-------------|------|
 //! | 0      | THR(写)/RDR(读) | 写 → `UartOutput` 事件；读 → 弹出输入 FIFO |
-//! | 1      | IER         | 可写可读，暂不产生中断 |
-//! | 2      | FCR(写)/ISR(读) | 可写可读 |
+//! | 1      | IER         | RX / TX 中断使能 |
+//! | 2      | FCR(写)/IIR(读) | FIFO 控制 / 中断标识 |
 //! | 3      | LCR         | 可写可读 |
 //! | 5      | LSR         | 恒 `0x60`；输入 FIFO 非空置 bit0 |
 //! | 其余   | —           | 读 0，写忽略 |
@@ -21,20 +21,31 @@ const LSR_DATA_READY: u32 = 0x01;
 
 /// IER bit0：接收数据可中断。
 const IER_RX_ENABLE: u32 = 0x01;
+/// IER bit1：发送保持寄存器空（THRE）中断。
+const IER_TX_ENABLE: u32 = 0x02;
 /// PLIC 源号（qemu-virt 约定：UART0 = 10）。
 pub const UART_IRQ: u32 = 10;
 
 pub struct Uart {
     base: u32,
     ier: u32,
-    isr: u32,
+    fcr: u32,
     lcr: u32,
+    /// THRE 中断 pending；读 IIR 或写 THR 后更新。
+    thre_pending: bool,
     input: std::collections::VecDeque<u8>,
 }
 
 impl Uart {
     pub fn new(base: u32) -> Self {
-        Self { base, ier: 0, isr: 0, lcr: 0, input: std::collections::VecDeque::new() }
+        Self {
+            base,
+            ier: 0,
+            fcr: 0,
+            lcr: 0,
+            thre_pending: false,
+            input: std::collections::VecDeque::new(),
+        }
     }
 
     /// 注入输入字节（machine 转发；进入 FIFO 等待固件读走）。
@@ -44,6 +55,17 @@ impl Uart {
 
     fn offset(&self, addr: u32) -> u32 {
         addr - self.base
+    }
+
+    /// 8250 IIR：RX 优先，其次 THRE；0x01 表示无 pending。
+    fn iir(&self) -> u32 {
+        if self.ier & IER_RX_ENABLE != 0 && !self.input.is_empty() {
+            0x04
+        } else if self.ier & IER_TX_ENABLE != 0 && self.thre_pending {
+            0x02
+        } else {
+            0x01
+        }
     }
 }
 
@@ -56,7 +78,14 @@ impl BusDevice for Uart {
                 Ok(u32::from(byte))
             }
             REG_IER => Ok(self.ier),
-            REG_FCR_ISR => Ok(self.isr),
+            REG_FCR_ISR => {
+                let iir = self.iir();
+                if iir == 0x02 {
+                    // THRE 中断由读 IIR 清除；下一次 THR 写会重新置位。
+                    self.thre_pending = false;
+                }
+                Ok(iir)
+            }
             REG_LCR => Ok(self.lcr),
             REG_LSR => Ok(LSR_THR_EMPTY | if self.input.is_empty() { 0 } else { LSR_DATA_READY }),
             _ => Ok(0),
@@ -65,9 +94,18 @@ impl BusDevice for Uart {
 
     fn write(&mut self, addr: u32, _size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
         match self.offset(addr) {
-            REG_THR_RDR => sink.emit(EmuEvent::UartOutput { byte: (data & 0xff) as u8 }),
-            REG_IER => self.ier = data & 0xff,
-            REG_FCR_ISR => self.isr = data & 0xff,
+            REG_THR_RDR => {
+                sink.emit(EmuEvent::UartOutput { byte: (data & 0xff) as u8 });
+                // THR 再次为空，若 TX 中断使能则触发下一次 THRE。
+                self.thre_pending = true;
+            }
+            REG_IER => {
+                self.ier = data & 0xff;
+                if self.ier & IER_TX_ENABLE != 0 {
+                    self.thre_pending = true;
+                }
+            }
+            REG_FCR_ISR => self.fcr = data & 0xff,
             REG_LCR => self.lcr = data & 0xff,
             _ => {}
         }
@@ -79,7 +117,14 @@ impl BusDevice for Uart {
             // RDR peek 返回队首但不弹出（D12）
             REG_THR_RDR => Ok(u32::from(self.input.front().copied().unwrap_or(0))),
             REG_IER => Ok(self.ier),
-            REG_FCR_ISR => Ok(self.isr),
+            REG_FCR_ISR => {
+                let iir = self.iir();
+                if iir == 0x02 {
+                    // THRE 中断由读 IIR 清除；下一次 THR 写会重新置位。
+                    self.thre_pending = false;
+                }
+                Ok(iir)
+            }
             REG_LCR => Ok(self.lcr),
             REG_LSR => Ok(LSR_THR_EMPTY | if self.input.is_empty() { 0 } else { LSR_DATA_READY }),
             _ => Ok(0),
@@ -98,9 +143,9 @@ impl BusDevice for Uart {
         Some(self)
     }
 
-    /// RX 有数据且使能接收中断时断言 UART0 IRQ（level）。
+    /// RX 有数据或 THRE pending 且对应 IER 位使能时断言 UART0 IRQ（level）。
     fn irq_line(&self) -> Option<u32> {
-        if self.ier & IER_RX_ENABLE != 0 && !self.input.is_empty() {
+        if self.iir() != 0x01 {
             Some(UART_IRQ)
         } else {
             None
@@ -116,8 +161,9 @@ impl Resetable for Uart {
     fn reset(&mut self) {
         self.input.clear();
         self.ier = 0;
-        self.isr = 0;
+        self.fcr = 0;
         self.lcr = 0;
+        self.thre_pending = false;
     }
 }
 
@@ -187,6 +233,19 @@ mod tests {
     }
 
     #[test]
+    fn thre_interrupt_drives_tx_and_clears_on_iir_read() {
+        let mut uart = Uart::new(BASE);
+        let mut sink = Collector::default();
+        uart.write(BASE + 1, AccessSize::Byte, IER_TX_ENABLE, &mut sink).unwrap();
+        assert_eq!(uart.irq_line(), Some(UART_IRQ));
+        assert_eq!(uart.read(BASE + 2, AccessSize::Byte, &mut sink).unwrap(), 0x02);
+        assert_eq!(uart.irq_line(), None);
+        uart.write(BASE, AccessSize::Byte, b'X' as u32, &mut sink).unwrap();
+        assert_eq!(uart.irq_line(), Some(UART_IRQ));
+        assert!(matches!(sink.0.last(), Some(EmuEvent::UartOutput { byte: b'X' })));
+    }
+
+    #[test]
     fn reset_clears_fifo_and_registers() {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
@@ -208,7 +267,7 @@ mod tests {
         uart.write(BASE + 2, AccessSize::Byte, 0xC1, &mut sink).unwrap(); // FCR
         uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink).unwrap(); // LCR
         assert_eq!(uart.peek_read(BASE + 1, AccessSize::Byte).unwrap(), 0x07);
-        assert_eq!(uart.peek_read(BASE + 2, AccessSize::Byte).unwrap(), 0xC1);
+        assert_eq!(uart.peek_read(BASE + 2, AccessSize::Byte).unwrap(), 0x02); // THRE pending
         assert_eq!(uart.peek_read(BASE + 3, AccessSize::Byte).unwrap(), 0x03);
         // 未知寄存器读 0 写忽略
         uart.write(BASE + 4, AccessSize::Byte, 0xff, &mut sink).unwrap();
