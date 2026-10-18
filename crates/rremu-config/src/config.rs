@@ -1,0 +1,113 @@
+//! 统一配置、覆盖与解析入口。
+
+use crate::boot::{Boot, Diag, Paths};
+use crate::defaults::DTB_RESERVE;
+use crate::error::ConfigError;
+use crate::layout::Layout;
+
+/// 统一配置。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Config {
+    pub layout: Layout,
+    pub diag: Diag,
+    pub paths: Paths,
+    pub boot: Boot,
+    /// 覆盖 ELF 入口（`None` 时用镜像自身入口）。
+    pub entry: Option<u32>,
+}
+
+// ---------------------------------------------------------------------------
+// 外部参数覆盖（纯数据，bin 从 clap 填充）
+// ---------------------------------------------------------------------------
+
+/// 外部参数（覆盖默认值）。字段为 `None` 表示"未指定，保持默认"。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Overrides {
+    pub ram_base: Option<u32>,
+    pub ram_size: Option<u32>,
+    /// 禁用 Framebuffer 映射。
+    pub no_fb: bool,
+    pub entry: Option<u32>,
+    pub elf: Option<String>,
+    pub dump_on_exit: Option<String>,
+}
+
+impl Config {
+    /// 应用外部覆盖（不校验）。
+    pub fn apply(&mut self, ov: &Overrides) {
+        if let Some(b) = ov.ram_base {
+            self.layout.ram_base = b;
+        }
+        if let Some(s) = ov.ram_size {
+            self.layout.ram_size = s;
+        }
+        if ov.no_fb {
+            self.layout.fb = None;
+        }
+        if let Some(e) = ov.entry {
+            self.entry = Some(e);
+        }
+        if let Some(p) = &ov.elf {
+            self.paths.elf = Some(p.clone());
+        }
+        if let Some(p) = &ov.dump_on_exit {
+            self.paths.dump_on_exit = Some(p.clone());
+        }
+    }
+
+    /// 校验配置合法性。
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let l = &self.layout;
+        if l.ram_size == 0 {
+            return Err(ConfigError::ZeroRamSize);
+        }
+        if l.ram_base.checked_add(l.ram_size).is_none() {
+            return Err(ConfigError::RamOverflow { base: l.ram_base, size: l.ram_size });
+        }
+        if let Some(fb) = &l.fb {
+            if fb.width == 0 || fb.height == 0 {
+                return Err(ConfigError::FbZeroDim { width: fb.width, height: fb.height });
+            }
+            if fb
+                .width
+                .checked_mul(fb.height)
+                .and_then(|n| n.checked_mul(fb.bpp))
+                .is_none()
+            {
+                return Err(ConfigError::FbSizeOverflow {
+                    width: fb.width,
+                    height: fb.height,
+                    bpp: fb.bpp,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// 将 DTB 放到 RAM 顶部下方 `DTB_RESERVE` 处（8 字节对齐），并写入 `boot.dtb`。
+    pub fn place_dtb(&mut self) -> Result<u32, ConfigError> {
+        let ram_end = self
+            .layout
+            .ram_base
+            .checked_add(self.layout.ram_size)
+            .ok_or(ConfigError::RamOverflow {
+                base: self.layout.ram_base,
+                size: self.layout.ram_size,
+            })?;
+        if self.layout.ram_size < DTB_RESERVE {
+            return Err(ConfigError::DtbReserveTooLarge { ram_size: self.layout.ram_size });
+        }
+        let addr = (ram_end - DTB_RESERVE) & !7;
+        self.boot.dtb = Some(addr);
+        Ok(addr)
+    }
+
+    /// 解析入口：默认值 + 外部覆盖 + 校验 → 统一 `Config`。
+    pub fn resolve(ov: Overrides) -> Result<Config, ConfigError> {
+        let mut cfg = Config::default();
+        cfg.apply(&ov);
+        cfg.validate()?;
+        Ok(cfg)
+    }
+}
+
