@@ -1,15 +1,18 @@
 //! rremu-cpu：CPU 状态与单周期执行内核。只依赖 bus trait，不感知具体设备。
 
-use rremu_bus::{AccessSize, Bus, EmuEvent, EventSink};
+use rremu_bus::{AccessSize, Bus, EventSink};
 use rremu_decode::{decode16, decode32, instr_len, DecodeError};
 use rremu_isa::{cause, csr as isa_csr, Instruction, Priv};
 use thiserror::Error;
 
 mod csr;
+mod interrupt;
+mod trap;
 mod mmu;
 mod pmp;
 
 pub use csr::CsrState;
+pub(crate) use trap::TrapErr;
 pub(crate) use mmu::AccessType;
 #[cfg(test)]
 pub(crate) use mmu::{PTE_A, PTE_D, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X};
@@ -629,126 +632,6 @@ impl Cpu {
         Ok(())
     }
 
-    /// 陷入流程：mepc ← pc；mcause ← cause；mtval ← mtval；priv ← M；pc ← mtvec（仅 DIRECT）。
-    fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
-        sink.emit(EmuEvent::Trap { cause, pc: self.pc });
-
-        // 陷阱委派：非 M 特权下，已委派（medeleg/mideleg）的异常/中断交 S-mode
-        let is_interrupt = cause & 0x8000_0000 != 0;
-        let code = cause & 0x7fff_ffff;
-        let delegated = self.priv_ != Priv::Machine
-            && if is_interrupt {
-                (self.csr.mideleg >> code) & 1 == 1
-            } else {
-                (self.csr.medeleg >> code) & 1 == 1
-            };
-        if delegated {
-            return self.trap_supervisor(cause, mtval);
-        }
-
-        self.csr.mepc = self.pc;
-        self.csr.mcause = cause;
-        self.csr.mtval = mtval;
-
-        // 更新 mstatus: MPP = 当前特权级, MPIE = 旧 MIE, MIE = 0
-        let mpp = match self.priv_ {
-            Priv::Machine => 0b11,
-            Priv::Supervisor => 0b01,
-            Priv::User => 0b00,
-        };
-        let old_mie = (self.csr.mstatus >> isa_csr::MSTATUS_MIE.trailing_zeros()) & 1;
-        self.update_mstatus(mpp, 0, old_mie);
-
-        self.priv_ = Priv::Machine;
-        self.cycle += 1;
-        if self.csr.mtvec & 1 == 1 {
-            return Err(CpuError::Unimplemented("vectored mtvec"));
-        }
-        self.pc = self.csr.mtvec & !1;
-        Ok(StepOutcome::Trapped { cause })
-    }
-
-    /// 陷入到 S-mode：sepc/scause/stval ← 当前；sstatus.SPP/SPIE/SIE；pc ← stvec（仅 DIRECT）。
-    fn trap_supervisor(&mut self, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
-        self.csr.sepc = self.pc;
-        self.csr.scause = cause;
-        self.csr.stval = mtval;
-        let spp = u32::from(self.priv_ == Priv::Supervisor);
-        let old_sie = (self.csr.mstatus >> isa_csr::MSTATUS_SIE.trailing_zeros()) & 1;
-        self.csr.mstatus &= !(isa_csr::MSTATUS_SPP | isa_csr::MSTATUS_SPIE | isa_csr::MSTATUS_SIE);
-        self.csr.mstatus |= (spp << isa_csr::MSTATUS_SPP.trailing_zeros())
-            | (old_sie << isa_csr::MSTATUS_SPIE.trailing_zeros());
-        self.priv_ = Priv::Supervisor;
-        self.cycle += 1;
-        if self.csr.stvec & 1 == 1 {
-            return Err(CpuError::Unimplemented("vectored stvec"));
-        }
-        self.pc = self.csr.stvec & !1;
-        Ok(StepOutcome::Trapped { cause })
-    }
-
-    /// 将设备 pending 中断投影到 mip 的设备位。
-    /// SSIP/STIP 由软件写入（如 OpenSBI 注入 S timer），不被设备覆盖。
-    fn sync_mip(&mut self, pending: &[u32]) {
-        let mut dev = 0u32;
-        for &c in pending {
-            dev |= match c {
-                cause::M_SI => isa_csr::MIP_MSIP,
-                cause::M_TI => isa_csr::MIP_MTIP,
-                cause::M_EI => isa_csr::MIP_MEIP,
-                cause::S_EI => isa_csr::MIP_SEIP,
-                _ => 0,
-            };
-        }
-        let mask = isa_csr::MIP_MSIP | isa_csr::MIP_MTIP | isa_csr::MIP_MEIP | isa_csr::MIP_SEIP;
-        self.csr.mip = (self.csr.mip & !mask) | dev;
-    }
-
-    /// 按规范优先级选择当前可接收的中断。
-    ///
-    /// 目标为 M 的中断：当前 `< M` 时全局使能；当前为 M 时需 MIE。
-    /// 目标为 S 的中断：当前 `< S` 时全局使能；当前为 S 时需 SIE；
-    /// 当前为 M 时不接收已委派给 S 的中断。
-    fn pending_interrupt(&self) -> Option<u32> {
-        const PRIORITY: [u32; 6] = [
-            cause::M_EI,
-            cause::M_SI,
-            cause::M_TI,
-            cause::S_EI,
-            cause::S_SI,
-            cause::S_TI,
-        ];
-        for &cause in &PRIORITY {
-            let code = cause & 0x7fff_ffff;
-            if (self.csr.mip >> code) & 1 == 0 || (self.csr.mie >> code) & 1 == 0 {
-                continue;
-            }
-            let delegated = (self.csr.mideleg >> code) & 1 == 1;
-            let enabled = if delegated {
-                match self.priv_ {
-                    Priv::Machine => false,
-                    Priv::Supervisor => (self.csr.mstatus & isa_csr::MSTATUS_SIE) != 0,
-                    Priv::User => true,
-                }
-            } else {
-                match self.priv_ {
-                    Priv::Machine => (self.csr.mstatus & isa_csr::MSTATUS_MIE) != 0,
-                    _ => true,
-                }
-            };
-            if enabled {
-                return Some(cause);
-            }
-        }
-        None
-    }
-}
-
-/// 执行期内部 trap 信号（bus 错误 → cause 映射已完成）。
-#[derive(Debug)]
-pub(crate) struct TrapErr {
-    cause: u32,
-    mtval: u32,
 }
 
 #[cfg(test)]
