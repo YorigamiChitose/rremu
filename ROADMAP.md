@@ -108,7 +108,7 @@
   - MMU page fault：`sv32_page_fault` / `sv32_store_page_fault`
   - S 中断：`s_irq_software` / `s_irq_timer` / `s_irq_external`
   - CSR 存在性（S3.6）：`csr_unimplemented`
-- 更新 README / ROADMAP / rremu-test 用例清单（53 个）。
+- 更新 README / ROADMAP / rremu-test 用例清单（54 个）。
 - 限制保留：
   - vectored `mtvec/stvec` 未实现；`cte_vectored_mtvec` 继续断言 Fault。
   - `wfi` 按 NOP 执行；当前不影响 Linux idle/唤醒，暂不做 idle 优化。
