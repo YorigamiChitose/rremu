@@ -9,7 +9,7 @@ use rremu_cpu::{Cpu, StepOutcome};
 use rremu_decode::{decode16, decode32, instr_len};
 use rremu_devices::{Clint, Framebuffer, Plic, Ram, Rtc, Syscon, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
-use rremu_isa::{csr, Address, Word};
+use rremu_isa::csr;
 use rremu_loader::Image;
 use thiserror::Error;
 
@@ -20,13 +20,18 @@ pub use rremu_isa::{reg_name, Instruction, Priv};
 
 pub mod dump;
 mod debugger;
+mod events;
 mod framebuffer;
+mod snapshot;
 pub mod term;
 
 use term::Terminal;
 
 pub use debugger::{DebugController, Watchpoint};
+pub use events::RingCollector;
+pub(crate) use events::MachineSink;
 pub use framebuffer::FramebufferFrame;
+pub use snapshot::{CsrSnapshot, MachineSnapshot, TraceEntry};
 pub(crate) use framebuffer::FramebufferAccessor;
 
 /// 运行状态（快照展示用）。
@@ -60,15 +65,6 @@ pub struct DisasmLine {
     pub is_current: bool,
 }
 
-/// 指令 trace 条目（dump 用）：pc + 原始编码 + 长度。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TraceEntry {
-    pub pc: u32,
-    pub bits: u32,
-    pub len: u8,
-}
-
-
 #[derive(Debug, Error)]
 pub enum MachineError {
     #[error("segment {addr:#x}+{len} out of RAM range {ram_base:#x}..{ram_end:#x}")]
@@ -81,140 +77,6 @@ pub enum MachineError {
     InvalidConfig(String),
     #[error("reset failed: {0}")]
     ResetFailed(String),
-}
-
-/// 事件环形收集器：machine 持有，前端经快照读取。
-/// mem 环默认 16 条 MemAccess，uart 环默认 1024 字节。
-pub struct RingCollector {
-    mem: VecDeque<EmuEvent>,
-    uart: VecDeque<EmuEvent>,
-    halt: Option<i32>,
-    mem_cap: usize,
-    uart_cap: usize,
-}
-
-impl RingCollector {
-    pub fn new() -> Self {
-        Self { mem: VecDeque::new(), uart: VecDeque::new(), halt: None, mem_cap: 16, uart_cap: 1024 }
-    }
-
-    pub fn set_capacity(&mut self, mem: usize, uart: usize) {
-        self.mem_cap = mem;
-        self.uart_cap = uart;
-        self.mem.truncate(mem);
-        self.uart.truncate(uart);
-    }
-
-    pub fn mem_ring(&self) -> &VecDeque<EmuEvent> {
-        &self.mem
-    }
-
-    pub fn uart_ring(&self) -> &VecDeque<EmuEvent> {
-        &self.uart
-    }
-
-    pub fn take_halt(&mut self) -> Option<i32> {
-        self.halt.take()
-    }
-
-    /// 取走全部 UART 输出字节（CLI 打印用）。
-    pub fn drain_uart(&mut self) -> Vec<u8> {
-        self.uart
-            .drain(..)
-            .filter_map(|ev| Self::as_uart_output(&ev))
-            .collect()
-    }
-
-    /// 从事件提取 UART 输出字节（输入事件与其他事件不算输出）。
-    fn as_uart_output(ev: &EmuEvent) -> Option<u8> {
-        if let EmuEvent::UartOutput { byte } = ev {
-            Some(*byte)
-        } else {
-            None
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.mem.clear();
-        self.uart.clear();
-        self.halt = None;
-    }
-}
-
-impl Default for RingCollector {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EventSink for RingCollector {
-    fn emit(&mut self, ev: EmuEvent) {
-        match ev {
-            EmuEvent::MemAccess { .. } | EmuEvent::Trap { .. } => {
-                // Trap 与存储访问同在 mem 环展示（受同一容量约束）
-                if self.mem.len() == self.mem_cap {
-                    self.mem.pop_front();
-                }
-                self.mem.push_back(ev);
-            }
-            EmuEvent::UartOutput { .. } | EmuEvent::UartInput { .. } => {
-                if self.uart.len() == self.uart_cap {
-                    self.uart.pop_front();
-                }
-                self.uart.push_back(ev);
-            }
-            EmuEvent::Halt { code } => self.halt = Some(code),
-            EmuEvent::PowerOff => self.halt = Some(0),
-            // 重启不是关机：用非零退出码区分，避免把 reboot 当成 poweroff。
-            EmuEvent::Reboot => self.halt = Some(2),
-        }
-    }
-}
-
-/// 事件 sink：所有事件入 collector；UART 输出字节**同时**喂给终端状态机。
-struct MachineSink<'a> {
-    collector: &'a mut RingCollector,
-    terminal: &'a mut Terminal,
-    /// CLI 直出回调：UART 输出字节在进入事件环前同步转发。
-    uart_sink: &'a mut Option<Box<dyn FnMut(u8)>>,
-}
-
-impl EventSink for MachineSink<'_> {
-    fn emit(&mut self, ev: EmuEvent) {
-        if let EmuEvent::UartOutput { byte } = ev {
-            self.terminal.feed(byte);
-            if let Some(sink) = self.uart_sink.as_mut() {
-                sink(byte);
-            }
-        }
-        self.collector.emit(ev);
-    }
-}
-
-/// CSR 快照（TUI/CLI 显示所需的最简 M-mode 集合）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CsrSnapshot {
-    pub mstatus: u32,
-    pub mtvec: u32,
-    pub mepc: u32,
-    pub mcause: u32,
-    pub mtval: u32,
-    pub mie: u32,
-    pub mip: u32,
-    pub mcycle: u64,
-    pub minstret: u64,
-}
-
-/// 机器快照：前端的唯一状态视图。
-#[derive(Debug, Clone)]
-pub struct MachineSnapshot {
-    pub cycle: u64,
-    pub pc: Address,
-    pub priv_: Priv,
-    pub gprs: [Word; 32],
-    pub csrs: CsrSnapshot,
-    pub state: RunState,
-    pub mem_ring: VecDeque<EmuEvent>,
 }
 
 impl Machine {
@@ -403,11 +265,11 @@ impl Machine {
         self.dbg.clear_suppress();
 
         let stepped = {
-            let mut sink = MachineSink {
-                collector: &mut self.collector,
-                terminal: &mut self.terminal,
-                uart_sink: &mut self.uart_sink,
-            };
+            let mut sink = MachineSink::new(
+                &mut self.collector,
+                &mut self.terminal,
+                &mut self.uart_sink,
+            );
             self.cpu.step(&mut self.bus, &mut sink)
         };
         match stepped {
