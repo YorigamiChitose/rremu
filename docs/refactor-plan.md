@@ -35,6 +35,7 @@ ceb5d4e refactor(cpu): split memory and AMO operations from exec
 0a2ae79 refactor(machine): move debugger state into debugger module
 8a78d72 refactor(machine): move framebuffer access into framebuffer module
 25b67fc refactor(machine): split events and snapshots into modules
+06a52a3 refactor(machine): split construction and runtime modules
 ```
 
 ## 1. 原则
