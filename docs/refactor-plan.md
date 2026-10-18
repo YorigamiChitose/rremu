@@ -9,7 +9,9 @@
 ```text
 阶段 1：文档与基线        完成
 阶段 2：Bus/Config/ISA 拆分 完成
-阶段 3：CPU 拆分          下一步
+阶段 3：CPU 主体拆分       进行中
+  - lib.rs、mmu、pmp、csr、trap、interrupt、fetch、exec 已拆出
+  - tests 与 exec 内部子模块仍待继续拆分
 ```
 
 本阶段提交：
@@ -19,6 +21,13 @@ a647ba6 docs(core): define architecture, interfaces, and invariants
 7f580ec refactor(bus): split access, event, device and router modules
 167d9db refactor(config): split defaults, layout, boot, and error modules
 1fc1c11 refactor(isa): split types, instructions, CSR, and cause modules
+5c8182b refactor(cpu): move unit tests into tests module
+7900f5b refactor(cpu): move Sv32 translation into mmu module
+ee4b666 refactor(cpu): move PMP checks into pmp module
+53c6953 refactor(cpu): move CSR state and access logic into csr module
+ec083fc refactor(cpu): move trap and interrupt logic into modules
+15a7d13 refactor(cpu): move instruction fetch into fetch module
+d978ba0 refactor(cpu): move execution and memory operations into exec module
 ```
 
 ## 1. 原则
