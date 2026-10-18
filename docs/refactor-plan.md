@@ -15,7 +15,8 @@
   - exec memory/AMO 已拆出
   - exec system helper 已拆出
   - exec CSR helper 已拆出
-  - exec ALU 仍保留在 mod.rs（约 294 行，可选继续拆）
+  - exec ALU / 压缩指令已拆出
+  - exec/mod.rs 已降到约 142 行
 ```
 
 本阶段提交：
