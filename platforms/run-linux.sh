@@ -29,12 +29,16 @@ echo "==> compile DTB"
 dtc -I dts -O dtb -o "$DTB" "$DTS"
 
 echo "==> build OpenSBI FW_PAYLOAD"
-(cd "$OPENSBI_DIR" && make clean >/dev/null && \
+# rremu 是 RV32；Linux RV32 Image 头要求 4MiB 负载偏移。
+# 删除整个 build 目录，避免 make clean 留下的旧 linker script
+# 继续使用上一次的 payload offset。
+rm -rf "$OPENSBI_DIR/build"
+(cd "$OPENSBI_DIR" && \
   make PLATFORM=generic CROSS_COMPILE=riscv64-linux-gnu- \
        PLATFORM_RISCV_XLEN=32 FW_PAYLOAD=y \
        FW_PAYLOAD_PATH="$LINUX_IMAGE" \
-       FW_PAYLOAD_OFFSET=0x200000 \
-       FW_PAYLOAD_ALIGN=0x1000 \
+       FW_PAYLOAD_OFFSET=0x400000 \
+       FW_PAYLOAD_ALIGN=0x400000 \
        FW_PAYLOAD_FDT_ADDR="$FDT_ADDR" >/dev/null)
 
 echo "==> run Linux"

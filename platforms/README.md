@@ -79,7 +79,7 @@ LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
 脚本使用：
 
 - `rremu-linux.dts`：128MiB RAM，`bootargs = "console=ttyS0 earlycon"`
-- OpenSBI `FW_PAYLOAD`，payload offset `0x200000`
+- OpenSBI `FW_PAYLOAD`，payload offset `0x400000`（RV32 Linux Image 头要求 4MiB）
 - DTB/FDT 地址 `0x87f00000`
 - rremu `-m 128M`
 

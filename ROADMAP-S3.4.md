@@ -438,14 +438,14 @@ bootargs: console=ttyS0 earlycon keep_bootcon
 ```sh
 cd /home/yori/yori-riscv-util/opensbi
 
-make clean
+rm -rf build
 make PLATFORM=generic \
   CROSS_COMPILE=riscv64-linux-gnu- \
   PLATFORM_RISCV_XLEN=32 \
   FW_PAYLOAD=y \
   FW_PAYLOAD_PATH=/home/yori/yori-riscv-util/linux/arch/riscv/boot/Image \
-  FW_PAYLOAD_OFFSET=0x200000 \
-  FW_PAYLOAD_ALIGN=0x1000 \
+  FW_PAYLOAD_OFFSET=0x400000 \
+  FW_PAYLOAD_ALIGN=0x400000 \
   FW_PAYLOAD_FDT_ADDR=0x87f00000
 ```
 
