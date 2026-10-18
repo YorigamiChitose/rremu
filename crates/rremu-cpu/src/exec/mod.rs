@@ -1,9 +1,11 @@
 //! 指令执行分派与访存/AMO 实现。
 
 use rremu_bus::{AccessSize, Bus, EventSink};
-use rremu_isa::{cause, csr as isa_csr, Instruction, Priv};
+use rremu_isa::Instruction;
 
 use super::{Cpu, TrapErr};
+
+mod system;
 
 mod memory;
 
@@ -217,34 +219,14 @@ impl Cpu {
                 self.amo(bus, sink, rd, rs1, rs2, |a, b| a.max(b))?;
             }
 
-            Instruction::Sret => {
-                let sstatus = self.csr.mstatus;
-                let spp = (sstatus >> isa_csr::MSTATUS_SPP.trailing_zeros()) & 1;
-                let spie = (sstatus >> isa_csr::MSTATUS_SPIE.trailing_zeros()) & 1;
-                // SPP=0, SIE=SPIE, SPIE=1
-                self.csr.mstatus &= !(isa_csr::MSTATUS_SPP
-                    | isa_csr::MSTATUS_SIE
-                    | isa_csr::MSTATUS_SPIE
-                    | isa_csr::MSTATUS_MPRV);
-                self.csr.mstatus |= (spie << isa_csr::MSTATUS_SIE.trailing_zeros())
-                    | (1 << isa_csr::MSTATUS_SPIE.trailing_zeros());
-                self.priv_ = if spp == 1 { Priv::Supervisor } else { Priv::User };
-                next_pc = self.csr.sepc;
-            }
+            Instruction::Sret => next_pc = self.exec_sret(),
             Instruction::Wfi => {} // 无等待实现：NOP
             Instruction::SfenceVma => {} // 无 TLB：NOP
 
             Instruction::Fence => {}
             Instruction::FenceI => {}
-            Instruction::Ecall => {
-                let c = match self.priv_ {
-                    Priv::Machine => cause::ECALL_FROM_M,
-                    Priv::Supervisor => cause::ECALL_FROM_S,
-                    Priv::User => cause::ECALL_FROM_U,
-                };
-                return Err(TrapErr { cause: c, mtval: 0 });
-            }
-            Instruction::Ebreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
+            Instruction::Ecall => return Err(self.ecall_trap()),
+            Instruction::Ebreak => return Err(Self::breakpoint_trap()),
             Instruction::Csrrw { rd, csr, rs1 } => {
                 self.check_csr_access(csr, true, raw)?;
                 let old = self.architectural_csr_read(csr)?;
@@ -293,23 +275,7 @@ impl Cpu {
                 }
                 set!(rd, old);
             }
-            Instruction::Mret => {
-                let mstatus = self.csr.mstatus;
-                let mpp = (mstatus >> isa_csr::MSTATUS_MPP_SHIFT) & 0b11;
-                let mpie = (mstatus >> isa_csr::MSTATUS_MPIE.trailing_zeros()) & 1;
-                // MPP = 0 (U-mode), MIE = MPIE, MPIE = 1
-                self.update_mstatus(0, mpie, 1);
-                if mpp != 0b11 {
-                    // xRET 返回低于 M 时清除 MPRV。
-                    self.csr.mstatus &= !isa_csr::MSTATUS_MPRV;
-                }
-                self.priv_ = match mpp {
-                    0b11 => Priv::Machine,
-                    0b01 => Priv::Supervisor,
-                    _ => Priv::User,
-                };
-                next_pc = self.csr.mepc;
-            }
+            Instruction::Mret => next_pc = self.exec_mret(),
             // ---- C extension (RV32C) ----
             Instruction::CAddi4spn { rd, imm } => set!(rd, x(self, 2u8).wrapping_add(imm)),
             Instruction::CLw { rd, rs1, imm } => {
@@ -352,7 +318,7 @@ impl Cpu {
             }
             Instruction::CJr { rs1 } => next_pc = x(self, rs1) & !1,
             Instruction::CMv { rd, rs2 } => set!(rd, x(self, rs2)),
-            Instruction::CEbreak => return Err(TrapErr { cause: cause::BREAKPOINT, mtval: 0 }),
+            Instruction::CEbreak => return Err(Self::breakpoint_trap()),
             Instruction::CJalr { rs1 } => {
                 set!(1u8, pc.wrapping_add(2u32));
                 next_pc = x(self, rs1) & !1;
