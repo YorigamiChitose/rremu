@@ -141,4 +141,4 @@ rremu-am:
   cargo test --workspace
 ```
 
-第三层 `rremu-test` 暂缓，但第一层重构不得减少其已有覆盖；恢复后重新运行 54 个用例。
+第三层 `rremu-test` 已部分恢复规范回归；当前 57 个用例，第一层重构不得减少覆盖。

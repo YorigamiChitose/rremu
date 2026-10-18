@@ -187,7 +187,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-第一层重构完成前不恢复第三层测试扩展；恢复后运行完整 `rremu-test` 54 用例。
+第一层重构完成前不扩展第三层测试矩阵；当前保留并运行 `rremu-test` 的 57 个用例。
 
 ## 3. 禁止事项
 
