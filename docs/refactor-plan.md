@@ -13,7 +13,8 @@
   - lib.rs、mmu、pmp、csr、trap、interrupt、fetch、exec 已拆出
   - tests 已按关注点拆分
   - exec memory/AMO 已拆出
-  - exec system/alu 细分仍待继续
+  - exec system helper 已拆出
+  - exec CSR/ALU 进一步细分仍可选
 ```
 
 本阶段提交：
