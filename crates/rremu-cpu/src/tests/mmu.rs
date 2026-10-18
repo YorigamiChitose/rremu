@@ -175,3 +175,32 @@ use super::*;
         let err = h.cpu.load(&mut h.bus, &mut h.sink, MMU_VA, AccessSize::Word).err().unwrap();
         assert_eq!(err.cause, cause::LOAD_ACCESS_FAULT);
     }
+
+    #[test]
+    fn mprv_sum_mxr_matrix_for_m_mode_data_access() {
+        let mut h = Harness::new_with_ram(0x10000);
+        let va_user = MMU_VA;
+        let va_exec = MMU_VA + 0x1000;
+        map_4k(&mut h, va_user, DATA_PA, PTE_R | PTE_U);
+        map_4k(&mut h, va_exec, DATA_PA, PTE_X);
+        enable_sv32(&mut h, ROOT_PA);
+        h.load(DATA_PA, &[0x1234_5678]);
+
+        h.cpu.priv_ = Priv::Machine;
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_MPP_S;
+
+        // SUM=0: user page is inaccessible for M-mode load through MPRV.
+        let err = h.cpu.load(&mut h.bus, &mut h.sink, va_user, AccessSize::Word).err().unwrap();
+        assert_eq!(err.cause, cause::LOAD_PAGE_FAULT);
+        h.cpu.csr.mstatus |= csr::MSTATUS_SUM;
+        let v = h.cpu.load(&mut h.bus, &mut h.sink, va_user, AccessSize::Word).unwrap();
+        assert_eq!(v, 0x1234_5678);
+
+        // MXR=0: execute-only page cannot be loaded; MXR=1 makes it readable.
+        h.cpu.csr.mstatus = csr::MSTATUS_MPRV | csr::MSTATUS_MPP_S;
+        let err = h.cpu.load(&mut h.bus, &mut h.sink, va_exec, AccessSize::Word).err().unwrap();
+        assert_eq!(err.cause, cause::LOAD_PAGE_FAULT);
+        h.cpu.csr.mstatus |= csr::MSTATUS_MXR;
+        let v = h.cpu.load(&mut h.bus, &mut h.sink, va_exec, AccessSize::Word).unwrap();
+        assert_eq!(v, 0x1234_5678);
+    }

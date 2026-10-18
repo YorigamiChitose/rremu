@@ -66,6 +66,7 @@
 | PMP-3 | M-mode 未锁定项默认绕过；锁定项必须满足权限 |
 | PMP-4 | S/U 无匹配项时拒绝 |
 | PMP-5 | PMP 检查发生在物理访问前 |
+| PMP-6 | 当前 PMP granularity 为 G=0（4 字节）；`pmpaddr` 全 32 位可写，OpenSBI 报告的 `log2gran=2` 对应此模型 |
 
 ## 7. Bus
 

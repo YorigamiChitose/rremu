@@ -137,3 +137,19 @@ use super::*;
         assert_eq!(h.cpu.csr.pmpcfg[0] & 0xff, 0x80);
         assert_eq!(h.cpu.csr.pmpaddr[0], 0x123);
     }
+
+    #[test]
+    fn pmp_granularity_is_four_bytes_and_pmpaddr_low_bits_are_writable() {
+        let mut h = Harness::new();
+        clear_pmp(&mut h);
+        // rremu models G=0: pmpaddr encodes address[33:2], so all 32 bits are WARL-writable.
+        h.cpu.csr_write(csr::PMPADDR0, 0xffff_ffff);
+        assert_eq!(h.cpu.debug_csr_read(csr::PMPADDR0), Some(0xffff_ffff));
+
+        let addr = BASE + 0x100;
+        h.cpu.csr_write(csr::PMPADDR0, addr >> 2);
+        h.cpu.csr_write(csr::PMPCFG0, 0x17); // NA4 + R/W/X
+        h.cpu.priv_ = Priv::Supervisor;
+        assert!(h.cpu.pmp_check(addr, AccessType::Load));
+        assert!(!h.cpu.pmp_check(addr + 4, AccessType::Load));
+    }
