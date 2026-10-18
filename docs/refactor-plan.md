@@ -12,7 +12,8 @@
 阶段 3：CPU 主体拆分       基本完成
   - lib.rs、mmu、pmp、csr、trap、interrupt、fetch、exec 已拆出
   - tests 已按关注点拆分
-  - exec 内部 system/memory/alu 细分仍待继续
+  - exec memory/AMO 已拆出
+  - exec system/alu 细分仍待继续
 ```
 
 本阶段提交：
@@ -30,6 +31,7 @@ ec083fc refactor(cpu): move trap and interrupt logic into modules
 15a7d13 refactor(cpu): move instruction fetch into fetch module
 d978ba0 refactor(cpu): move execution and memory operations into exec module
 e18914f refactor(cpu): split unit tests by concern
+ceb5d4e refactor(cpu): split memory and AMO operations from exec
 ```
 
 ## 1. 原则
