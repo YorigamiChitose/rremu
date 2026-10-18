@@ -1,6 +1,6 @@
 # rremu 核心接口契约
 
-本文定义第一层模块的接口边界。未标记 `Target` 的内容描述当前实现。
+本文定义 rremu 核心模块的接口边界。
 
 ## 1. Cpu
 
@@ -81,7 +81,6 @@ Cpu::translate<B: Bus>(&self, bus, va, access) -> Result<u32, TrapErr>
 - Sv32 时逐级读取 PTE；PTE 非法、权限失败、A/D 更新失败按 RISC-V 语义产生 page fault。
 - M-mode 在 `MPRV` 下的数据访问按 `MPP` 特权级翻译。
 - 本接口不产生事件；内存访问事件由 `Bus` 负责。
-- Target：保持为 MMU 唯一收口，拆入 `mmu.rs`。
 
 ### 1.5 PMP
 
@@ -109,7 +108,6 @@ Cpu::trap_supervisor(&mut self, cause, mtval) -> Result<StepOutcome, CpuError>
 - M trap 写 `mepc/mcause/mtval`，进入 M-mode，按 `mtvec` 跳转。
 - S trap 写 `sepc/scause/stval`，更新 `sstatus.SPP/SPIE/SIE`，按 `stvec` 跳转。
 - 当前只支持 direct mode；vectored mode 返回 `CpuError::Unimplemented`。
-- Target：抽公共 trap 进入逻辑，但保持上述位更新顺序。
 
 ### 1.7 中断
 
@@ -124,7 +122,6 @@ Cpu::pending_interrupt(&self) -> Option<u32>
 - `STIP/SSIP` 等软件位不被设备覆盖。
 - 优先级：MEI > MSI > MTI > SEI > SSI > STI。
 - 是否可接收由当前特权级、`mideleg`、`mstatus.MIE/SIE` 共同决定。
-- Target：`BusRouter` 侧接口明确“poll + service”副作用。
 
 ## 2. Bus
 
@@ -299,7 +296,6 @@ Machine::peek / disasm_at / disasm_range / eval
 - `peek` 无副作用。
 - `disasm` 通过无副作用 peek 读取。
 - `eval` 只使用调试读路径，不影响 guest 状态。
-- Target：迁入 `Debugger` / `Inspection`，不改变前端 API。
 
 ## 5. Config
 
@@ -341,9 +337,9 @@ Config::with_boot_dtb(self) -> Result<Config, ConfigError>
 | `MachineError::SegmentOutOfRange` | Machine | 镜像段非法 |
 | `ConfigError` | Config | 配置范围/重叠/尺寸非法 |
 
-## 7. 兼容性要求
+## 7. 公共 API 约束
 
-计划中的拆分和接口重构必须保持：
+当前实现必须保持：
 
 - `Cpu::step` 公共签名
 - `Bus` trait 的访问语义

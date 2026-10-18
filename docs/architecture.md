@@ -135,16 +135,14 @@ Machine::step_once
   → Machine RunState
 ```
 
-### 当前偏差
+### 关键约束
 
-- `Cpu::step()` 是 cycle 同步的唯一入口；`Machine::step_once()` 不再重复调用。
-- `BusRouter::service_interrupts()` 明确带有副作用：读取设备 IRQ line、调用 `irq_assert` 更新 PLIC pending，并返回 cause。
-- CSR 读取已拆为 `debug_csr_read()` 与 `architectural_csr_read()`；前者返回 `Option`，后者对未实现 CSR 返回 illegal。
-- `Machine` 仍直接包含调试、反序列化、帧缓冲与反汇编方法。
+- `Cpu::step()` 是 cycle 同步的唯一入口。
+- `BusRouter::service_interrupts()` 读取设备 IRQ line、更新 PLIC pending，并返回 cause。
+- CSR 读取分为 `debug_csr_read()` 与 `architectural_csr_read()`。
+- `Machine` 包含调试、反序列化、帧缓冲与反汇编方法。
 
-这些偏差在 [`refactor-plan.md`](refactor-plan.md) 中有对应阶段。
-
-## 4. 模块边界目标
+## 4. 模块边界
 
 ### `rremu-cpu`
 
@@ -206,16 +204,5 @@ lib.rs       Config / Overrides / resolve / validate
 | 修改地址映射 | `Machine` 构造阶段 |
 | 修改断点/监视点 | `DebugController` |
 | 修改事件环 | `EventSink` 实现 |
-| 修改 DTB 放置 | `Machine` 构造阶段（Target） |
+| 修改 DTB 放置 | `Machine` 构造阶段 |
 | 修改 trap handler | `rremu-am::cte` 注册接口 |
-
-## 6. 当前已知结构风险
-
-| 风险 | 位置 | 处理阶段 |
-|---|---|---|
-| CPU 单文件过大 | `rremu-cpu/src/lib.rs` | 3 |
-| Machine 混合核心/调试/前端 | `rremu-machine/src/lib.rs` | 4 |
-| Bus 中断聚合有隐藏副作用 | `rremu-bus/src/lib.rs` | 5 |
-| Config 解析后仍可修改 | `rremu-config/src/lib.rs` | 5 |
-| HAL 裸静态状态分散 | `rremu-am` | 6 |
-| 重复 cycle 同步 | Machine/CPU | 5 |
