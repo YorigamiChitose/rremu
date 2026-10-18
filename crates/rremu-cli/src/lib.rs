@@ -432,7 +432,13 @@ impl Repl {
                         self.machine.uart_push_input(b);
                     }
                 }
-                Ok(_) => {} // mouse/resize/paste 暂忽略；paste 处理 TODO
+                Ok(crossterm::event::Event::Paste(text)) => {
+                    // bracketed paste：按原始文本顺序送入 UART。
+                    for byte in text.bytes() {
+                        self.machine.uart_push_input(byte);
+                    }
+                }
+                Ok(_) => {} // mouse/resize 暂忽略
                 Err(e) => {
                     eprintln!("\r\nrremu: event read error: {e}");
                     break;
