@@ -3,7 +3,7 @@
 > ⚠️ **本项目为 vibe coding 产物**：代码主要由 AI 在人工需求约束与审查下生成，
 > 仅供学习/实验用途，不保证工程质量与长期维护。请以源码为准。
 
-一个 **RV32IMC_Zicsr（最简 M-mode）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
+一个 **RV32IMAC_Zicsr（M/S/U 三级特权）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
 提供 GDB 风格 CLI 调试器与 ratatui TUI 两种前端，设备经 trait 可插拔。
 
 ## 特性
@@ -27,6 +27,27 @@
 - **调试能力**：断点、监视点、表达式求值（ABI 寄存器名 / `*addr` 解引用 /
   C 风格运算符）、无副作用内存 peek、事件环
 - **退出约定**：M-mode `ecall` 且 `a7 == 0xCAFE_0000`（`EXIT_MAGIC`）为退出信号通道，模拟器以 `a0`（x10）为退出码终止并发出 `EmuEvent::Halt { code }`；syscon poweroff 发出 `EmuEvent::PowerOff`（退出码 0），reboot 发出 `EmuEvent::Reboot`（退出码 2）。其余 `ecall`（含 `a7 == -1` 的 AM yield）走标准 ecall-from-M 陷阱；`ebreak`/`c.ebreak` 走标准 breakpoint 陷阱
+
+## 当前状态
+
+已完成：
+
+- RV32IMAC + Zicsr，M/S/U 三级特权
+- Sv32 页表、S 级中断、PMP 强制访问控制
+- OpenSBI v1.9 启动
+- Linux 6.12 RV32 + 内置 initramfs 启动
+- `/init` 用户态、UART 输出、syscon poweroff
+- rremu-test 端到端回归 54 个用例
+
+当前没有进行中的阶段规划或路线图。
+
+## 已知限制
+
+- vectored `mtvec`/`stvec` 未实现；`cte_vectored_mtvec` 按 Fault 断言。
+- `wfi` 按 NOP 执行。
+- 不提供磁盘、真实块设备、virtio-blk 或磁盘 rootfs；Linux 使用内置 initramfs。
+- Goldfish RTC 仅实现时间/alarm 寄存器，不注入 alarm IRQ。
+- syscon `0x5555` poweroff 退出码为 0；`0x7777` reboot 退出码为 2。
 
 ## 架构
 
@@ -167,13 +188,24 @@ rremu 已具备运行 **OpenSBI v1.9（RV32 generic FW_JUMP）** 的能力（S-m
 cd platforms && ./run-opensbi.sh        # 或 --tui
 ```
 
-路线图（RT-Thread → OpenSBI → Linux）与已知限制见 [`ROADMAP.md`](ROADMAP.md)。
+平台说明见 [`platforms/README.md`](platforms/README.md)，端到端测试见 [`../rremu-test`](../rremu-test)。
 
 Linux 启动脚本（需要 RV32 Linux Image，建议内置 initramfs）：
 
 ```sh
-cd platforms
-LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
+# 构建固定 initramfs 和 Linux Image
+./platforms/linux-test/build-linux.sh
+
+# 构建 DTB/OpenSBI FW_PAYLOAD 并启动 Linux
+./platforms/run-linux.sh        # 或 --tui
+```
+
+成功时退出码为 0，并输出：
+
+```text
+rremu: linux userspace init reached
+reboot: Power down
+Program exited with code 0.
 ```
 
 ## 测试

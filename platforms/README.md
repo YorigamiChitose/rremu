@@ -78,10 +78,19 @@ LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
 
 脚本使用：
 
-- `rremu-linux.dts`：128MiB RAM，`bootargs = "console=ttyS0 earlycon"`
+- `rremu-linux.dts`：128MiB RAM，`bootargs = "console=ttyS0 earlycon keep_bootcon"`
 - OpenSBI `FW_PAYLOAD`，payload offset `0x400000`（RV32 Linux Image 头要求 4MiB）
 - DTB/FDT 地址 `0x87f00000`
 - rremu `-m 128M`
 
 如果 Linux Image 未内置 initramfs，需要自行构建带 initramfs 的内核或改用其他
 initrd 注入方案。
+
+Linux 成功启动后应看到：
+
+```text
+Run /init as init process
+rremu: linux userspace init reached
+reboot: Power down
+Program exited with code 0.
+```
