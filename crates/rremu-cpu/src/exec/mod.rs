@@ -5,6 +5,7 @@ use rremu_isa::Instruction;
 
 use super::{Cpu, TrapErr};
 
+mod csr;
 mod system;
 
 mod memory;
@@ -227,54 +228,12 @@ impl Cpu {
             Instruction::FenceI => {}
             Instruction::Ecall => return Err(self.ecall_trap()),
             Instruction::Ebreak => return Err(Self::breakpoint_trap()),
-            Instruction::Csrrw { rd, csr, rs1 } => {
-                self.check_csr_access(csr, true, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                self.csr_write(csr, x(self, rs1));
-                set!(rd, old);
-            }
-            Instruction::Csrrs { rd, csr, rs1 } => {
-                let mask = x(self, rs1);
-                self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                if mask != 0 {
-                    self.csr_write(csr, old | mask);
-                }
-                set!(rd, old);
-            }
-            Instruction::Csrrc { rd, csr, rs1 } => {
-                let mask = x(self, rs1);
-                self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                if mask != 0 {
-                    self.csr_write(csr, old & !mask);
-                }
-                set!(rd, old);
-            }
-            Instruction::Csrrwi { rd, csr, zimm } => {
-                self.check_csr_access(csr, true, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                self.csr_write(csr, u32::from(zimm));
-                set!(rd, old);
-            }
-            Instruction::Csrrsi { rd, csr, zimm } => {
-                let mask = u32::from(zimm);
-                self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                if mask != 0 {
-                    self.csr_write(csr, old | mask);
-                }
-                set!(rd, old);
-            }
-            Instruction::Csrrci { rd, csr, zimm } => {
-                let mask = u32::from(zimm);
-                self.check_csr_access(csr, mask != 0, raw)?;
-                let old = self.architectural_csr_read(csr)?;
-                if mask != 0 {
-                    self.csr_write(csr, old & !mask);
-                }
-                set!(rd, old);
-            }
+            Instruction::Csrrw { rd, csr, rs1 } => self.exec_csrrw(rd, csr, rs1, raw)?,
+            Instruction::Csrrs { rd, csr, rs1 } => self.exec_csrrs(rd, csr, rs1, raw)?,
+            Instruction::Csrrc { rd, csr, rs1 } => self.exec_csrrc(rd, csr, rs1, raw)?,
+            Instruction::Csrrwi { rd, csr, zimm } => self.exec_csrrwi(rd, csr, zimm, raw)?,
+            Instruction::Csrrsi { rd, csr, zimm } => self.exec_csrrsi(rd, csr, zimm, raw)?,
+            Instruction::Csrrci { rd, csr, zimm } => self.exec_csrrci(rd, csr, zimm, raw)?,
             Instruction::Mret => next_pc = self.exec_mret(),
             // ---- C extension (RV32C) ----
             Instruction::CAddi4spn { rd, imm } => set!(rd, x(self, 2u8).wrapping_add(imm)),
