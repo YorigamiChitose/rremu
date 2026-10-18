@@ -1,16 +1,15 @@
 //! rremu-machine：Machine/Builder/快照/控制 —— 前端（cli/tui/window）唯一入口。
 
 use std::collections::{BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
-use rremu_config::Config;
-use rremu_cpu::{Cpu, StepOutcome};
+use rremu_cpu::Cpu;
 use rremu_decode::{decode16, decode32, instr_len};
-use rremu_devices::{Clint, Framebuffer, Plic, Ram, Rtc, Syscon, Uart};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::csr;
 use rremu_loader::Image;
+#[cfg(test)]
+use rremu_config::Config;
 use thiserror::Error;
 
 // 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa/bus）。
@@ -19,8 +18,10 @@ pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
 pub use rremu_isa::{reg_name, Instruction, Priv};
 
 pub mod dump;
+mod builder;
 mod debugger;
 mod events;
+mod runtime;
 mod framebuffer;
 mod snapshot;
 pub mod term;
@@ -29,7 +30,6 @@ use term::Terminal;
 
 pub use debugger::{DebugController, Watchpoint};
 pub use events::RingCollector;
-pub(crate) use events::MachineSink;
 pub use framebuffer::FramebufferFrame;
 pub use snapshot::{CsrSnapshot, MachineSnapshot, TraceEntry};
 pub(crate) use framebuffer::FramebufferAccessor;
@@ -79,109 +79,6 @@ pub enum MachineError {
     ResetFailed(String),
 }
 
-impl Machine {
-    /// 从配置 + 可选镜像构造机器（配置的唯一入口）。
-    ///
-    /// 配置合法性与校验已由 `rremu_config::Config`（`resolve`/`validate`）完成；
-    /// 此处仅做依赖镜像的段范围校验与设备映射。
-    pub fn from_config(cfg: &Config, image: Option<Image>) -> Result<Machine, MachineError> {
-        let ram_base = cfg.layout.ram_base;
-        let ram_size = cfg.layout.ram_size;
-        // 防御性：配置应已校验；overflow 不可能（保留兜底）
-        let ram_end = ram_base
-            .checked_add(ram_size)
-            .ok_or_else(|| MachineError::InvalidConfig("ram range overflows".into()))?;
-
-        let mut bus = BusRouter::new();
-        bus.map(ram_base..ram_end, Box::new(Ram::new(ram_base, ram_size)))?;
-        if let Some(d) = cfg.layout.uart {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Uart::new(d.base)))?;
-        }
-        if let Some(d) = cfg.layout.clint {
-            // CLINT 范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Clint::new(d.base)))?;
-        }
-        if let Some(d) = cfg.layout.plic {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Plic::new(d.base)))?;
-        }
-        if let Some(d) = cfg.layout.syscon {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Syscon::new(d.base)))?;
-        }
-        if let Some(d) = cfg.layout.rtc {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Rtc::new(d.base)))?;
-        }
-        if let Some(f) = cfg.layout.fb {
-            let fb_size = f
-                .width
-                .checked_mul(f.height)
-                .and_then(|n| n.checked_mul(f.bpp))
-                .ok_or_else(|| MachineError::InvalidConfig("framebuffer size overflow".into()))?;
-            bus.map(
-                f.base..f.base.wrapping_add(fb_size),
-                Box::new(Framebuffer::new(f.base, f.width, f.height)),
-            )?;
-        }
-
-        if let Some(img) = &image {
-            for seg in &img.segments {
-                let end = seg.addr.checked_add(seg.data.len() as u32).ok_or(
-                    MachineError::SegmentOutOfRange {
-                        addr: seg.addr,
-                        len: seg.data.len(),
-                        ram_base,
-                        ram_end,
-                    },
-                )?;
-                if seg.addr < ram_base || end > ram_end {
-                    return Err(MachineError::SegmentOutOfRange {
-                        addr: seg.addr,
-                        len: seg.data.len(),
-                        ram_base,
-                        ram_end,
-                    });
-                }
-            }
-            for seg in &img.segments {
-                bus.write_bytes(seg.addr, &seg.data)?;
-            }
-        }
-
-        let entry = cfg
-            .entry
-            .or_else(|| image.as_ref().map(|i| i.entry))
-            .ok_or(MachineError::NoEntry)?;
-
-        let fb = match cfg.layout.fb {
-            Some(f) => FramebufferAccessor::new(Some(f.base), f.width, f.height),
-            None => FramebufferAccessor::new(None, 0, 0),
-        };
-
-        let mut machine = Machine {
-            cpu: Cpu::new(entry),
-            bus,
-            collector: RingCollector::new(),
-            image,
-            ram_base,
-            uart_base: cfg.layout.uart.map(|d| d.base),
-            clint_base: cfg.layout.clint.map(|d| d.base),
-            entry,
-            state: RunState::Idle,
-            terminal: Terminal::new(),
-            uart_sink: None,
-            trace: VecDeque::new(),
-            trace_capacity: cfg.diag.trace_capacity,
-            last_trap: None,
-            trace_at_trap: None,
-            dbg: DebugController::new(),
-            fb,
-        };
-        machine.set_event_ring_capacity(cfg.diag.event_capacity, cfg.diag.uart_event_capacity);
-        // 启动参数注入：a0=hartid、a1=dtb（qemu-virt 约定）
-        machine.cpu.set_args(cfg.boot.hartid, cfg.boot.dtb.unwrap_or(0));
-        Ok(machine)
-    }
-}
-
 /// 机器实例：CPU + 总线 + 设备 + 事件收集。
 pub struct Machine {
     cpu: Cpu,
@@ -209,109 +106,9 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// 单步执行 n 条；中途退出（Halt/Trap）即返回。
-    pub fn step_n(&mut self, n: u64) -> RunResult {
-        self.state = RunState::Running;
-        for _ in 0..n {
-            if let Some(rr) = self.step_once() {
-                return rr;
-            }
-        }
-        self.state = RunState::Paused;
-        RunResult::Paused
-    }
-
-    /// 全速运行；pause 置位后停止（Ctrl+C 由前端控制）。
-    /// 非致命陷入（ecall/ebreak 等）已被 CPU 重定向至 mtvec，run 不停止；
-    /// 仅 Halt、断点/监视点命中或 pause 置位时返回。
-    pub fn run(&mut self, pause: &AtomicBool) -> RunResult {
-        self.state = RunState::Running;
-        loop {
-            if pause.load(Ordering::Relaxed) {
-                self.state = RunState::Paused;
-                return RunResult::Paused;
-            }
-            match self.step_once() {
-                Some(RunResult::Exited { code }) => {
-                    self.state = RunState::Exited(code);
-                    return RunResult::Exited { code };
-                }
-                Some(RunResult::Faulted { reason }) => {
-                    return RunResult::Faulted { reason };
-                }
-                Some(rr @ (RunResult::HitBreakpoint { .. } | RunResult::HitWatchpoint { .. })) => {
-                    self.state = RunState::Paused;
-                    return rr;
-                }
-                Some(RunResult::Paused) | None => {}
-            }
-        }
-    }
-
-    /// 执行一条指令；需要停止时返回 Some(RunResult)。
-    /// 断点在取指前检查（命中则不执行该指令）；监视点在执行后检查。
-    /// 注意：陷入（ecall/ebreak/misaligned/中断）是非致命的 —— CPU 已将 pc
-    /// 重定向至 mtvec，陷入向量代码将在下一轮 step_once 中执行。state 保持
-    /// Running，以便前端可继续 c/si；陷入信息经 EmuEvent::Trap 进入 mem 环。
-    fn step_once(&mut self) -> Option<RunResult> {
-        self.bus.set_cycle(self.cpu.cycle());
-        let pc_before = self.cpu.pc();
-
-        // 断点：命中则不执行，直接返回；刚命中过的地址放行一次（越过断点）
-        if let Some(rr) = self.dbg.check_breakpoint(pc_before) {
-            self.state = RunState::Paused;
-            return Some(rr);
-        }
-        self.dbg.clear_suppress();
-
-        let stepped = {
-            let mut sink = MachineSink::new(
-                &mut self.collector,
-                &mut self.terminal,
-                &mut self.uart_sink,
-            );
-            self.cpu.step(&mut self.bus, &mut sink)
-        };
-        match stepped {
-            Ok(StepOutcome::Executed { len, bits, .. }) => {
-                self.push_trace(pc_before, bits, len);
-                if let Some(code) = self.collector.take_halt() {
-                    self.state = RunState::Exited(code);
-                    return Some(RunResult::Exited { code });
-                }
-                // 监视点：检查每个被跟踪表达式的值是否变化
-                if let Some(rr) = self.check_watchpoints(pc_before) {
-                    self.state = RunState::Paused;
-                    return Some(rr);
-                }
-                None
-            }
-            // ebreak/c.ebreak 宿主陷阱：以 a0 为退出码终止，发出 Halt 事件
-            Ok(StepOutcome::Exited { code }) => {
-                self.collector.emit(EmuEvent::Halt { code });
-                self.state = RunState::Exited(code);
-                Some(RunResult::Exited { code })
-            }
-            // 非致命陷入：CPU 已重定向 pc 至 mtvec，本步无停止结果
-            Ok(StepOutcome::Trapped { .. }) => {
-                let c = self.cpu.csr_state();
-                self.last_trap = Some((c.mcause, c.mepc, c.mtval));
-                // 冻结崩溃前的调用路径（此后 handler 指令不再污染）
-                self.trace_at_trap = Some(self.trace.iter().copied().collect());
-                None
-            }
-            Err(e) => {
-                // 不可恢复错误（如 vectored mtvec 未实现）：终止模拟，避免静默死循环。
-                let reason = e.to_string();
-                self.state = RunState::Faulted(reason.clone());
-                Some(RunResult::Faulted { reason })
-            }
-        }
-    }
-
     /// 检查所有监视点：求值表达式得到当前值，与上次值比较。
     /// 变化则返回 HitWatchpoint（pc 为引起变化的指令）并更新 last_value / hit_count。
-    fn check_watchpoints(&mut self, pc: u32) -> Option<RunResult> {
+    pub(crate) fn check_watchpoints(&mut self, pc: u32) -> Option<RunResult> {
         let entries = self.dbg.watchpoint_entries();
         for (id, expr) in entries {
             // 值语义：EXPR 求值结果就是被监视的值（如 *ADDR 解引用、x5 寄存器）。
