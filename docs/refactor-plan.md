@@ -4,6 +4,23 @@
 >
 > 全项目函数级矩阵见 [`../../CORE-REVIEW-AND-REFACTOR-PLAN.md`](../../CORE-REVIEW-AND-REFACTOR-PLAN.md)。
 
+## 当前进度
+
+```text
+阶段 1：文档与基线        完成
+阶段 2：Bus/Config/ISA 拆分 完成
+阶段 3：CPU 拆分          下一步
+```
+
+本阶段提交：
+
+```text
+a647ba6 docs(core): define architecture, interfaces, and invariants
+7f580ec refactor(bus): split access, event, device and router modules
+167d9db refactor(config): split defaults, layout, boot, and error modules
+1fc1c11 refactor(isa): split types, instructions, CSR, and cause modules
+```
+
 ## 1. 原则
 
 ```text
