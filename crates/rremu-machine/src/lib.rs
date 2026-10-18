@@ -20,11 +20,14 @@ pub use rremu_isa::{reg_name, Instruction, Priv};
 
 pub mod dump;
 mod debugger;
+mod framebuffer;
 pub mod term;
 
 use term::Terminal;
 
 pub use debugger::{DebugController, Watchpoint};
+pub use framebuffer::FramebufferFrame;
+pub(crate) use framebuffer::FramebufferAccessor;
 
 /// 运行状态（快照展示用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,51 +51,6 @@ pub enum RunResult {
     Faulted { reason: String },
 }
 
-/// 帧缓冲访问器：持有帧缓冲配置（基址/尺寸），封装对总线帧源设备的访问。
-pub struct FramebufferAccessor {
-    base: Option<u32>,
-    width: u32,
-    height: u32,
-}
-
-impl FramebufferAccessor {
-    fn new(base: Option<u32>, width: u32, height: u32) -> Self {
-        Self { base, width, height }
-    }
-
-    fn dimensions(&self) -> Option<(u32, u32)> {
-        self.base.map(|_| (self.width, self.height))
-    }
-
-    fn base(&self) -> Option<u32> {
-        self.base
-    }
-
-    /// 全帧只读访问（不清 dirty）。
-    fn full_frame<'a>(&self, bus: &'a mut BusRouter) -> Option<FramebufferFrame<'a>> {
-        let fb = bus.device_mut(self.base?)?.as_frame_source()?;
-        Some(FramebufferFrame {
-            width: fb.width(),
-            height: fb.height(),
-            pixels: fb.frame(),
-        })
-    }
-
-    /// dirty 驱动零拷贝访问：dirty 时清标志并返回帧，否则 None。
-    fn dirty_frame<'a>(&self, bus: &'a mut BusRouter) -> Option<FramebufferFrame<'a>> {
-        let fb = bus.device_mut(self.base?)?.as_frame_source()?;
-        if !fb.is_dirty() {
-            return None;
-        }
-        fb.clear_dirty();
-        Some(FramebufferFrame {
-            width: fb.width(),
-            height: fb.height(),
-            pixels: fb.frame(),
-        })
-    }
-}
-
 /// 反汇编行（TUI 前端用）。
 #[derive(Debug, Clone)]
 pub struct DisasmLine {
@@ -110,18 +68,6 @@ pub struct TraceEntry {
     pub len: u8,
 }
 
-
-/// 帧缓冲零拷贝引用（窗口/TUI 刷新用）。
-///
-/// `pixels` 生命周期绑定到 `&mut Machine`，调用方需在再次修改 machine 前
-/// 用完（如完成像素拷贝/上屏）。dirty 驱动的获取会消费一次 dirty 标志；
-/// 全量获取则不改变 dirty。
-#[derive(Debug)]
-pub struct FramebufferFrame<'a> {
-    pub width: u32,
-    pub height: u32,
-    pub pixels: &'a [u32],
-}
 
 #[derive(Debug, Error)]
 pub enum MachineError {
