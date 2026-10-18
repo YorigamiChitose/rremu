@@ -100,9 +100,9 @@ loader -> 无运行时依赖
 - host 路径
 - 覆盖后的解析结果
 
-当前 `Config::place_dtb()` 仍会修改配置，见“当前偏差”。
+当前 DTB 地址通过 `Config::dtb_address()` 纯计算，`Config::with_boot_dtb()` 返回新配置；不再提供 `&mut self` 的 `place_dtb()`。
 
-Target：解析后的配置不可变；DTB 放置属于 `Machine` 构造阶段。
+Target：完整的 `ResolvedConfig` 不可变边界仍待后续收口。
 
 ### 2.5 Device
 

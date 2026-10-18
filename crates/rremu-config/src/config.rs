@@ -84,8 +84,9 @@ impl Config {
         Ok(())
     }
 
-    /// 将 DTB 放到 RAM 顶部下方 `DTB_RESERVE` 处（8 字节对齐），并写入 `boot.dtb`。
-    pub fn place_dtb(&mut self) -> Result<u32, ConfigError> {
+    /// 计算 DTB 地址，不修改配置。
+    /// 地址位于 RAM 顶部下方 `DTB_RESERVE` 处，8 字节对齐。
+    pub fn dtb_address(&self) -> Result<u32, ConfigError> {
         let ram_end = self
             .layout
             .ram_base
@@ -97,9 +98,13 @@ impl Config {
         if self.layout.ram_size < DTB_RESERVE {
             return Err(ConfigError::DtbReserveTooLarge { ram_size: self.layout.ram_size });
         }
-        let addr = (ram_end - DTB_RESERVE) & !7;
-        self.boot.dtb = Some(addr);
-        Ok(addr)
+        Ok((ram_end - DTB_RESERVE) & !7)
+    }
+
+    /// 返回带 DTB 放置地址的新配置；原配置不被修改。
+    pub fn with_boot_dtb(mut self) -> Result<Config, ConfigError> {
+        self.boot.dtb = Some(self.dtb_address()?);
+        Ok(self)
     }
 
     /// 解析入口：默认值 + 外部覆盖 + 校验 → 统一 `Config`。

@@ -308,20 +308,20 @@ Config::default()
 Config::apply(&mut self, &Overrides)
 Config::validate(&self) -> Result<(), ConfigError>
 Config::resolve(Overrides) -> Result<Config, ConfigError>
-Config::place_dtb(&mut self) -> Result<u32, ConfigError>
+Config::dtb_address(&self) -> Result<u32, ConfigError>
+Config::with_boot_dtb(self) -> Result<Config, ConfigError>
 ```
 
 当前契约：
 
 - `resolve` 合并默认值与覆盖项并校验。
-- `place_dtb` 修改配置并返回地址。
+- `dtb_address` 只计算地址，不修改配置。
+- `with_boot_dtb` 返回带 DTB 地址的新配置。
+- 不再提供 `&mut self` 的 `place_dtb()`。
 
 Target：
 
-- `resolve` 返回不可变的 `ResolvedConfig`。
-- `place_dtb` 从 Config 移除。
-- DTB 放置由 `Machine` 构造阶段完成。
-- 之后的代码不得在运行期修改布局/启动配置。
+- 完整的 `ResolvedConfig` 不可变边界仍待后续收口。
 
 ## 6. 错误语义
 

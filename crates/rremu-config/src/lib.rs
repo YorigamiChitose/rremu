@@ -26,13 +26,14 @@ mod tests {
 
     #[test]
     fn place_dtb_at_ram_top_reserve() {
-        let mut c = Config::default();
-        assert_eq!(c.place_dtb().unwrap(), 0x80f0_0000);
+        let c = Config::default();
+        assert_eq!(c.dtb_address().unwrap(), 0x80f0_0000);
+        let c = c.with_boot_dtb().unwrap();
         assert_eq!(c.boot.dtb, Some(0x80f0_0000));
 
         let mut small = Config::default();
         small.layout.ram_size = 0x1000;
-        assert!(matches!(small.place_dtb(), Err(ConfigError::DtbReserveTooLarge { .. })));
+        assert!(matches!(small.dtb_address(), Err(ConfigError::DtbReserveTooLarge { .. })));
     }
 
     #[test]

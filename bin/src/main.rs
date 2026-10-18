@@ -98,7 +98,7 @@ fn try_main() -> anyhow::Result<i32> {
 
     // 外部参数 → 统一 Config（唯一解析入口）
     let mem_size = parse_size(&args.mem)?;
-    let mut cfg = Config::resolve(Overrides {
+    let cfg = Config::resolve(Overrides {
         ram_base: Some(args.base),
         ram_size: Some(mem_size),
         no_fb: args.no_fb,
@@ -113,9 +113,11 @@ fn try_main() -> anyhow::Result<i32> {
         Some(p) => Some(std::fs::read(p).with_context(|| format!("failed to read DTB: {p}"))?),
         None => None,
     };
-    if dtb.is_some() {
-        cfg.place_dtb().context("invalid DTB placement")?;
-    }
+    let cfg = if dtb.is_some() {
+        cfg.with_boot_dtb().context("invalid DTB placement")?
+    } else {
+        cfg
+    };
 
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
