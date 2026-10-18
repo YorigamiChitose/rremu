@@ -644,6 +644,43 @@ mod tests {
     }
 
     #[test]
+    fn watchpoint_hits_after_value_change() {
+        let base = 0x8000_0000;
+        // addi x5, x0, 1
+        let image = Image {
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: 0x0010_0293u32.to_le_bytes().to_vec(),
+            }],
+            entry: base,
+        };
+        let mut machine = test_machine(base, 0x1000, image);
+        let expr = rremu_expr::parse("x5").unwrap();
+        let id = machine.add_watchpoint(expr);
+        let rr = machine.step_n(1);
+        assert_eq!(rr, RunResult::HitWatchpoint { id, pc: base, old: 0, new: 1 });
+    }
+
+    #[test]
+    fn run_honors_pause_flag() {
+        let base = 0x8000_0000;
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
+        let pause = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(machine.run(&pause), RunResult::Paused);
+        assert_eq!(machine.state(), RunState::Paused);
+    }
+
+    #[test]
+    fn framebuffer_dirty_frame_consumes_dirty_once() {
+        let base = 0x8000_0000;
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
+        let fb = machine.framebuffer_base().expect("default framebuffer");
+        machine.write_mem(fb, &[0x00, 0x00]).unwrap();
+        assert!(machine.framebuffer_dirty_frame().is_some());
+        assert!(machine.framebuffer_dirty_frame().is_none());
+    }
+
+    #[test]
     fn reset_clears_uart_and_clint_state() {
         let base = 0x8000_0000;
         let mut machine = test_machine(base, 0x1000, nop_image(base));
