@@ -67,6 +67,10 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     dtb: Option<String>,
 
+    /// 从文件/FIFO 持续读取 UART 输入；默认不读取（仅 CLI 模式）
+    #[arg(long, value_name = "FILE", conflicts_with = "tui")]
+    uart_in: Option<String>,
+
     /// 为 PIE/可重定位镜像指定加载基址（段与入口整体偏移；OpenSBI 用）
     #[arg(long, value_name = "ADDR", value_parser = parse_addr)]
     load_base: Option<u32>,
@@ -105,6 +109,7 @@ fn try_main() -> anyhow::Result<i32> {
         entry: args.entry,
         elf: Some(args.elf.clone()),
         dump_on_exit: args.dump_on_exit.clone(),
+        uart_in: args.uart_in.clone(),
     })
     .context("invalid configuration")?;
 

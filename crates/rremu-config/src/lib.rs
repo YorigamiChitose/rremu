@@ -68,6 +68,7 @@ mod tests {
             entry: Some(0x8000_1000),
             elf: Some("prog.elf".into()),
             dump_on_exit: Some("out.json".into()),
+            uart_in: Some("uart.in".into()),
         })
         .unwrap();
         assert_eq!(cfg.layout.ram_base, 0x9000_0000);
@@ -76,6 +77,7 @@ mod tests {
         assert_eq!(cfg.entry, Some(0x8000_1000));
         assert_eq!(cfg.paths.elf.as_deref(), Some("prog.elf"));
         assert_eq!(cfg.paths.dump_on_exit.as_deref(), Some("out.json"));
+        assert_eq!(cfg.paths.uart_in.as_deref(), Some("uart.in"));
     }
 
     #[test]

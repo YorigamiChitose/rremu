@@ -20,11 +20,13 @@ pub struct Boot {
     pub dtb: Option<u32>,
 }
 
-/// host 侧路径（dump/ELF）。
+/// host 侧路径（dump/ELF/UART 输入）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Paths {
     pub elf: Option<String>,
     pub dump_on_exit: Option<String>,
+    /// UART 输入源（文件/FIFO）；`None` 表示不自动读取输入。
+    pub uart_in: Option<String>,
 }
 
 impl Default for Diag {

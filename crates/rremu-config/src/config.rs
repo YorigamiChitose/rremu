@@ -61,6 +61,8 @@ pub struct Overrides {
     pub entry: Option<u32>,
     pub elf: Option<String>,
     pub dump_on_exit: Option<String>,
+    /// UART 输入源（文件/FIFO）；`None` 表示不自动读取输入。
+    pub uart_in: Option<String>,
 }
 
 impl Config {
@@ -83,6 +85,9 @@ impl Config {
         }
         if let Some(p) = &ov.dump_on_exit {
             self.paths.dump_on_exit = Some(p.clone());
+        }
+        if let Some(p) = &ov.uart_in {
+            self.paths.uart_in = Some(p.clone());
         }
     }
 

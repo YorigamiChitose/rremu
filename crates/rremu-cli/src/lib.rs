@@ -4,9 +4,13 @@
 //! 以及断点/监视点（`b` / `w` / `info w` / `d`），
 //! 以及 UART 输入（`uart`：进入 raw 模式逐键发给 UART RX，Esc 退出）。
 
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use rremu_config::Config;
 use rremu_expr::{parse as parse_expr, Expr};
@@ -40,6 +44,55 @@ pub struct Repl {
     window_factory: Option<WindowFactory>,
     /// UART 输出已在 machine 事件路径直出，暂停时不再重复 flush。
     uart_direct: bool,
+    /// 可选的 UART 输入源（文件/FIFO）；`None` 表示不自动读取输入。
+    uart_in: Option<Receiver<UartInputEvent>>,
+}
+
+/// UART 输入线程向 REPL 发送的字节块或错误。
+type UartInputEvent = Result<Vec<u8>, String>;
+
+/// 启动后台线程，从文件或 FIFO 持续读取 UART 输入。
+///
+/// - 普通文件读到 EOF 后短暂休眠再读，支持追加写入；
+/// - FIFO 在写端关闭后同样等待下一个写端，不向 guest 注入 EOF；
+/// - 线程只在显式指定 `--uart-in` 时启动，默认路径不受影响。
+fn spawn_uart_input(path: String) -> Option<Receiver<UartInputEvent>> {
+    let (tx, rx) = mpsc::sync_channel::<UartInputEvent>(64);
+    let thread_path = path.clone();
+    let spawned = thread::Builder::new()
+        .name("rremu-uart-in".into())
+        .spawn(move || {
+            let mut file = match File::open(&thread_path) {
+                Ok(file) => file,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("cannot open {thread_path}: {e}")));
+                    return;
+                }
+            };
+            let mut buf = [0u8; 4096];
+            loop {
+                match file.read(&mut buf) {
+                    Ok(0) => thread::sleep(Duration::from_millis(20)),
+                    Ok(n) => {
+                        if tx.send(Ok(buf[..n].to_vec())).is_err() {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        let _ = tx.send(Err(format!("read {thread_path}: {e}")));
+                        break;
+                    }
+                }
+            }
+        });
+    match spawned {
+        Ok(_) => Some(rx),
+        Err(e) => {
+            eprintln!("rremu: failed to start UART input thread: {e}");
+            None
+        }
+    }
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -51,8 +104,8 @@ enum Outcome {
     Faulted(String),
 }
 
-/// 有窗时 cmd_continue 的步进批量：在每批之后泵窗（dirty 上屏 / 否则 poll 关窗）。
-const WINDOW_BATCH: u64 = 1024;
+/// cmd_continue 的步进批量：每批之后注入 UART 输入、泵窗。
+const RUN_BATCH: u64 = 1024;
 
 impl Repl {
     pub fn new(
@@ -69,7 +122,54 @@ impl Repl {
                 let _ = out.flush();
             }
         })));
-        Self { machine, cfg, pause_flag, display: None, window_factory, uart_direct: true }
+        // 默认不读取任何输入；只有显式指定 --uart-in 才启动输入线程。
+        let uart_in = cfg.paths().uart_in.clone().and_then(|path| {
+            eprintln!("rremu: UART input from {path}");
+            spawn_uart_input(path)
+        });
+        Self {
+            machine,
+            cfg,
+            pause_flag,
+            display: None,
+            window_factory,
+            uart_direct: true,
+            uart_in,
+        }
+    }
+
+    /// 从当前可用的输入块注入 UART；不阻塞、不读取 stdin。
+    fn drain_uart_input(&mut self) {
+        let mut chunks = Vec::new();
+        let mut error = None;
+        let mut disconnected = false;
+        if let Some(rx) = self.uart_in.as_ref() {
+            loop {
+                match rx.try_recv() {
+                    Ok(Ok(bytes)) => chunks.push(bytes),
+                    Ok(Err(msg)) => {
+                        error = Some(msg);
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+        }
+        for bytes in chunks {
+            for byte in bytes {
+                self.machine.uart_push_input(byte);
+            }
+        }
+        if let Some(msg) = error {
+            eprintln!("rremu: uart input: {msg}");
+            self.uart_in = None;
+        } else if disconnected {
+            self.uart_in = None;
+        }
     }
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
@@ -200,6 +300,7 @@ impl Repl {
         println!("  info r        Show registers and CSRs");
         println!("  info w        List breakpoints and watchpoints");
         println!("  uart          Enter UART input mode (raw key→byte→UART RX, Esc to exit)");
+        println!("  (startup)     --uart-in FILE reads UART input from FILE/FIFO (default: none)");
         println!("  dump FILE     Write a structured machine-state dump (JSON) to FILE");
         println!("  q             Quit");
     }
@@ -211,17 +312,20 @@ impl Repl {
         }
         self.pause_flag.store(false, Ordering::Relaxed);
 
-        // 有显示后端（或窗口可能懒启动）时自行跑 step_n 循环：每批先
-        // ensure_window（fb 首次写入时拉起窗口），再泵后端（dirty 上屏 /
-        // 否则 poll 关窗）；确定无窗可能时走 machine.run 全速循环（仅靠
-        // pause_flag 停机）。
+        // 有显示后端、窗口可能懒启动，或配置了 UART 输入源时，自行跑
+        // step_n 循环：每批注入输入、ensure_window（fb 首次写入时拉起窗口），
+        // 再泵后端；否则走 machine.run 全速循环（仅靠 pause_flag 停机）。
         let mut display_closed = false;
-        let result = if self.display.is_some() || self.window_factory.is_some() {
+        let need_batch = self.display.is_some()
+            || self.window_factory.is_some()
+            || self.uart_in.is_some();
+        let result = if need_batch {
             loop {
                 if self.pause_flag.load(Ordering::Relaxed) {
                     break RunResult::Paused;
                 }
-                let step_rr = self.machine.step_n(WINDOW_BATCH);
+                self.drain_uart_input();
+                let step_rr = self.machine.step_n(RUN_BATCH);
                 self.ensure_window();
                 if !self.pump_display() {
                     display_closed = true;
@@ -261,6 +365,7 @@ impl Repl {
             return Outcome::Continue;
         }
         for _ in 0..n {
+            self.drain_uart_input();
             let result = self.machine.step_n(1);
             if let Some((pc, instr)) = self.machine.last_instruction() {
                 println!("0x{pc:08x}:  {instr}");
