@@ -81,7 +81,7 @@ rremu-expr             表达式词法/解析/求值（独立叶 crate）
 `rremu-config` 集中 rremu 侧所有硬编码值与可变参数，是**唯一真相源**：
 
 - **默认值**（设备基址/尺寸、Framebuffer、诊断容量）以 `pub const` 集中定义；
-- **外部参数**（`--base` / `--mem` / `--entry` / `--no-fb` / `--dump-on-exit`）
+- **外部参数**（`--base` / `--mem` / `--entry` / `--no-fb` / `--dump-on-exit` / `--uart-in`）
   经纯数据 `Overrides` 传入，由 `Config::resolve` 合并默认值并校验
   （`ConfigError`：RAM 为 0/溢出、FB 维度为 0/溢出）；
 - `Machine::from_config(&Config, image)` 据此映射设备并构造机器；CLI/TUI 前端
@@ -127,6 +127,7 @@ rremu --tui <ELF>
 | `--entry <ADDR>` | 覆盖 ELF 入口 |
 | `--no-fb` | 不映射 framebuffer 设备，也不开窗 |
 | `--dump-on-exit <FILE>` | 程序终止时自动写出机器状态 dump（JSON，默认关闭） |
+| `--uart-in <FILE>` | 从文件/FIFO 持续读取字节注入 UART RX；默认不读取任何输入（仅 CLI） |
 | `--dtb <FILE>` | 加载设备树 DTB 到 RAM 并以 boot `a1` 传给 guest（OpenSBI/Linux 需要） |
 | `--load-base <ADDR>` | 为 PIE/可重定位镜像指定加载基址（段与入口整体偏移；OpenSBI 用） |
 | `-v...` | 日志级别：-v info / -vv debug / -vvv trace |
@@ -152,6 +153,23 @@ CLI 模式下 UART 输出会实时直写 stdout，不再等待暂停；可直接
 
 ```sh
 rremu firmware.elf -c c > uart.log
+```
+
+默认不读取 stdin 或任何文件，UART RX 为空；需要自动喂输入时显式指定
+`--uart-in`（普通文件读到末尾后会等待追加，FIFO 会等待下一个写端）。
+输入会从 guest 启动阶段就开始注入；对 Linux 如果希望等 shell 提示符出现后再输入，
+建议用 FIFO（或等 guest 启动完成后再启动输入写端）。手动调试仍可用 REPL 的 `uart` 命令。
+
+```sh
+# 从 FIFO 输入；写端关闭后不会向 guest 注入 EOF
+mkfifo /tmp/rremu.in
+rremu firmware.elf --uart-in /tmp/rremu.in -c c &
+# Linux 的 8250 tty 首次打开时可能消费最早两个字节，前面补两个换行最稳
+printf '\n\nuname -a\n' > /tmp/rremu.in
+
+# 从普通文件持续输入：先创建空文件，等 guest 启动后再追加
+rremu firmware.elf --uart-in commands.txt -c c &
+printf '\n\nuname -a\n' >> commands.txt
 ```
 
 ### TUI 按键
