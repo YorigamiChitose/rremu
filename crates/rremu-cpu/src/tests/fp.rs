@@ -1,4 +1,5 @@
 use super::*;
+use rremu_fp::{Fp32, Fp64};
 
 fn fs(h: &Harness) -> u32 {
     h.cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::MSTATUS_FS_MASK
@@ -87,4 +88,258 @@ fn sd_is_read_only_and_sstatus_views_fs() {
     h.cpu.csr_write(csr::SSTATUS, csr::MSTATUS_FS_DIRTY);
     assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
     assert_eq!(sd(&h), csr::MSTATUS_SD);
+}
+
+fn fp_load_enc(f3: u32, rd: u8, rs1: u8, imm: i32) -> Word {
+    i_enc(0b0000111, rd, f3, rs1, imm)
+}
+
+fn fp_store_enc(f3: u32, rs1: u8, rs2: u8, imm: i32) -> Word {
+    let i = imm as u32;
+    (((i >> 5) & 0x7f) << 25)
+        | (u32::from(rs2) << 20)
+        | (u32::from(rs1) << 15)
+        | (f3 << 12)
+        | ((i & 0x1f) << 7)
+        | 0b0100111
+}
+
+fn fp_r_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
+    (f7 << 25)
+        | (u32::from(rs2) << 20)
+        | (u32::from(rs1) << 15)
+        | (f3 << 12)
+        | (u32::from(rd) << 7)
+        | 0b1010011
+}
+
+fn set_fs(h: &mut Harness, fs: u32) {
+    h.cpu.csr.mstatus = (h.cpu.csr.mstatus & !csr::MSTATUS_FS_MASK) | fs;
+}
+
+fn fflags(h: &Harness) -> u32 {
+    h.cpu.debug_csr_read(csr::FFLAGS).unwrap()
+}
+
+#[test]
+fn fp_load_store_and_compressed_track_fs() {
+    let mut h = Harness::new();
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[2] = BASE + 0x100;
+    h.load(BASE + 0x100, &[0x3f80_0000]);
+    h.load(BASE, &[fp_load_enc(0b010, 1, 2, 0)]);
+
+    assert_eq!(h.step(), StepOutcome::Executed {
+        instr: Instruction::Flw { rd: 1, rs1: 2, imm: 0 },
+        len: 4,
+        bits: fp_load_enc(0b010, 1, 2, 0),
+    });
+    assert_eq!(h.cpu.fpr_s(1).to_bits(), 0x3f80_0000);
+    assert_eq!(h.cpu.fprs()[1], 0xffff_ffff_3f80_0000);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[3] = BASE + 0x104;
+    h.load(BASE + 4, &[fp_store_enc(0b010, 3, 1, 0)]);
+    h.step();
+    assert_eq!(h.bus.peek(BASE + 0x104, AccessSize::Word).unwrap(), 0x3f80_0000);
+    // fsw 只读取 FPR，不应把 Clean 变 Dirty。
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    // C.FLW / C.FSW 复用相同路径。
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    let c_flw = encode_c(&Instruction::CFlw { rd: 8, rs1: 9, imm: 4 });
+    h.bus.write_bytes(BASE + 8, &c_flw.to_le_bytes()).unwrap();
+    h.cpu.x[9] = BASE + 0x100;
+    h.load(BASE + 0x110, &[0x4040_0000]);
+    h.cpu.x[9] = BASE + 0x10c; // c.flw f8, 4(x9) -> BASE+0x110
+    h.step();
+    assert_eq!(h.cpu.fpr_s(8).to_bits(), 0x4040_0000);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    let c_fsw = encode_c(&Instruction::CFsw { rs1: 9, rs2: 8, imm: 4 });
+    h.bus.write_bytes(BASE + 10, &c_fsw.to_le_bytes()).unwrap();
+    h.cpu.pc = BASE + 10;
+    h.step();
+    assert_eq!(h.bus.peek(BASE + 0x110, AccessSize::Word).unwrap(), 0x4040_0000);
+
+    // C.FLD / C.FSD 走 64 位读写路径。
+    h.load(BASE + 0x140, &[0x0123_4567, 0x89ab_cdef]);
+    let c_fld = encode_c(&Instruction::CFld { rd: 10, rs1: 9, imm: 8 });
+    h.bus.write_bytes(BASE + 12, &c_fld.to_le_bytes()).unwrap();
+    h.cpu.pc = BASE + 12;
+    h.cpu.x[9] = BASE + 0x138; // +8 -> BASE+0x140
+    h.step();
+    assert_eq!(h.cpu.fpr_d(10).to_bits(), 0x89ab_cdef_0123_4567);
+
+    let c_fsd = encode_c(&Instruction::CFsd { rs1: 9, rs2: 10, imm: 8 });
+    h.bus.write_bytes(BASE + 14, &c_fsd.to_le_bytes()).unwrap();
+    h.cpu.pc = BASE + 14;
+    h.step();
+    assert_eq!(h.bus.peek(BASE + 0x140, AccessSize::Word).unwrap(), 0x0123_4567);
+    assert_eq!(h.bus.peek(BASE + 0x144, AccessSize::Word).unwrap(), 0x89ab_cdef);
+}
+
+#[test]
+fn fp_double_load_store_and_alignment() {
+    let mut h = Harness::new();
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[2] = BASE + 0x140;
+    h.load(BASE + 0x140, &[0x0123_4567, 0x89ab_cdef]);
+    h.load(BASE, &[fp_load_enc(0b011, 2, 2, 0)]);
+
+    h.step();
+    assert_eq!(h.cpu.fpr_d(2).to_bits(), 0x89ab_cdef_0123_4567);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[3] = BASE + 0x150;
+    h.load(BASE + 4, &[fp_store_enc(0b011, 3, 2, 0)]);
+    h.step();
+    assert_eq!(h.bus.peek(BASE + 0x150, AccessSize::Word).unwrap(), 0x0123_4567);
+    assert_eq!(h.bus.peek(BASE + 0x154, AccessSize::Word).unwrap(), 0x89ab_cdef);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    // 8 字节访问必须自然对齐。
+    let mut h = Harness::new();
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[2] = BASE + 0x142;
+    h.load(BASE, &[fp_load_enc(0b011, 2, 2, 0)]);
+    assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::LOAD_MISALIGNED });
+    assert_eq!(h.cpu.csr_state().mtval, BASE + 0x142);
+
+    let mut h = Harness::new();
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[2] = BASE + 0x146;
+    h.load(BASE, &[fp_store_enc(0b011, 2, 1, 0)]);
+    assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::STORE_MISALIGNED });
+    assert_eq!(h.cpu.csr_state().mtval, BASE + 0x146);
+}
+
+#[test]
+fn fp_move_nan_box_and_sign_injection() {
+    let mut h = Harness::new();
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.x[5] = 0x7fc0_1234;
+    h.load(BASE, &[fp_r_enc(6, 0b000, 5, 0, 0b1111000)]);
+    h.step();
+    assert_eq!(h.cpu.fprs()[6], 0xffff_ffff_7fc0_1234);
+    assert_eq!(h.cpu.fpr_s(6).to_bits(), 0x7fc0_1234);
+
+    // 非法 NaN box 的高半不是全 1：读取时必须规范化为 canonical NaN。
+    h.cpu.fprs[7] = 0x0000_0000_7fc0_1234;
+    assert_eq!(h.cpu.fpr_s(7).to_bits(), 0x7fc0_0000);
+
+    // fsgnj.s 保留 payload，只替换符号位。
+    h.load(BASE + 4, &[fp_r_enc(8, 0b000, 6, 6, 0b0010000)]);
+    h.step();
+    assert_eq!(h.cpu.fpr_s(8).to_bits(), 0x7fc0_1234);
+    assert_eq!(h.cpu.fprs()[8], 0xffff_ffff_7fc0_1234);
+
+    // fsgnjn.s 反转 rs2 的符号位。
+    h.load(BASE + 8, &[fp_r_enc(9, 0b001, 7, 7, 0b0010000)]);
+    h.step();
+    assert_eq!(h.cpu.fpr_s(9).to_bits(), 0xffc0_0000);
+
+    // fsgnjx.s 对两个符号位做 XOR。
+    h.cpu.fprs[10] = 0xffff_ffff_8000_0001;
+    h.load(BASE + 12, &[fp_r_enc(11, 0b010, 6, 10, 0b0010000)]);
+    h.step();
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0xffc0_1234);
+
+    // fmv.x.w 只取低 32 位。
+    h.load(BASE + 16, &[fp_r_enc(12, 0b000, 6, 0, 0b1110000)]);
+    h.step();
+    assert_eq!(h.cpu.reg(12), 0x7fc0_1234);
+
+    // .d 的符号注入保留完整 64 位 payload。
+    h.cpu.write_fpr_d(13, Fp64::from_bits(0x7ff8_1234_5678_9abc));
+    h.cpu.write_fpr_d(14, Fp64::from_bits(0x8000_0000_0000_0000));
+    h.load(BASE + 20, &[fp_r_enc(15, 0b000, 13, 14, 0b0010001)]);
+    h.step();
+    assert_eq!(h.cpu.fpr_d(15).to_bits(), 0xfff8_1234_5678_9abc);
+}
+
+#[test]
+fn fp_compare_flags_and_classify() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // +1
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x3f80_0000)); // +1
+    h.cpu.write_fpr_s(3, Fp32::from_bits(0x4000_0000)); // +2
+    h.cpu.write_fpr_s(4, Fp32::from_bits(0x7fc0_0000)); // qNaN
+    h.cpu.write_fpr_s(5, Fp32::from_bits(0x7f80_0001)); // sNaN
+    h.cpu.write_fpr_s(6, Fp32::from_bits(0x8000_0000)); // -0
+    h.cpu.write_fpr_s(7, Fp32::from_bits(0x0000_0000)); // +0
+    h.cpu.write_fpr_s(8, Fp32::from_bits(0x8000_0001)); // -min subnormal
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.cpu.csr.fcsr = 0;
+
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(20, 0b010, 1, 2, 0b1010000), // feq.s
+            fp_r_enc(21, 0b001, 1, 3, 0b1010000), // flt.s
+            fp_r_enc(22, 0b000, 3, 1, 0b1010000), // fle.s
+            fp_r_enc(23, 0b010, 6, 7, 0b1010000), // feq.s -0,+0
+            fp_r_enc(24, 0b010, 4, 4, 0b1010000), // feq.s qNaN,qNaN
+            fp_r_enc(25, 0b001, 5, 1, 0b1010000), // flt.s sNaN,+1
+            fp_r_enc(26, 0b001, 8, 1, 0b1010000), // flt.s -min,+1
+            fp_r_enc(27, 0b001, 8, 0, 0b1110000), // fclass.s
+        ],
+    );
+    h.run(5);
+    assert_eq!(h.cpu.reg(20), 1);
+    assert_eq!(h.cpu.reg(21), 1);
+    assert_eq!(h.cpu.reg(22), 0);
+    assert_eq!(h.cpu.reg(23), 1);
+    assert_eq!(h.cpu.reg(24), 0);
+    assert_eq!(fflags(&h), 0);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    h.step(); // sNaN 比较
+    assert_eq!(h.cpu.reg(25), 0);
+    assert_eq!(fflags(&h), 0x10);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    h.step();
+    assert_eq!(h.cpu.reg(26), 1);
+    h.step();
+    assert_eq!(h.cpu.reg(27), 1 << 2); // negative subnormal
+}
+
+#[test]
+fn fp_instructions_are_illegal_when_fs_off() {
+    let instructions = [
+        fp_load_enc(0b010, 1, 0, 0),
+        fp_store_enc(0b010, 0, 1, 0),
+        fp_load_enc(0b011, 1, 0, 0),
+        fp_store_enc(0b011, 0, 1, 0),
+        fp_r_enc(1, 0b000, 2, 0, 0b1111000),
+        fp_r_enc(1, 0b000, 2, 3, 0b0010000),
+        fp_r_enc(1, 0b010, 2, 3, 0b1010000),
+        fp_r_enc(1, 0b001, 2, 0, 0b1110000),
+    ];
+    for raw in instructions {
+        let mut h = Harness::new();
+        h.load(BASE, &[raw]);
+
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+        assert_eq!(fs(&h), csr::MSTATUS_FS_OFF);
+    }
+
+    let half = encode_c(&Instruction::CFlw { rd: 8, rs1: 8, imm: 0 });
+    let mut h = Harness::new();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&half.to_le_bytes());
+    bytes.extend_from_slice(&[0, 0]);
+    h.bus.write_bytes(BASE, &bytes).unwrap();
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+    );
+    assert_eq!(h.cpu.csr_state().mtval, u32::from(half));
 }

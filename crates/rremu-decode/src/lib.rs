@@ -72,6 +72,22 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 _ => Err(illegal),
             }
         }
+        0b0000111 => {
+            let imm = imm_i(word);
+            match funct3 {
+                0b010 => Ok(Instruction::Flw { rd, rs1, imm }),
+                0b011 => Ok(Instruction::Fld { rd, rs1, imm }),
+                _ => Err(illegal),
+            }
+        }
+        0b0100111 => {
+            let imm = imm_s(word);
+            match funct3 {
+                0b010 => Ok(Instruction::Fsw { rs1, rs2, imm }),
+                0b011 => Ok(Instruction::Fsd { rs1, rs2, imm }),
+                _ => Err(illegal),
+            }
+        }
         0b0010011 => {
             let imm = imm_i(word);
             match funct3 {
@@ -117,6 +133,28 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 (0b101, 0b0000001) => Ok(Instruction::Divu { rd, rs1, rs2 }),
                 (0b110, 0b0000001) => Ok(Instruction::Rem { rd, rs1, rs2 }),
                 (0b111, 0b0000001) => Ok(Instruction::Remu { rd, rs1, rs2 }),
+                _ => Err(illegal),
+            }
+        }
+        0b1010011 => {
+            // OP-FP：M1 只实现非算术指令；算术/转换后续阶段补齐。
+            match (funct7, funct3) {
+                (0b0010000, 0b000) => Ok(Instruction::FsgnjS { rd, rs1, rs2 }),
+                (0b0010000, 0b001) => Ok(Instruction::FsgnjnS { rd, rs1, rs2 }),
+                (0b0010000, 0b010) => Ok(Instruction::FsgnjxS { rd, rs1, rs2 }),
+                (0b0010001, 0b000) => Ok(Instruction::FsgnjD { rd, rs1, rs2 }),
+                (0b0010001, 0b001) => Ok(Instruction::FsgnjnD { rd, rs1, rs2 }),
+                (0b0010001, 0b010) => Ok(Instruction::FsgnjxD { rd, rs1, rs2 }),
+                (0b1010000, 0b000) => Ok(Instruction::FleS { rd, rs1, rs2 }),
+                (0b1010000, 0b001) => Ok(Instruction::FltS { rd, rs1, rs2 }),
+                (0b1010000, 0b010) => Ok(Instruction::FeqS { rd, rs1, rs2 }),
+                (0b1010001, 0b000) => Ok(Instruction::FleD { rd, rs1, rs2 }),
+                (0b1010001, 0b001) => Ok(Instruction::FltD { rd, rs1, rs2 }),
+                (0b1010001, 0b010) => Ok(Instruction::FeqD { rd, rs1, rs2 }),
+                (0b1110000, 0b000) if rs2 == 0 => Ok(Instruction::FmvXW { rd, rs1 }),
+                (0b1111000, 0b000) if rs2 == 0 => Ok(Instruction::FmvWX { rd, rs1 }),
+                (0b1110000, 0b001) if rs2 == 0 => Ok(Instruction::FclassS { rd, rs1 }),
+                (0b1110001, 0b001) if rs2 == 0 => Ok(Instruction::FclassD { rd, rs1 }),
                 _ => Err(illegal),
             }
         }
@@ -232,6 +270,30 @@ fn sext(raw: u32, top_bit: u32) -> i32 {
 #[inline]
 fn c_shamt(h: u16) -> u8 {
     (((h >> 12) & 0x1) << 5 | ((h >> 2) & 0x1f)) as u8
+}
+
+
+/// c.fld/c.fsd 的 uimm（8 位无符号，bits[2:0]=0）。
+#[inline]
+fn c_imm_fld(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 10) & 0x7) << 3 | ((h as u32 >> 5) & 0x3) << 6;
+    uimm as i32
+}
+
+/// c.fldsp 的 uimm（9 位无符号，bits[2:0]=0）。
+#[inline]
+fn c_imm_fldsp(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 12) & 0x1) << 5
+        | ((h as u32 >> 5) & 0x3) << 3
+        | ((h as u32 >> 2) & 0x7) << 6;
+    uimm as i32
+}
+
+/// c.fsdsp 的 uimm（9 位无符号，bits[2:0]=0）。
+#[inline]
+fn c_imm_fsdsp(h: u16) -> i32 {
+    let uimm = ((h as u32 >> 10) & 0x7) << 3 | ((h as u32 >> 7) & 0x7) << 6;
+    uimm as i32
 }
 
 /// c.lw/c.sw 的 uimm（7 位无符号，bits[1:0]=0）。
@@ -350,7 +412,31 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             let imm = c_imm_lw(half);
             Ok(Instruction::CSw { rs1, rs2, imm })
         }
-        (0b00, _) => Err(illegal), // 001(flw)/011/101/111 reserved
+        (0b00, 0b001) => {
+            // c.fld: rd'=bits[4:2], rs1'=bits[9:7]
+            let rd = creg(((half >> 2) & 0x7) as u8);
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            Ok(Instruction::CFld { rd, rs1, imm: c_imm_fld(half) })
+        }
+        (0b00, 0b011) => {
+            // c.flw (RV32): 与 c.lw 相同的 uimm
+            let rd = creg(((half >> 2) & 0x7) as u8);
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            Ok(Instruction::CFlw { rd, rs1, imm: c_imm_lw(half) })
+        }
+        (0b00, 0b101) => {
+            // c.fsd
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            let rs2 = creg(((half >> 2) & 0x7) as u8);
+            Ok(Instruction::CFsd { rs1, rs2, imm: c_imm_fld(half) })
+        }
+        (0b00, 0b111) => {
+            // c.fsw (RV32)
+            let rs1 = creg(((half >> 7) & 0x7) as u8);
+            let rs2 = creg(((half >> 2) & 0x7) as u8);
+            Ok(Instruction::CFsw { rs1, rs2, imm: c_imm_lw(half) })
+        }
+        (0b00, _) => Err(illegal),
 
         // ---- Quadrant 01 ----
         (0b01, 0b000) => {
@@ -490,7 +576,27 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             let imm = c_imm_swsp(half);
             Ok(Instruction::CSwsp { rs2, imm })
         }
-        (0b10, _) => Err(illegal), // 001(flwsp)/011/101/111 reserved
+        (0b10, 0b001) => {
+            // c.fldsp
+            let rd = ((half >> 7) & 0x1f) as u8;
+            Ok(Instruction::CFldsp { rd, imm: c_imm_fldsp(half) })
+        }
+        (0b10, 0b011) => {
+            // c.flwsp (RV32)
+            let rd = ((half >> 7) & 0x1f) as u8;
+            Ok(Instruction::CFlwsp { rd, imm: c_imm_lwsp(half) })
+        }
+        (0b10, 0b101) => {
+            // c.fsdsp
+            let rs2 = ((half >> 2) & 0x1f) as u8;
+            Ok(Instruction::CFsdsp { rs2, imm: c_imm_fsdsp(half) })
+        }
+        (0b10, 0b111) => {
+            // c.fswsp (RV32)
+            let rs2 = ((half >> 2) & 0x1f) as u8;
+            Ok(Instruction::CFswsp { rs2, imm: c_imm_swsp(half) })
+        }
+        (0b10, _) => Err(illegal),
 
         // op=11 是 32 位指令，不应进入 decode16
         (0b11, _) => Err(illegal),
@@ -603,6 +709,66 @@ pub fn encode_c(instr: &Instruction) -> u16 {
             let b7_6 = ((uimm >> 6) & 0x3) as u16;
             (0b110u16 << 13) | (b5_2 << 9) | (b7_6 << 7) | ((rs2 as u16) << 2) | 0b10
         }
+        Instruction::CFlw { rd, rs1, imm } => {
+            let rd_p = creg_inv(rd);
+            let rs1_p = creg_inv(rs1);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b6 = ((uimm >> 2) & 0x1) as u16;
+            let b5 = ((uimm >> 6) & 0x1) as u16;
+            (0b011u16 << 13) | (b12_10 << 10) | (rs1_p << 7) | (b6 << 6) | (b5 << 5) | (rd_p << 2)
+        }
+        Instruction::CFsw { rs1, rs2, imm } => {
+            let rs1_p = creg_inv(rs1);
+            let rs2_p = creg_inv(rs2);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b6 = ((uimm >> 2) & 0x1) as u16;
+            let b5 = ((uimm >> 6) & 0x1) as u16;
+            (0b111u16 << 13) | (b12_10 << 10) | (rs1_p << 7) | (b6 << 6) | (b5 << 5) | (rs2_p << 2)
+        }
+        Instruction::CFld { rd, rs1, imm } => {
+            let rd_p = creg_inv(rd);
+            let rs1_p = creg_inv(rs1);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b001u16 << 13) | (b12_10 << 10) | (rs1_p << 7) | (b7_6 << 5) | (rd_p << 2)
+        }
+        Instruction::CFsd { rs1, rs2, imm } => {
+            let rs1_p = creg_inv(rs1);
+            let rs2_p = creg_inv(rs2);
+            let uimm = imm as u32;
+            let b12_10 = ((uimm >> 3) & 0x7) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b101u16 << 13) | (b12_10 << 10) | (rs1_p << 7) | (b7_6 << 5) | (rs2_p << 2)
+        }
+        Instruction::CFlwsp { rd, imm } => {
+            let uimm = imm as u32;
+            let b5 = ((uimm >> 5) & 1) as u16;
+            let b4_2 = ((uimm >> 2) & 0x7) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b011u16 << 13) | (b5 << 12) | ((rd as u16) << 7) | (b4_2 << 4) | (b7_6 << 2) | 0b10
+        }
+        Instruction::CFswsp { rs2, imm } => {
+            let uimm = imm as u32;
+            let b5_2 = ((uimm >> 2) & 0xf) as u16;
+            let b7_6 = ((uimm >> 6) & 0x3) as u16;
+            (0b111u16 << 13) | (b5_2 << 9) | (b7_6 << 7) | ((rs2 as u16) << 2) | 0b10
+        }
+        Instruction::CFldsp { rd, imm } => {
+            let uimm = imm as u32;
+            let b5 = ((uimm >> 5) & 1) as u16;
+            let b4_3 = ((uimm >> 3) & 0x3) as u16;
+            let b8_6 = ((uimm >> 6) & 0x7) as u16;
+            (0b001u16 << 13) | (b5 << 12) | ((rd as u16) << 7) | (b4_3 << 5) | (b8_6 << 2) | 0b10
+        }
+        Instruction::CFsdsp { rs2, imm } => {
+            let uimm = imm as u32;
+            let b5_3 = ((uimm >> 3) & 0x7) as u16;
+            let b8_6 = ((uimm >> 6) & 0x7) as u16;
+            (0b101u16 << 13) | (b5_3 << 10) | (b8_6 << 7) | ((rs2 as u16) << 2) | 0b10
+        }
         _ => panic!("not a C instruction"),
     }
 }
@@ -660,6 +826,21 @@ mod tests {
     fn s_enc(f3: u32, rs1: u8, rs2: u8, imm: i32) -> Word {
         let i = imm as u32;
         (((i >> 5) & 0x7f) << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | ((i & 0x1f) << 7) | 0b0100011
+    }
+    fn fp_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
+        (f7 << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b1010011
+    }
+    fn fp_load_enc(f3: u32, rd: u8, rs1: u8, imm: i32) -> Word {
+        i_enc(0b0000111, rd, f3, rs1, imm)
+    }
+    fn fp_store_enc(f3: u32, rs1: u8, rs2: u8, imm: i32) -> Word {
+        let i = imm as u32;
+        (((i >> 5) & 0x7f) << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | ((i & 0x1f) << 7)
+            | 0b0100111
     }
     fn b_enc(f3: u32, rs1: u8, rs2: u8, off: i32) -> Word {
         let o = off as u32;
@@ -739,6 +920,99 @@ mod tests {
         assert_eq!(decode32(s_enc(0b000, 2, 11, -8), PC), Ok(Instruction::Sb { rs1: 2, rs2: 11, imm: -8 }));
         assert_eq!(decode32(s_enc(0b001, 2, 11, 4), PC), Ok(Instruction::Sh { rs1: 2, rs2: 11, imm: 4 }));
         assert_eq!(decode32(s_enc(0b010, 2, 11, 2047), PC), Ok(Instruction::Sw { rs1: 2, rs2: 11, imm: 2047 }));
+    }
+
+    #[test]
+    fn decode_fp_load_store() {
+        assert_eq!(
+            decode32(fp_load_enc(0b010, 10, 2, -4), PC),
+            Ok(Instruction::Flw { rd: 10, rs1: 2, imm: -4 })
+        );
+        assert_eq!(
+            decode32(fp_load_enc(0b011, 11, 3, 8), PC),
+            Ok(Instruction::Fld { rd: 11, rs1: 3, imm: 8 })
+        );
+        assert_eq!(
+            decode32(fp_store_enc(0b010, 4, 12, 16), PC),
+            Ok(Instruction::Fsw { rs1: 4, rs2: 12, imm: 16 })
+        );
+        assert_eq!(
+            decode32(fp_store_enc(0b011, 5, 13, -8), PC),
+            Ok(Instruction::Fsd { rs1: 5, rs2: 13, imm: -8 })
+        );
+        assert!(matches!(
+            decode32(fp_load_enc(0b001, 1, 2, 0), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_store_enc(0b100, 1, 2, 0), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_fp_move_sign_compare() {
+        assert_eq!(
+            decode32(fp_enc(1, 0b000, 2, 3, 0b0010000), PC),
+            Ok(Instruction::FsgnjS { rd: 1, rs1: 2, rs2: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(1, 0b001, 2, 3, 0b0010000), PC),
+            Ok(Instruction::FsgnjnS { rd: 1, rs1: 2, rs2: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(1, 0b010, 2, 3, 0b0010000), PC),
+            Ok(Instruction::FsgnjxS { rd: 1, rs1: 2, rs2: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(1, 0b000, 2, 3, 0b0010001), PC),
+            Ok(Instruction::FsgnjD { rd: 1, rs1: 2, rs2: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 0b000, 5, 6, 0b1010000), PC),
+            Ok(Instruction::FleS { rd: 4, rs1: 5, rs2: 6 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 0b001, 5, 6, 0b1010000), PC),
+            Ok(Instruction::FltS { rd: 4, rs1: 5, rs2: 6 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 0b010, 5, 6, 0b1010000), PC),
+            Ok(Instruction::FeqS { rd: 4, rs1: 5, rs2: 6 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 0b010, 5, 6, 0b1010001), PC),
+            Ok(Instruction::FeqD { rd: 4, rs1: 5, rs2: 6 })
+        );
+        assert_eq!(
+            decode32(fp_enc(7, 0b000, 8, 0, 0b1110000), PC),
+            Ok(Instruction::FmvXW { rd: 7, rs1: 8 })
+        );
+        assert_eq!(
+            decode32(fp_enc(9, 0b000, 10, 0, 0b1111000), PC),
+            Ok(Instruction::FmvWX { rd: 9, rs1: 10 })
+        );
+        assert_eq!(
+            decode32(fp_enc(11, 0b001, 12, 0, 0b1110000), PC),
+            Ok(Instruction::FclassS { rd: 11, rs1: 12 })
+        );
+        assert_eq!(
+            decode32(fp_enc(13, 0b001, 14, 0, 0b1110001), PC),
+            Ok(Instruction::FclassD { rd: 13, rs1: 14 })
+        );
+        // 保留编码必须报 illegal，而不是落入未实现。
+        assert!(matches!(
+            decode32(fp_enc(1, 0b011, 2, 3, 0b0010000), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_enc(7, 0b000, 8, 1, 0b1110000), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_enc(7, 0b000, 8, 0, 0b0000000), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
     }
 
     #[test]
@@ -880,6 +1154,30 @@ mod tests {
         // uimm[5:3]=bits[12:10]=0, uimm[2]=bit6=1, uimm[6]=bit5=0 → uimm=4
         let sw = (0b110u16 << 13) | (1 << 6) | (1 << 2); // funct3=110, bit6=1, rs2'=1 (bits[4:2])
         assert_eq!(decode16(sw, PC), Ok(Instruction::CSw { rs1: 8, rs2: 9, imm: 4 }));
+    }
+
+    #[test]
+    fn decode_c_fp() {
+        // c.flw x8, 4(x9): funct3=011, rd'=0, rs1'=1, uimm=4
+        let flw = (0b011u16 << 13) | (1 << 7) | (1 << 6);
+        assert_eq!(decode16(flw, PC), Ok(Instruction::CFlw { rd: 8, rs1: 9, imm: 4 }));
+
+        // c.fld x10, 24(x9): funct3=001, rd'=2, rs1'=1, uimm=24
+        let fld = (0b001u16 << 13) | (3 << 10) | (1 << 7) | (2 << 2);
+        assert_eq!(decode16(fld, PC), Ok(Instruction::CFld { rd: 10, rs1: 9, imm: 24 }));
+
+        for instr in [
+            Instruction::CFlw { rd: 8, rs1: 9, imm: 4 },
+            Instruction::CFsw { rs1: 8, rs2: 9, imm: 8 },
+            Instruction::CFld { rd: 10, rs1: 11, imm: 16 },
+            Instruction::CFsd { rs1: 12, rs2: 13, imm: 24 },
+            Instruction::CFlwsp { rd: 4, imm: 32 },
+            Instruction::CFswsp { rs2: 11, imm: 64 },
+            Instruction::CFldsp { rd: 5, imm: 128 },
+            Instruction::CFsdsp { rs2: 12, imm: 256 },
+        ] {
+            assert_eq!(decode16(encode_c(&instr), PC), Ok(instr));
+        }
     }
 
     #[test]
@@ -1026,6 +1324,14 @@ mod tests {
             Instruction::CJalr { rs1: 8 },
             Instruction::CAdd { rd: 9, rs2: 10 },
             Instruction::CSwsp { rs2: 11, imm: 64 },
+            Instruction::CFlw { rd: 8, rs1: 9, imm: 4 },
+            Instruction::CFsw { rs1: 8, rs2: 9, imm: 8 },
+            Instruction::CFld { rd: 10, rs1: 11, imm: 16 },
+            Instruction::CFsd { rs1: 12, rs2: 13, imm: 24 },
+            Instruction::CFlwsp { rd: 4, imm: 32 },
+            Instruction::CFswsp { rs2: 11, imm: 64 },
+            Instruction::CFldsp { rd: 5, imm: 128 },
+            Instruction::CFsdsp { rs2: 12, imm: 256 },
         ];
         for instr in &cases {
             let h = encode_c(instr);

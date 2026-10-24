@@ -3,6 +3,7 @@
 //! 本模块只解释位模式，不进行算术运算。所有访问器都直接操作位，
 //! 因此不会触发宿主的浮点异常或舍入行为。
 
+use core::cmp::Ordering;
 use core::fmt;
 
 /// RISC-V `fclass` 的 10 个类别，编码顺序与 `fclass` 结果位一致。
@@ -160,6 +161,28 @@ impl Fp32 {
             FpClass::PositiveNormal
         }
     }
+
+    /// 返回用于 IEEE-754 数值排序的单调无符号键。
+    ///
+    /// NaN 不参与排序；`-0` 与 `+0` 由 `partial_cmp` 单独处理。
+    const fn order_key(self) -> u32 {
+        if self.sign() {
+            !self.0
+        } else {
+            self.0 ^ Self::SIGN_MASK
+        }
+    }
+
+    /// IEEE-754 数值比较；任一操作数为 NaN 时返回 `None`。
+    pub fn partial_cmp(self, other: Self) -> Option<Ordering> {
+        if self.is_nan() || other.is_nan() {
+            None
+        } else if self.is_zero() && other.is_zero() {
+            Some(Ordering::Equal)
+        } else {
+            Some(self.order_key().cmp(&other.order_key()))
+        }
+    }
 }
 
 impl From<u32> for Fp32 {
@@ -296,6 +319,28 @@ impl Fp64 {
             FpClass::PositiveNormal
         }
     }
+
+    /// 返回用于 IEEE-754 数值排序的单调无符号键。
+    ///
+    /// NaN 不参与排序；`-0` 与 `+0` 由 `partial_cmp` 单独处理。
+    const fn order_key(self) -> u64 {
+        if self.sign() {
+            !self.0
+        } else {
+            self.0 ^ Self::SIGN_MASK
+        }
+    }
+
+    /// IEEE-754 数值比较；任一操作数为 NaN 时返回 `None`。
+    pub fn partial_cmp(self, other: Self) -> Option<Ordering> {
+        if self.is_nan() || other.is_nan() {
+            None
+        } else if self.is_zero() && other.is_zero() {
+            Some(Ordering::Equal)
+        } else {
+            Some(self.order_key().cmp(&other.order_key()))
+        }
+    }
 }
 
 impl From<u64> for Fp64 {
@@ -398,5 +443,53 @@ mod tests {
         assert_eq!(value.with_sign(true).to_bits(), 0xc049_0fdb);
         assert_eq!(value.with_sign(true).with_sign(false), value);
         assert_eq!(Fp32::canonical_nan().with_sign(true).to_bits(), 0xffc0_0000);
+    }
+
+    #[test]
+    fn f32_partial_cmp_orders_ieee_values() {
+        let neg_inf = Fp32::from_bits(0xff80_0000);
+        let neg_one = Fp32::from_bits(0xbf80_0000);
+        let neg_zero = Fp32::from_bits(0x8000_0000);
+        let pos_zero = Fp32::from_bits(0x0000_0000);
+        let min_sub = Fp32::from_bits(0x0000_0001);
+        let pos_one = Fp32::from_bits(0x3f80_0000);
+        let pos_inf = Fp32::from_bits(0x7f80_0000);
+
+        assert_eq!(neg_inf.partial_cmp(neg_one), Some(Ordering::Less));
+        assert_eq!(neg_one.partial_cmp(neg_zero), Some(Ordering::Less));
+        assert_eq!(neg_zero.partial_cmp(pos_zero), Some(Ordering::Equal));
+        assert_eq!(pos_zero.partial_cmp(min_sub), Some(Ordering::Less));
+        assert_eq!(min_sub.partial_cmp(pos_one), Some(Ordering::Less));
+        assert_eq!(pos_one.partial_cmp(pos_inf), Some(Ordering::Less));
+        assert_eq!(pos_inf.partial_cmp(neg_inf), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn f64_partial_cmp_orders_ieee_values() {
+        let neg_inf = Fp64::from_bits(0xfff0_0000_0000_0000);
+        let neg_one = Fp64::from_bits(0xbff0_0000_0000_0000);
+        let neg_zero = Fp64::from_bits(0x8000_0000_0000_0000);
+        let pos_zero = Fp64::from_bits(0x0000_0000_0000_0000);
+        let min_sub = Fp64::from_bits(0x0000_0000_0000_0001);
+        let pos_one = Fp64::from_bits(0x3ff0_0000_0000_0000);
+        let pos_inf = Fp64::from_bits(0x7ff0_0000_0000_0000);
+
+        assert_eq!(neg_inf.partial_cmp(neg_one), Some(Ordering::Less));
+        assert_eq!(neg_one.partial_cmp(neg_zero), Some(Ordering::Less));
+        assert_eq!(neg_zero.partial_cmp(pos_zero), Some(Ordering::Equal));
+        assert_eq!(pos_zero.partial_cmp(min_sub), Some(Ordering::Less));
+        assert_eq!(min_sub.partial_cmp(pos_one), Some(Ordering::Less));
+        assert_eq!(pos_one.partial_cmp(pos_inf), Some(Ordering::Less));
+        assert_eq!(pos_inf.partial_cmp(neg_inf), Some(Ordering::Greater));
+    }
+
+    #[test]
+    fn partial_cmp_rejects_nan() {
+        assert_eq!(Fp32::canonical_nan().partial_cmp(Fp32::from_bits(0)), None);
+        assert_eq!(
+            Fp32::from_bits(0x7f80_0001).partial_cmp(Fp32::from_bits(0x3f80_0000)),
+            None
+        );
+        assert_eq!(Fp64::canonical_nan().partial_cmp(Fp64::from_bits(0)), None);
     }
 }

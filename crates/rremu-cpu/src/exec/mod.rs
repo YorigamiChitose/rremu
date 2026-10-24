@@ -8,6 +8,7 @@ use super::{Cpu, TrapErr};
 mod alu;
 mod compressed;
 mod csr;
+mod fp;
 mod system;
 
 mod memory;
@@ -38,6 +39,9 @@ impl Cpu {
             return Ok(next_pc);
         }
         if let Some(next_pc) = self.exec_compressed(bus, sink, pc, len, instr)? {
+            return Ok(next_pc);
+        }
+        if let Some(next_pc) = self.exec_fp(bus, sink, pc, len, instr, raw)? {
             return Ok(next_pc);
         }
 

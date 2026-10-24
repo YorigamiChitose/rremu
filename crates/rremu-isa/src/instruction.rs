@@ -1,6 +1,6 @@
-//! RV32I/M/A/C/Zicsr 指令枚举与显示。
+//! RV32I/M/A/C/Zicsr/F/D 指令枚举与显示。
 
-use crate::types::reg_name;
+use crate::types::{freg_name, reg_name};
 
 /// RV32I 指令枚举；M/C/Zicsr 变体见下方分组。
 ///
@@ -72,6 +72,29 @@ pub enum Instruction {
     AmomaxW { rd: u8, rs1: u8, rs2: u8 },
     AmominuW { rd: u8, rs1: u8, rs2: u8 },
     AmomaxuW { rd: u8, rs1: u8, rs2: u8 },
+    // ---- F/D 扩展：load/store ----
+    Flw { rd: u8, rs1: u8, imm: i32 },
+    Fsw { rs1: u8, rs2: u8, imm: i32 },
+    Fld { rd: u8, rs1: u8, imm: i32 },
+    Fsd { rs1: u8, rs2: u8, imm: i32 },
+    // ---- F/D 扩展：move / sign injection ----
+    FmvWX { rd: u8, rs1: u8 },
+    FmvXW { rd: u8, rs1: u8 },
+    FsgnjS { rd: u8, rs1: u8, rs2: u8 },
+    FsgnjnS { rd: u8, rs1: u8, rs2: u8 },
+    FsgnjxS { rd: u8, rs1: u8, rs2: u8 },
+    FsgnjD { rd: u8, rs1: u8, rs2: u8 },
+    FsgnjnD { rd: u8, rs1: u8, rs2: u8 },
+    FsgnjxD { rd: u8, rs1: u8, rs2: u8 },
+    // ---- F/D 扩展：compare / classify ----
+    FeqS { rd: u8, rs1: u8, rs2: u8 },
+    FltS { rd: u8, rs1: u8, rs2: u8 },
+    FleS { rd: u8, rs1: u8, rs2: u8 },
+    FeqD { rd: u8, rs1: u8, rs2: u8 },
+    FltD { rd: u8, rs1: u8, rs2: u8 },
+    FleD { rd: u8, rs1: u8, rs2: u8 },
+    FclassS { rd: u8, rs1: u8 },
+    FclassD { rd: u8, rs1: u8 },
     // ---- misc / system ----
     Fence,
     FenceI,
@@ -116,6 +139,15 @@ pub enum Instruction {
     CJalr { rs1: u8 },
     CAdd { rd: u8, rs2: u8 },
     CSwsp { rs2: u8, imm: i32 },
+    // ---- C extension FP (RV32) ----
+    CFlw { rd: u8, rs1: u8, imm: i32 },
+    CFsw { rs1: u8, rs2: u8, imm: i32 },
+    CFld { rd: u8, rs1: u8, imm: i32 },
+    CFsd { rs1: u8, rs2: u8, imm: i32 },
+    CFlwsp { rd: u8, imm: i32 },
+    CFswsp { rs2: u8, imm: i32 },
+    CFldsp { rd: u8, imm: i32 },
+    CFsdsp { rs2: u8, imm: i32 },
 }
 
 impl core::fmt::Display for Instruction {
@@ -245,6 +277,67 @@ impl core::fmt::Display for Instruction {
             Instruction::AmomaxW { rd, rs1, rs2 } => write!(f, "amomax.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
             Instruction::AmominuW { rd, rs1, rs2 } => write!(f, "amominu.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
             Instruction::AmomaxuW { rd, rs1, rs2 } => write!(f, "amomaxu.w {}, {}, ({})", reg_name(rd), reg_name(rs2), reg_name(rs1)),
+            // ---- F/D extension ----
+            Instruction::Flw { rd, rs1, imm } => {
+                write!(f, "flw {}, {}({})", freg_name(rd), imm, reg_name(rs1))
+            }
+            Instruction::Fsw { rs1, rs2, imm } => {
+                write!(f, "fsw {}, {}({})", freg_name(rs2), imm, reg_name(rs1))
+            }
+            Instruction::Fld { rd, rs1, imm } => {
+                write!(f, "fld {}, {}({})", freg_name(rd), imm, reg_name(rs1))
+            }
+            Instruction::Fsd { rs1, rs2, imm } => {
+                write!(f, "fsd {}, {}({})", freg_name(rs2), imm, reg_name(rs1))
+            }
+            Instruction::FmvWX { rd, rs1 } => {
+                write!(f, "fmv.w.x {}, {}", freg_name(rd), reg_name(rs1))
+            }
+            Instruction::FmvXW { rd, rs1 } => {
+                write!(f, "fmv.x.w {}, {}", reg_name(rd), freg_name(rs1))
+            }
+            Instruction::FsgnjS { rd, rs1, rs2 } => {
+                write!(f, "fsgnj.s {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FsgnjnS { rd, rs1, rs2 } => {
+                write!(f, "fsgnjn.s {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FsgnjxS { rd, rs1, rs2 } => {
+                write!(f, "fsgnjx.s {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FsgnjD { rd, rs1, rs2 } => {
+                write!(f, "fsgnj.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FsgnjnD { rd, rs1, rs2 } => {
+                write!(f, "fsgnjn.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FsgnjxD { rd, rs1, rs2 } => {
+                write!(f, "fsgnjx.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FeqS { rd, rs1, rs2 } => {
+                write!(f, "feq.s {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FltS { rd, rs1, rs2 } => {
+                write!(f, "flt.s {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FleS { rd, rs1, rs2 } => {
+                write!(f, "fle.s {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FeqD { rd, rs1, rs2 } => {
+                write!(f, "feq.d {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FltD { rd, rs1, rs2 } => {
+                write!(f, "flt.d {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FleD { rd, rs1, rs2 } => {
+                write!(f, "fle.d {}, {}, {}", reg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FclassS { rd, rs1 } => {
+                write!(f, "fclass.s {}, {}", reg_name(rd), freg_name(rs1))
+            }
+            Instruction::FclassD { rd, rs1 } => {
+                write!(f, "fclass.d {}, {}", reg_name(rd), freg_name(rs1))
+            }
             Instruction::Fence => write!(f, "fence"),
             Instruction::FenceI => write!(f, "fence.i"),
             Instruction::Ecall => write!(f, "ecall"),
@@ -286,6 +379,30 @@ impl core::fmt::Display for Instruction {
             Instruction::CJalr { rs1 } => write!(f, "c.jalr {}", reg_name(rs1)),
             Instruction::CAdd { rd, rs2 } => write!(f, "c.add {}, {}", reg_name(rd), reg_name(rs2)),
             Instruction::CSwsp { rs2, imm } => write!(f, "c.swsp {}, {}(sp)", reg_name(rs2), imm),
+            Instruction::CFlw { rd, rs1, imm } => {
+                write!(f, "c.flw {}, {}({})", freg_name(rd), imm, reg_name(rs1))
+            }
+            Instruction::CFsw { rs1, rs2, imm } => {
+                write!(f, "c.fsw {}, {}({})", freg_name(rs2), imm, reg_name(rs1))
+            }
+            Instruction::CFld { rd, rs1, imm } => {
+                write!(f, "c.fld {}, {}({})", freg_name(rd), imm, reg_name(rs1))
+            }
+            Instruction::CFsd { rs1, rs2, imm } => {
+                write!(f, "c.fsd {}, {}({})", freg_name(rs2), imm, reg_name(rs1))
+            }
+            Instruction::CFlwsp { rd, imm } => {
+                write!(f, "c.flwsp {}, {}(sp)", freg_name(rd), imm)
+            }
+            Instruction::CFswsp { rs2, imm } => {
+                write!(f, "c.fswsp {}, {}(sp)", freg_name(rs2), imm)
+            }
+            Instruction::CFldsp { rd, imm } => {
+                write!(f, "c.fldsp {}, {}(sp)", freg_name(rd), imm)
+            }
+            Instruction::CFsdsp { rs2, imm } => {
+                write!(f, "c.fsdsp {}, {}(sp)", freg_name(rs2), imm)
+            }
         }
     }
 }

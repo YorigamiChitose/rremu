@@ -3,7 +3,7 @@
 //! FLEN=64，但 `.s` 值必须满足高 32 位全 1 的 NaN boxing 约定。
 //! 所有 boxing/unboxing 都集中在这里，执行器不得手写移位。
 
-use rremu_fp::{Fp32, Fp64};
+use rremu_fp::{Fp32, Fp64, Flags};
 use rremu_isa::csr;
 
 use super::Cpu;
@@ -35,6 +35,29 @@ impl Cpu {
     /// 按 `.d` 语义读取完整 64 位。
     pub fn fpr_d(&self, i: u8) -> Fp64 {
         Fp64::from_bits(self.fprs[usize::from(i)])
+    }
+
+    /// 写入 `.s` 值并置 NaN box；写 FPR 后 FS=Dirty。
+    pub(crate) fn write_fpr_s(&mut self, i: u8, value: Fp32) {
+        self.fprs[usize::from(i)] = NAN_BOX_MASK | u64::from(value.to_bits());
+        self.mark_fp_dirty();
+    }
+
+    /// 写入 `.d` 值；写 FPR 后 FS=Dirty。
+    pub(crate) fn write_fpr_d(&mut self, i: u8, value: Fp64) {
+        self.fprs[usize::from(i)] = value.to_bits();
+        self.mark_fp_dirty();
+    }
+
+    /// 将 `flags` 的 sticky 位并入 `fcsr.fflags`；有变化时 FS=Dirty。
+    pub(crate) fn raise_fp_flags(&mut self, flags: Flags) {
+        let current = Flags::from_bits((self.csr.fcsr & csr::FCSR_FFLAGS_MASK) as u8);
+        let merged = current | flags;
+        if merged != current {
+            self.csr.fcsr = (self.csr.fcsr & !csr::FCSR_FFLAGS_MASK)
+                | u32::from(merged.bits());
+            self.mark_fp_dirty();
+        }
     }
 
     /// 返回 `fcsr`（含 fflags/frm）。
