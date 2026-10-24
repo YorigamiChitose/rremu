@@ -4,6 +4,7 @@
 //! 以及断点/监视点（`b` / `w` / `info w` / `d`），
 //! 以及 UART 输入（`uart`：进入 raw 模式逐键发给 UART RX，Esc 退出）。
 
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +15,7 @@ use std::time::Duration;
 
 use rremu_config::Config;
 use rremu_expr::{parse as parse_expr, Expr};
-use rremu_machine::{reg_name, EmuEvent, Machine, RunResult, RunState};
+use rremu_machine::{freg_name, reg_name, EmuEvent, Machine, MachineSnapshot, RunResult, RunState};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
@@ -93,6 +94,40 @@ fn spawn_uart_input(path: String) -> Option<Receiver<UartInputEvent>> {
             None
         }
     }
+}
+
+/// 生成 `info r` 文本（纯函数，便于测试）。
+fn info_regs_text(snap: &MachineSnapshot) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "pc  = 0x{:08x}  priv = {}", snap.pc, snap.priv_);
+    for i in 0..32u8 {
+        let name = reg_name(i);
+        let val = snap.gprs[usize::from(i)];
+        let _ = write!(out, "x{i:<2}({name:>4})=0x{val:08x}  ");
+        if i % 4 == 3 {
+            out.push('\n');
+        }
+    }
+
+    let c = &snap.csrs;
+    let _ = writeln!(out, "mstatus   = 0x{:08x}", c.mstatus);
+    let _ = writeln!(out, "mtvec     = 0x{:08x}", c.mtvec);
+    let _ = writeln!(out, "mepc      = 0x{:08x}", c.mepc);
+    let _ = writeln!(out, "mcause    = 0x{:08x}", c.mcause);
+    let _ = writeln!(out, "mie       = 0x{:08x}", c.mie);
+    let _ = writeln!(out, "mip       = 0x{:08x}", c.mip);
+    let _ = writeln!(out, "mcycle    = {}", c.mcycle);
+    let _ = writeln!(out, "minstret  = {}", c.minstret);
+    let _ = writeln!(out, "fcsr      = 0x{:08x}", c.fcsr);
+    for i in 0..32u8 {
+        let name = freg_name(i);
+        let val = snap.fprs[usize::from(i)];
+        let _ = write!(out, "f{i:<2} ({name:>4})=0x{val:016x}  ");
+        if i % 2 == 1 {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// 单条命令的执行结果：决定 REPL 循环与进程退出码。
@@ -297,7 +332,7 @@ impl Repl {
         println!("  b EXPR        Set breakpoint at address EXPR");
         println!("  w EXPR        Watch value of EXPR, stops on change (*ADDR for memory, x5 for reg)");
         println!("  d N           Delete watchpoint N, or breakpoint N (index from 'info w')");
-        println!("  info r        Show registers and CSRs");
+        println!("  info r        Show GPRs, FPRs and CSRs");
         println!("  info w        List breakpoints and watchpoints");
         println!("  uart          Enter UART input mode (raw key→byte→UART RX, Esc to exit)");
         println!("  (startup)     --uart-in FILE reads UART input from FILE/FIFO (default: none)");
@@ -430,25 +465,7 @@ impl Repl {
     }
 
     fn cmd_info_regs(&self) {
-        let snap = self.machine.snapshot();
-        println!("pc  = 0x{:08x}  priv = {}", snap.pc, snap.priv_);
-        for i in 0..32u8 {
-            let name = reg_name(i);
-            let val = snap.gprs[usize::from(i)];
-            print!("x{i:<2}({name:>4})=0x{val:08x}  ");
-            if i % 4 == 3 {
-                println!();
-            }
-        }
-        let c = &snap.csrs;
-        println!("mstatus   = 0x{:08x}", c.mstatus);
-        println!("mtvec     = 0x{:08x}", c.mtvec);
-        println!("mepc      = 0x{:08x}", c.mepc);
-        println!("mcause    = 0x{:08x}", c.mcause);
-        println!("mie       = 0x{:08x}", c.mie);
-        println!("mip       = 0x{:08x}", c.mip);
-        println!("mcycle    = {}", c.mcycle);
-        println!("minstret  = {}", c.minstret);
+        print!("{}", info_regs_text(&self.machine.snapshot()));
     }
 
     fn cmd_breakpoint(&mut self, expr: &Expr) -> Outcome {
@@ -825,6 +842,38 @@ mod tests {
             _ => panic!("expected Dump"),
         }
         assert!(parse_command("dump").is_err());
+    }
+
+    #[test]
+    fn info_regs_fp() {
+        let mut fprs = [0u64; 32];
+        fprs[10] = 0x3ff0_0000_0000_0000;
+        let snap = MachineSnapshot {
+            cycle: 0,
+            pc: 0x8000_0000,
+            priv_: rremu_machine::Priv::Machine,
+            gprs: [0; 32],
+            fprs,
+            csrs: rremu_machine::CsrSnapshot {
+                mstatus: 0x6000,
+                mtvec: 0,
+                mepc: 0,
+                mcause: 0,
+                mtval: 0,
+                mie: 0,
+                mip: 0,
+                fcsr: 0xe5,
+                mcycle: 0,
+                minstret: 0,
+            },
+            state: RunState::Paused,
+            mem_ring: std::collections::VecDeque::new(),
+        };
+
+        let text = info_regs_text(&snap);
+        assert!(text.contains("fcsr      = 0x000000e5"));
+        assert!(text.contains("f10 ( fa0)=0x3ff0000000000000"));
+        assert!(text.contains("x0 (zero)=0x00000000"));
     }
 
     #[test]

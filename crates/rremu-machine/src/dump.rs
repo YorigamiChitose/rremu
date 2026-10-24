@@ -1,8 +1,9 @@
-//! dump 模块：机器状态的结构化序列化格式（format_version = 1）。
+//! dump 模块：机器状态的结构化序列化格式（format_version = 2）。
 //!
 //! rremu 在终止时把机器状态序列化为 JSON；由离线工具（rremu-report）解析。
 //! 数值一律用 hex 字符串（避免 JSON double 精度损失，贴合 RISC-V 习惯）；
 //! 事件用字符串标签（`#[serde(tag = "type")]`）。
+//! v2 增加 FPR 与 fcsr；旧 v1 dump 缺失这些字段时使用零默认值。
 
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +12,7 @@ use rremu_bus::EmuEvent;
 use crate::{Machine, RunState, TraceEntry};
 
 /// dump 格式版本。
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// dump 保留的最大事件数（= 2 × trace 深度）。
 pub const EVENT_CAPACITY: usize = 64;
@@ -88,6 +89,8 @@ pub struct MachineState {
     #[serde(rename = "priv")]
     pub priv_: String,
     pub gprs: Vec<String>,
+    #[serde(default = "default_fprs")]
+    pub fprs: Vec<String>,
     pub csrs: CsrState,
 }
 
@@ -101,8 +104,22 @@ pub struct CsrState {
     pub mtval: String,
     pub mie: String,
     pub mip: String,
+    #[serde(default = "default_hex_zero")]
+    pub fcsr: String,
     pub mcycle: u64,
     pub minstret: u64,
+}
+
+fn default_fprs() -> Vec<String> {
+    vec![default_fpr(); 32]
+}
+
+fn default_fpr() -> String {
+    "0x0000000000000000".to_owned()
+}
+
+fn default_hex_zero() -> String {
+    hex(0)
 }
 
 /// 最近一次 trap（取自事件环）。
@@ -163,6 +180,7 @@ impl Dump {
         };
 
         let gprs: Vec<String> = snap.gprs.iter().map(|v| hex(*v)).collect();
+        let fprs: Vec<String> = snap.fprs.iter().map(|v| format!("0x{v:016x}")).collect();
 
         let csrs = CsrState {
             mstatus: hex(snap.csrs.mstatus),
@@ -172,6 +190,7 @@ impl Dump {
             mtval: hex(snap.csrs.mtval),
             mie: hex(snap.csrs.mie),
             mip: hex(snap.csrs.mip),
+            fcsr: hex(snap.csrs.fcsr),
             mcycle: snap.csrs.mcycle,
             minstret: snap.csrs.minstret,
         };
@@ -210,6 +229,7 @@ impl Dump {
                 pc: hex(snap.pc),
                 priv_: snap.priv_.to_string(),
                 gprs,
+                fprs,
                 csrs,
             },
             trap,
@@ -252,6 +272,7 @@ mod tests {
         assert_eq!(d.reason, Reason::Paused);
         assert_eq!(d.machine.pc, hex(base + 4));
         assert_eq!(d.machine.gprs.len(), 32);
+        assert_eq!(d.machine.fprs.len(), 32);
         assert_eq!(d.trace.len(), 1);
         assert_eq!(d.elf.as_ref().unwrap().path, "prog.elf");
 
@@ -260,6 +281,43 @@ mod tests {
         assert_eq!(back.format_version, d.format_version);
         assert_eq!(back.machine.pc, d.machine.pc);
         assert_eq!(back.trace.len(), 1);
+    }
+
+    #[test]
+    fn dump_fp_roundtrip() {
+        let base = 0x8000_0000;
+        let mut m = test_machine(base, 0x1000, nop_image(base));
+        let mut fprs = [0u64; 32];
+        fprs[1] = 0xffff_ffff_3f80_0000;
+        fprs[10] = 0x3ff0_0000_0000_0000;
+        m.cpu.restore_fp_state(&fprs, 0xe5, rremu_isa::csr::MSTATUS_FS_DIRTY);
+
+        let d = Dump::from_machine(&m, None);
+        assert_eq!(d.machine.fprs[1], "0xffffffff3f800000");
+        assert_eq!(d.machine.fprs[10], "0x3ff0000000000000");
+        assert_eq!(d.machine.csrs.fcsr, "0x000000e5");
+
+        let back = Dump::from_json(&d.to_json().unwrap()).unwrap();
+        assert_eq!(back.machine.fprs, d.machine.fprs);
+        assert_eq!(back.machine.csrs.fcsr, d.machine.csrs.fcsr);
+    }
+
+    #[test]
+    fn dump_legacy_defaults() {
+        let base = 0x8000_0000;
+        let m = test_machine(base, 0x1000, nop_image(base));
+        let d = Dump::from_machine(&m, None);
+
+        let mut v: serde_json::Value = serde_json::from_str(&d.to_json().unwrap()).unwrap();
+        v["format_version"] = serde_json::json!(1);
+        v["machine"].as_object_mut().unwrap().remove("fprs");
+        v["machine"]["csrs"].as_object_mut().unwrap().remove("fcsr");
+
+        let back = Dump::from_json(&serde_json::to_string(&v).unwrap()).unwrap();
+        assert_eq!(back.format_version, 1);
+        assert_eq!(back.machine.fprs.len(), 32);
+        assert!(back.machine.fprs.iter().all(|v| v == "0x0000000000000000"));
+        assert_eq!(back.machine.csrs.fcsr, "0x00000000");
     }
 
     #[test]

@@ -16,7 +16,7 @@ pub struct TraceEntry {
 }
 
 
-/// CSR 快照（TUI/CLI 显示所需的最简 M-mode 集合）。
+/// CSR 快照（TUI/CLI 显示所需的 M-mode + FP 集合）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CsrSnapshot {
     pub mstatus: u32,
@@ -26,6 +26,8 @@ pub struct CsrSnapshot {
     pub mtval: u32,
     pub mie: u32,
     pub mip: u32,
+    /// `fcsr`：fflags 与 frm 的合并视图。
+    pub fcsr: u32,
     pub mcycle: u64,
     pub minstret: u64,
 }
@@ -37,6 +39,8 @@ pub struct MachineSnapshot {
     pub pc: Address,
     pub priv_: Priv,
     pub gprs: [Word; 32],
+    /// 原始 64 位浮点寄存器（FLEN=64）。
+    pub fprs: [u64; 32],
     pub csrs: CsrSnapshot,
     pub state: RunState,
     pub mem_ring: VecDeque<EmuEvent>,

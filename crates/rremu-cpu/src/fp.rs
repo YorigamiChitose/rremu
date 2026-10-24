@@ -4,6 +4,7 @@
 //! 所有 boxing/unboxing 都集中在这里，执行器不得手写移位。
 
 use rremu_fp::{Fp32, Fp64};
+use rremu_isa::csr;
 
 use super::Cpu;
 
@@ -34,6 +35,20 @@ impl Cpu {
     /// 按 `.d` 语义读取完整 64 位。
     pub fn fpr_d(&self, i: u8) -> Fp64 {
         Fp64::from_bits(self.fprs[usize::from(i)])
+    }
+
+    /// 返回 `fcsr`（含 fflags/frm）。
+    pub fn fcsr(&self) -> u32 {
+        self.csr.fcsr
+    }
+
+    /// 恢复快照中的浮点状态：FPR、fcsr 与 `mstatus.FS`。
+    ///
+    /// 原始 FPR 位模式原样恢复；调用方负责保证快照来自同一 FLEN。
+    pub fn restore_fp_state(&mut self, fprs: &[u64; 32], fcsr: u32, fs: u32) {
+        self.fprs = *fprs;
+        self.csr.fcsr = fcsr & csr::FCSR_MASK;
+        self.csr.mstatus = (self.csr.mstatus & !csr::MSTATUS_FS_MASK) | (fs & csr::MSTATUS_FS_MASK);
     }
 }
 
@@ -108,6 +123,27 @@ mod tests {
         assert_eq!(
             cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::MSTATUS_FS_MASK,
             csr::MSTATUS_FS_INITIAL
+        );
+    }
+
+    #[test]
+    fn fp_snapshot_restore_round_trips() {
+        let mut cpu = Cpu::new(0);
+        let mut fprs = [0u64; 32];
+        fprs[1] = NAN_BOX_MASK | 0x3f80_0000;
+        fprs[2] = 0x4000_0000_0000_0000;
+
+        cpu.restore_fp_state(&fprs, 0xff, csr::MSTATUS_FS_DIRTY);
+
+        assert_eq!(cpu.fprs(), &fprs);
+        assert_eq!(cpu.fcsr(), csr::FCSR_MASK);
+        assert_eq!(
+            cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::MSTATUS_FS_MASK,
+            csr::MSTATUS_FS_DIRTY
+        );
+        assert_eq!(
+            cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::MSTATUS_SD,
+            csr::MSTATUS_SD
         );
     }
 }

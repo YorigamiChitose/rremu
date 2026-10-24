@@ -7,7 +7,7 @@ pub mod instruction;
 pub mod types;
 
 pub use instruction::Instruction;
-pub use types::{Address, Priv, Word, ABI_NAMES, reg_name};
+pub use types::{Address, Priv, Word, ABI_NAMES, FP_ABI_NAMES, freg_name, reg_name};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // 测试内放行
@@ -113,6 +113,17 @@ mod tests {
         assert_eq!(cause::cause_name(cause::S_EI), "supervisor external interrupt");
         assert_eq!(cause::cause_name(99), "unknown exception");
         assert_eq!(cause::cause_name(0x8000_0000 | 99), "unknown interrupt");
+    }
+
+    #[test]
+    fn fp_abi_names() {
+        assert_eq!(FP_ABI_NAMES.len(), 32);
+        assert_eq!(freg_name(0), "ft0");
+        assert_eq!(freg_name(8), "fs0");
+        assert_eq!(freg_name(10), "fa0");
+        assert_eq!(freg_name(27), "fs11");
+        assert_eq!(freg_name(31), "ft11");
+        assert_eq!(freg_name(32), "f?");
     }
 
     #[test]

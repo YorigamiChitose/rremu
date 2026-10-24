@@ -15,7 +15,7 @@ use thiserror::Error;
 // 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa/bus）。
 // pub use 同时将名称引入本模块，供内部代码直接使用。
 pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
-pub use rremu_isa::{reg_name, Instruction, Priv};
+pub use rremu_isa::{freg_name, reg_name, Instruction, Priv};
 
 pub mod dump;
 mod builder;
@@ -211,6 +211,7 @@ impl Machine {
             pc: self.cpu.pc(),
             priv_: self.cpu.priv_(),
             gprs: *self.cpu.regs(),
+            fprs: *self.cpu.fprs(),
             csrs: CsrSnapshot {
                 mstatus: self.cpu.debug_csr_read(csr::MSTATUS).unwrap_or(0),
                 mtvec: self.cpu.debug_csr_read(csr::MTVEC).unwrap_or(0),
@@ -219,6 +220,7 @@ impl Machine {
                 mtval: self.cpu.debug_csr_read(csr::MTVAL).unwrap_or(0),
                 mie: self.cpu.debug_csr_read(csr::MIE).unwrap_or(0),
                 mip: self.cpu.debug_csr_read(csr::MIP).unwrap_or(0),
+                fcsr: self.cpu.debug_csr_read(csr::FCSR).unwrap_or(0),
                 mcycle: self.cpu.cycle(),
                 minstret: self.cpu.instret(),
             },
@@ -505,7 +507,24 @@ mod tests {
         assert_eq!(full.cycle, compact.cycle);
         assert_eq!(full.pc, compact.pc);
         assert_eq!(full.gprs, compact.gprs);
+        assert_eq!(full.fprs, compact.fprs);
         assert_eq!(full.state, compact.state);
+    }
+
+    #[test]
+    fn snapshot_fp() {
+        let base = 0x8000_0000;
+        let mut machine = test_machine(base, 0x1000, nop_image(base));
+        let mut fprs = [0u64; 32];
+        fprs[10] = 0xffff_ffff_3f80_0000;
+        machine.cpu.restore_fp_state(&fprs, 0xe5, csr::MSTATUS_FS_DIRTY);
+
+        let snap = machine.snapshot();
+
+        assert_eq!(snap.fprs, fprs);
+        assert_eq!(snap.csrs.fcsr, 0xe5);
+        assert_eq!(snap.csrs.mstatus & csr::MSTATUS_FS_MASK, csr::MSTATUS_FS_DIRTY);
+        assert_eq!(snap.csrs.mstatus & csr::MSTATUS_SD, csr::MSTATUS_SD);
     }
 
     #[test]

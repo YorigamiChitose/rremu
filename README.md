@@ -243,8 +243,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ### 结果 dump
 
-rremu 支持把终止时的机器状态序列化为结构化 JSON（`format_version=1`）：
-寄存器/CSR（含 `mtval`）、最近 32 条指令 trace（trap 时冻结为崩溃路径）、
+rremu 支持把终止时的机器状态序列化为结构化 JSON（`format_version=2`）：
+寄存器/CSR（含 `mtval`、`fcsr`）、32 个 FPR、最近 32 条指令 trace（trap 时冻结为崩溃路径）、
 最近 64 条 IO 事件、终止原因、最近 trap、ELF 引用（路径 + sha256）。触发方式：
 
 - `dump FILE`（REPL 命令；批量模式下程序退出后仍可执行）

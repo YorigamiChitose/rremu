@@ -29,12 +29,27 @@ pub const ABI_NAMES: [&str; 32] = [
     "t5", "t6",
 ];
 
+/// 浮点寄存器 ABI 名称（f0..f31）。
+pub const FP_ABI_NAMES: [&str; 32] = [
+    "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "fs0", "fs1", "fa0", "fa1", "fa2",
+    "fa3", "fa4", "fa5", "fa6", "fa7", "fs2", "fs3", "fs4", "fs5", "fs6", "fs7", "fs8", "fs9",
+    "fs10", "fs11", "ft8", "ft9", "ft10", "ft11",
+];
+
 /// 取寄存器 i 的 ABI 别名（越界时回退为 xN）。
 pub fn reg_name(i: u8) -> &'static str {
     ABI_NAMES
         .get(usize::from(i))
         .copied()
         .unwrap_or_else(|| unreachable_x(i))
+}
+
+/// 取浮点寄存器 i 的 ABI 别名（越界时回退为 fN）。
+pub fn freg_name(i: u8) -> &'static str {
+    FP_ABI_NAMES
+        .get(usize::from(i))
+        .copied()
+        .unwrap_or_else(|| unreachable_f(i))
 }
 
 // 辅助：寄存器编号越界（正常解码不会出现，防御性兜底）。
@@ -46,3 +61,9 @@ fn unreachable_x(i: u8) -> &'static str {
     "x?"
 }
 
+#[cold]
+#[inline(never)]
+fn unreachable_f(i: u8) -> &'static str {
+    let _ = i;
+    "f?"
+}
