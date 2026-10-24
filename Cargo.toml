@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/rremu-config",
     "crates/rremu-isa",
+    "crates/rremu-fp",
     "crates/rremu-decode",
     "crates/rremu-bus",
     "crates/rremu-cpu",
@@ -25,6 +26,7 @@ rust-version = "1.99"
 [workspace.dependencies]
 rremu-config = { path = "crates/rremu-config" }
 rremu-isa = { path = "crates/rremu-isa" }
+rremu-fp = { path = "crates/rremu-fp" }
 rremu-decode = { path = "crates/rremu-decode" }
 rremu-bus = { path = "crates/rremu-bus" }
 rremu-cpu = { path = "crates/rremu-cpu" }
