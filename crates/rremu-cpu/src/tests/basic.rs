@@ -269,9 +269,10 @@ use super::*;
     #[test]
     fn sstatus_sie_are_views_of_mstatus_mie() {
         let mut h = Harness::new();
-        h.cpu.csr_write(csr::SSTATUS, csr::SSTATUS_MASK);
-        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap(), csr::SSTATUS_MASK);
-        assert_eq!(h.cpu.debug_csr_read(csr::MSTATUS).unwrap() & csr::SSTATUS_MASK, csr::SSTATUS_MASK);
+        let sbits = csr::SSTATUS_MASK & !csr::MSTATUS_FS_MASK;
+        h.cpu.csr_write(csr::SSTATUS, sbits);
+        assert_eq!(h.cpu.debug_csr_read(csr::SSTATUS).unwrap(), sbits);
+        assert_eq!(h.cpu.debug_csr_read(csr::MSTATUS).unwrap() & sbits, sbits);
         h.cpu.csr_write(csr::SIE, csr::SIE_S_MASK);
         assert_eq!(h.cpu.debug_csr_read(csr::MIE).unwrap() & csr::SIE_S_MASK, csr::SIE_S_MASK);
         h.cpu.csr_write(csr::SATP, 0x8000_0000);

@@ -131,6 +131,7 @@ use rremu_isa::{cause, csr, Instruction, Priv, Word};
     const LOAD: u32 = 0b0000011;
 
 mod basic;
+mod fp;
 mod exec;
 mod compressed;
 mod interrupt;

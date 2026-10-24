@@ -1540,6 +1540,7 @@ version = "0.1.0"
 dependencies = [
  "rremu-bus",
  "rremu-decode",
+ "rremu-fp",
  "rremu-isa",
  "thiserror 2.0.21",
 ]

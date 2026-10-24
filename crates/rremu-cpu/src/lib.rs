@@ -7,6 +7,7 @@ use thiserror::Error;
 
 mod csr;
 mod exec;
+mod fp;
 mod fetch;
 mod interrupt;
 mod trap;
@@ -43,6 +44,8 @@ pub enum CpuError {
 #[derive(Debug, Clone)]
 pub struct Cpu {
     x: [u32; 32],
+    /// 浮点寄存器堆；FLEN=64，F 值在 `.s` 写入时使用 NaN boxing。
+    fprs: [u64; 32],
     pc: u32,
     priv_: Priv,
     csr: CsrState,
@@ -54,7 +57,16 @@ pub struct Cpu {
 
 impl Cpu {
     pub fn new(entry: u32) -> Self {
-        Self { x: [0; 32], pc: entry, priv_: Priv::Machine, csr: CsrState::new(), cycle: 0, instret: 0, reservation: None }
+        Self {
+            x: [0; 32],
+            fprs: [0; 32],
+            pc: entry,
+            priv_: Priv::Machine,
+            csr: CsrState::new(),
+            cycle: 0,
+            instret: 0,
+            reservation: None,
+        }
     }
 
     // ---- 只读访问（machine 快照用） ----
@@ -92,6 +104,7 @@ impl Cpu {
     /// 复位到入口（寄存器/CSR/计数器清零，MPP=M）。
     pub fn reset(&mut self, entry: u32) {
         self.x = [0; 32];
+        self.fprs = [0; 32];
         self.pc = entry;
         self.priv_ = Priv::Machine;
         self.csr = CsrState::new();

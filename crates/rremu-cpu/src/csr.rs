@@ -16,6 +16,8 @@ pub struct CsrState {
     pub mcause: u32,
     pub mtval: u32,
     pub mip: u32,
+    /// `fcsr`：低 5 位 fflags，bits 5..7 为 frm。
+    pub fcsr: u32,
     pub mcounteren: u32,
     pub scounteren: u32,
     pub mhartid: u32,
@@ -50,6 +52,7 @@ impl CsrState {
             mcause: 0,
             mtval: 0,
             mip: 0,
+            fcsr: 0,
             mcounteren: 0,
             scounteren: 0,
             mhartid: 0,
@@ -72,7 +75,7 @@ impl Cpu {
     /// `sstatus`/`sie`/`sip` 是 `mstatus`/`mie`/`mip` 的 S 位掩码视图。
     pub fn debug_csr_read(&self, addr: u16) -> Option<u32> {
         Some(match addr {
-            csr::MSTATUS => self.csr.mstatus,
+            csr::MSTATUS => self.mstatus_value(),
             csr::MSTATUSH | csr::SSTATUSH => 0,
             csr::MISA => self.csr.misa,
             csr::MIE => self.csr.mie,
@@ -82,11 +85,14 @@ impl Cpu {
             csr::MCAUSE => self.csr.mcause,
             csr::MTVAL => self.csr.mtval,
             csr::MIP => self.csr.mip,
+            csr::FFLAGS => self.csr.fcsr & csr::FCSR_FFLAGS_MASK,
+            csr::FRM => (self.csr.fcsr & csr::FCSR_FRM_MASK) >> csr::FCSR_FRM_SHIFT,
+            csr::FCSR => self.csr.fcsr,
             csr::MCOUNTEREN => self.csr.mcounteren,
             csr::SCOUNTEREN => self.csr.scounteren,
             csr::MEDELEG => self.csr.medeleg,
             csr::MIDELEG => self.csr.mideleg,
-            csr::SSTATUS => self.csr.mstatus & csr::SSTATUS_MASK,
+            csr::SSTATUS => self.sstatus_value(),
             csr::SIE => self.csr.mie & csr::SIE_S_MASK,
             csr::SIP => self.csr.mip & csr::SIE_S_MASK,
             csr::STVEC => self.csr.stvec,
@@ -117,6 +123,34 @@ impl Cpu {
         Ok(self.debug_csr_read(addr).unwrap_or(0))
     }
 
+    /// FS != Off 时浮点状态可用。
+    pub(crate) fn fp_enabled(&self) -> bool {
+        self.csr.mstatus & csr::MSTATUS_FS_MASK != csr::MSTATUS_FS_OFF
+    }
+
+    /// 写浮点状态后置 FS=Dirty。调用方必须先检查 `fp_enabled()`。
+    pub(crate) fn mark_fp_dirty(&mut self) {
+        self.csr.mstatus = (self.csr.mstatus & !csr::MSTATUS_FS_MASK) | csr::MSTATUS_FS_DIRTY;
+    }
+
+    /// 返回带只读 SD 汇总位的 mstatus。
+    fn mstatus_value(&self) -> u32 {
+        let mut value = self.csr.mstatus & !csr::MSTATUS_SD;
+        if self.csr.mstatus & csr::MSTATUS_FS_MASK == csr::MSTATUS_FS_DIRTY {
+            value |= csr::MSTATUS_SD;
+        }
+        value
+    }
+
+    /// 返回 sstatus 视图：仅 S 相关位、FS 与只读 SD。
+    fn sstatus_value(&self) -> u32 {
+        self.mstatus_value() & (csr::SSTATUS_MASK | csr::MSTATUS_SD)
+    }
+
+    fn is_fp_csr(addr: u16) -> bool {
+        matches!(addr, csr::FFLAGS | csr::FRM | csr::FCSR)
+    }
+
     fn pmp_entry_locked(&self, i: usize) -> bool {
         let cfg = (self.csr.pmpcfg[i / 4] >> ((i % 4) * 8)) & 0xff;
         cfg & 0x80 != 0
@@ -141,6 +175,20 @@ impl Cpu {
             csr::MCAUSE => self.csr.mcause = val,
             csr::MTVAL => self.csr.mtval = val,
             csr::MIP => self.csr.mip = val,
+            csr::FFLAGS => {
+                self.csr.fcsr =
+                    (self.csr.fcsr & !csr::FCSR_FFLAGS_MASK) | (val & csr::FCSR_FFLAGS_MASK);
+                self.mark_fp_dirty();
+            }
+            csr::FRM => {
+                self.csr.fcsr = (self.csr.fcsr & !csr::FCSR_FRM_MASK)
+                    | ((val << csr::FCSR_FRM_SHIFT) & csr::FCSR_FRM_MASK);
+                self.mark_fp_dirty();
+            }
+            csr::FCSR => {
+                self.csr.fcsr = val & csr::FCSR_MASK;
+                self.mark_fp_dirty();
+            }
             csr::MCYCLE => self.cycle = (self.cycle & !0xffff_ffff) | u64::from(val),
             csr::MINSTRET => self.instret = (self.instret & !0xffff_ffff) | u64::from(val),
             csr::MCOUNTEREN => self.csr.mcounteren = val,
@@ -215,6 +263,9 @@ impl Cpu {
                 | csr::MCAUSE
                 | csr::MTVAL
                 | csr::MIP
+                | csr::FFLAGS
+                | csr::FRM
+                | csr::FCSR
                 | csr::MCOUNTEREN
                 | csr::MEDELEG
                 | csr::MIDELEG
@@ -272,6 +323,9 @@ impl Cpu {
         if !Self::csr_implemented(addr) {
             return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
         }
+        if Self::is_fp_csr(addr) && !self.fp_enabled() {
+            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+        }
         let required = u32::from((addr >> 8) & 0x3);
         let read_only = (addr >> 10) & 0x3 == 0x3;
         if required > self.priv_csr_level() || (write && read_only) {
@@ -285,12 +339,11 @@ impl Cpu {
 
     /// 更新 mstatus 三域：先清 MPP/MPIE/MIE，再写 MPP、MIE、MPIE。
     pub(crate) fn update_mstatus(&mut self, mpp: u32, mie: u32, mpie: u32) {
-        let mut mstatus =
-            self.csr.mstatus & !(csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
+        let mut mstatus = self.csr.mstatus
+            & !(csr::MSTATUS_SD | csr::MSTATUS_MPP_MASK | csr::MSTATUS_MPIE | csr::MSTATUS_MIE);
         mstatus |= (mpp << csr::MSTATUS_MPP_SHIFT)
             | (mie << csr::MSTATUS_MIE.trailing_zeros())
             | (mpie << csr::MSTATUS_MPIE.trailing_zeros());
         self.csr.mstatus = mstatus;
     }
-
 }

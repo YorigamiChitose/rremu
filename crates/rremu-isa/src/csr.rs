@@ -11,6 +11,18 @@
     pub const MCAUSE: u16 = 0x342;
     pub const MTVAL: u16 = 0x343;
     pub const MIP: u16 = 0x344;
+    // ---- 浮点 CSR ----
+    pub const FFLAGS: u16 = 0x001;
+    pub const FRM: u16 = 0x002;
+    pub const FCSR: u16 = 0x003;
+    /// `fcsr` 低 5 位为 `fflags`。
+    pub const FCSR_FFLAGS_MASK: u32 = 0x1f;
+    /// `frm` 在 `fcsr` 中的起始位。
+    pub const FCSR_FRM_SHIFT: u32 = 5;
+    /// `frm` 在 `fcsr` 中的掩码。
+    pub const FCSR_FRM_MASK: u32 = 0x7 << FCSR_FRM_SHIFT;
+    /// `fcsr` 已实现位。
+    pub const FCSR_MASK: u32 = FCSR_FFLAGS_MASK | FCSR_FRM_MASK;
     /// 机器模式计数器使能。
     pub const MCOUNTEREN: u16 = 0x306;
     // ---- S-mode CSR ----
@@ -59,6 +71,8 @@
     // misa 扩展位（RV32：MXL=01 位于 bit30）
     pub const MISA_A: u32 = 1 << 0;
     pub const MISA_C: u32 = 1 << 2;
+    pub const MISA_D: u32 = 1 << 3;
+    pub const MISA_F: u32 = 1 << 5;
     pub const MISA_I: u32 = 1 << 8;
     pub const MISA_M: u32 = 1 << 12;
     pub const MISA_S: u32 = 1 << 18;
@@ -74,9 +88,19 @@
     pub const MSTATUS_MPRV: u32 = 1 << 17;
     pub const MSTATUS_SUM: u32 = 1 << 18;
     pub const MSTATUS_MXR: u32 = 1 << 19;
+    /// `mstatus.FS` 起始位。
+    pub const MSTATUS_FS_SHIFT: u32 = 13;
+    pub const MSTATUS_FS_MASK: u32 = 0b11 << MSTATUS_FS_SHIFT;
+    pub const MSTATUS_FS_OFF: u32 = 0b00 << MSTATUS_FS_SHIFT;
+    pub const MSTATUS_FS_INITIAL: u32 = 0b01 << MSTATUS_FS_SHIFT;
+    pub const MSTATUS_FS_CLEAN: u32 = 0b10 << MSTATUS_FS_SHIFT;
+    pub const MSTATUS_FS_DIRTY: u32 = 0b11 << MSTATUS_FS_SHIFT;
+    /// `mstatus.SD`：只读汇总位，`FS == Dirty` 时为 1。
+    pub const MSTATUS_SD: u32 = 1 << 31;
 
-    /// sstatus 是 mstatus 的视图，仅暴露 S 相关位。
-    pub const SSTATUS_MASK: u32 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_SUM | MSTATUS_MXR;
+    /// sstatus 是 mstatus 的视图，仅暴露 S 相关位与 FS；SD 在读取时单独汇总。
+    pub const SSTATUS_MASK: u32 =
+        MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_SUM | MSTATUS_MXR | MSTATUS_FS_MASK;
 
     // S 级中断位（sie/sip 的 S 部分：SSIE/STIE/SEIE）
     pub const SIE_SSIE: u32 = 1 << 1;

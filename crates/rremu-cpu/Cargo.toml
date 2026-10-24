@@ -8,6 +8,7 @@ rust-version.workspace = true
 rremu-isa.workspace = true
 rremu-decode.workspace = true
 rremu-bus.workspace = true
+rremu-fp.workspace = true
 thiserror.workspace = true
 
 [lints]

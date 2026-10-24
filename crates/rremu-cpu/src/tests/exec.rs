@@ -186,9 +186,11 @@ use super::*;
         let misa = h.cpu.debug_csr_read(csr::MISA).unwrap();
         assert_eq!(misa & csr::MISA_I, csr::MISA_I);
         assert_eq!(misa & csr::MISA_S, csr::MISA_S);
-        // mstatus 只接受已实现的可写位
-        assert_eq!(h.cpu.reg(2) & !csr::MSTATUS_WRITE_MASK, 0);
-        assert_eq!(h.cpu.reg(2) & csr::MSTATUS_WRITE_MASK, csr::MSTATUS_WRITE_MASK);
+        // mstatus 只接受已实现的可写位，SD 为只读汇总位
+        let read = h.cpu.reg(2);
+        assert_eq!(read & !(csr::MSTATUS_WRITE_MASK | csr::MSTATUS_SD), 0);
+        assert_eq!(read & csr::MSTATUS_WRITE_MASK, csr::MSTATUS_WRITE_MASK);
+        assert_eq!(read & csr::MSTATUS_SD, csr::MSTATUS_SD);
     }
 
     #[test]
