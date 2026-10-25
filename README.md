@@ -44,7 +44,7 @@
 - RV32IMAFDC + Zicsr，M/S/U 三级特权
 - Sv32 页表、S 级中断、PMP 强制访问控制
 - OpenSBI v1.9 启动
-- Linux 6.12 RV32GC（启用 FPU）+ BusyBox initramfs 启动
+- Linux 6.12 RV32GC（启用 FPU + ilp32d 用户态）+ BusyBox initramfs 启动
 - `/init` 用户态、UART 输出、syscon poweroff
 - rremu-test 端到端回归 72 个用例（含 15 个 FP）
 
