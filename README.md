@@ -258,7 +258,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ecall+a7=magic 退出、UART 输出、CLINT 中断等端到端场景）与 `rremu-fp` 确定性 golden 向量回归由独立的外部测试项目 `rremu-test`（配合 HAL 库 `rremu-am`）承担。
+仓库内测试均为纯内存单测（无外部工具链依赖）。固件级验证（ecall+a7=magic 退出、UART 输出、CLINT 中断等端到端场景）由独立的外部测试项目 `rremu-test`（配合 HAL 库 `rremu-am`）承担。
 
 ### 结果 dump
 

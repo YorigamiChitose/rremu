@@ -180,7 +180,7 @@ flags.rs      fflags
 round.rs      舍入模式
 ```
 
-纯整数/位操作实现，不依赖宿主浮点环境；确定性 golden 向量回归由 `rremu-test` harness 承担。
+纯整数/位操作实现，不依赖宿主浮点环境。
 
 ### `rremu-machine`
 
