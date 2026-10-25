@@ -53,6 +53,22 @@ mod tests {
     }
 
     #[test]
+    fn display_fp_arithmetic() {
+        assert_eq!(
+            Instruction::FaddS { rd: 10, rs1: 11, rs2: 12, rm: 0 }.to_string(),
+            "fadd.s fa0, fa1, fa2, rne"
+        );
+        assert_eq!(
+            Instruction::FdivD { rd: 10, rs1: 11, rs2: 12, rm: 4 }.to_string(),
+            "fdiv.d fa0, fa1, fa2, rmm"
+        );
+        assert_eq!(
+            Instruction::FsqrtS { rd: 10, rs1: 11, rm: 7 }.to_string(),
+            "fsqrt.s fa0, fa1, dyn"
+        );
+    }
+
+    #[test]
     fn display_system() {
         assert_eq!(Instruction::Ecall.to_string(), "ecall");
         assert_eq!(Instruction::Ebreak.to_string(), "ebreak");

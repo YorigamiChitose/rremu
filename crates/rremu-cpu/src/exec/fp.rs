@@ -1,10 +1,13 @@
-//! F/D 扩展的非算术指令执行：load/store、move、符号注入、比较与分类。
+//! F/D 扩展执行：load/store、move、符号注入、比较、分类与算术。
 
 use core::cmp::Ordering;
 
 use rremu_bus::{AccessSize, Bus, EventSink};
-use rremu_fp::{Fp32, Fp64, Flags};
-use rremu_isa::{cause, Instruction};
+use rremu_fp::{
+    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, mul32, mul64, sqrt32, sqrt64,
+    sub32, sub64,
+};
+use rremu_isa::{Instruction, cause, csr};
 
 use super::{Cpu, TrapErr};
 
@@ -131,6 +134,66 @@ impl Cpu {
                     self.x[usize::from(rd)] = u32::from(class.mask());
                 }
             }
+            Instruction::FaddS { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = add32(self.fpr_s(rs1), self.fpr_s(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FsubS { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = sub32(self.fpr_s(rs1), self.fpr_s(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FmulS { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = mul32(self.fpr_s(rs1), self.fpr_s(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FdivS { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = div32(self.fpr_s(rs1), self.fpr_s(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FsqrtS { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = sqrt32(self.fpr_s(rs1), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FaddD { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = add64(self.fpr_d(rs1), self.fpr_d(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FsubD { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = sub64(self.fpr_d(rs1), self.fpr_d(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FmulD { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = mul64(self.fpr_d(rs1), self.fpr_d(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FdivD { rd, rs1, rs2, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = div64(self.fpr_d(rs1), self.fpr_d(rs2), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FsqrtD { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = sqrt64(self.fpr_d(rs1), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
             Instruction::CFlw { rd, rs1, imm } => {
                 let addr = x(self, rs1).wrapping_add(imm as u32);
                 let bits = self.load(bus, sink, addr, AccessSize::Word)?;
@@ -175,6 +238,18 @@ impl Cpu {
         }
 
         Ok(Some(next_pc))
+    }
+
+    fn fp_rounding_mode(&self, rm: u8, raw: u32) -> Result<RoundingMode, TrapErr> {
+        let rm = if rm == 7 {
+            ((self.csr.fcsr & csr::FCSR_FRM_MASK) >> csr::FCSR_FRM_SHIFT) as u8
+        } else {
+            rm
+        };
+        RoundingMode::from_bits(rm).ok_or(TrapErr {
+            cause: cause::ILLEGAL_INSTR,
+            mtval: raw,
+        })
     }
 
     fn load_u64<B: Bus, E: EventSink>(
@@ -271,6 +346,16 @@ fn is_fp_instruction(instr: Instruction) -> bool {
             | Instruction::FleD { .. }
             | Instruction::FclassS { .. }
             | Instruction::FclassD { .. }
+            | Instruction::FaddS { .. }
+            | Instruction::FsubS { .. }
+            | Instruction::FmulS { .. }
+            | Instruction::FdivS { .. }
+            | Instruction::FsqrtS { .. }
+            | Instruction::FaddD { .. }
+            | Instruction::FsubD { .. }
+            | Instruction::FmulD { .. }
+            | Instruction::FdivD { .. }
+            | Instruction::FsqrtD { .. }
             | Instruction::CFlw { .. }
             | Instruction::CFsw { .. }
             | Instruction::CFld { .. }

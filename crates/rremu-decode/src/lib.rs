@@ -9,6 +9,10 @@ pub fn instr_len(first_half: u16) -> usize {
     if first_half & 0b11 == 0b11 { 4 } else { 2 }
 }
 
+fn valid_fp_rm(rm: u8) -> bool {
+    matches!(rm, 0..=4 | 7)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DecodeError {
     /// 非法编码（opcode/funct 字段不属于任何已实现指令）。
@@ -137,8 +141,18 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
             }
         }
         0b1010011 => {
-            // OP-FP：M1 只实现非算术指令；算术/转换后续阶段补齐。
+            // OP-FP：算术、非算术与转换按阶段补齐。
             match (funct7, funct3) {
+                (0b0000000, rm) if valid_fp_rm(rm) => Ok(Instruction::FaddS { rd, rs1, rs2, rm }),
+                (0b0000100, rm) if valid_fp_rm(rm) => Ok(Instruction::FsubS { rd, rs1, rs2, rm }),
+                (0b0001000, rm) if valid_fp_rm(rm) => Ok(Instruction::FmulS { rd, rs1, rs2, rm }),
+                (0b0001100, rm) if valid_fp_rm(rm) => Ok(Instruction::FdivS { rd, rs1, rs2, rm }),
+                (0b0101100, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FsqrtS { rd, rs1, rm }),
+                (0b0000001, rm) if valid_fp_rm(rm) => Ok(Instruction::FaddD { rd, rs1, rs2, rm }),
+                (0b0000101, rm) if valid_fp_rm(rm) => Ok(Instruction::FsubD { rd, rs1, rs2, rm }),
+                (0b0001001, rm) if valid_fp_rm(rm) => Ok(Instruction::FmulD { rd, rs1, rs2, rm }),
+                (0b0001101, rm) if valid_fp_rm(rm) => Ok(Instruction::FdivD { rd, rs1, rs2, rm }),
+                (0b0101101, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FsqrtD { rd, rs1, rm }),
                 (0b0010000, 0b000) => Ok(Instruction::FsgnjS { rd, rs1, rs2 }),
                 (0b0010000, 0b001) => Ok(Instruction::FsgnjnS { rd, rs1, rs2 }),
                 (0b0010000, 0b010) => Ok(Instruction::FsgnjxS { rd, rs1, rs2 }),
@@ -1010,7 +1024,72 @@ mod tests {
             Err(DecodeError::Illegal { .. })
         ));
         assert!(matches!(
-            decode32(fp_enc(7, 0b000, 8, 0, 0b0000000), PC),
+            decode32(fp_enc(7, 0b000, 8, 0, 0b0000010), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+    }
+
+    #[test]
+    fn decode_fp_arithmetic() {
+        assert_eq!(
+            decode32(fp_enc(3, 0, 1, 2, 0b0000000), PC),
+            Ok(Instruction::FaddS { rd: 3, rs1: 1, rs2: 2, rm: 0 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 1, 2, 3, 0b0000100), PC),
+            Ok(Instruction::FsubS { rd: 4, rs1: 2, rs2: 3, rm: 1 })
+        );
+        assert_eq!(
+            decode32(fp_enc(5, 4, 3, 4, 0b0001000), PC),
+            Ok(Instruction::FmulS { rd: 5, rs1: 3, rs2: 4, rm: 4 })
+        );
+        assert_eq!(
+            decode32(fp_enc(6, 7, 4, 5, 0b0001100), PC),
+            Ok(Instruction::FdivS { rd: 6, rs1: 4, rs2: 5, rm: 7 })
+        );
+        assert_eq!(
+            decode32(fp_enc(7, 2, 5, 0, 0b0101100), PC),
+            Ok(Instruction::FsqrtS { rd: 7, rs1: 5, rm: 2 })
+        );
+
+        assert_eq!(
+            decode32(fp_enc(8, 0, 6, 7, 0b0000001), PC),
+            Ok(Instruction::FaddD { rd: 8, rs1: 6, rs2: 7, rm: 0 })
+        );
+        assert_eq!(
+            decode32(fp_enc(9, 2, 7, 8, 0b0000101), PC),
+            Ok(Instruction::FsubD { rd: 9, rs1: 7, rs2: 8, rm: 2 })
+        );
+        assert_eq!(
+            decode32(fp_enc(10, 3, 8, 9, 0b0001001), PC),
+            Ok(Instruction::FmulD { rd: 10, rs1: 8, rs2: 9, rm: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(11, 4, 9, 10, 0b0001101), PC),
+            Ok(Instruction::FdivD { rd: 11, rs1: 9, rs2: 10, rm: 4 })
+        );
+        assert_eq!(
+            decode32(fp_enc(12, 7, 10, 0, 0b0101101), PC),
+            Ok(Instruction::FsqrtD { rd: 12, rs1: 10, rm: 7 })
+        );
+
+        // rm=5/6 是保留编码；fsqrt 的 rs2 必须为 0。
+        for rm in [5, 6] {
+            assert!(matches!(
+                decode32(fp_enc(3, rm, 1, 2, 0b0000000), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+            assert!(matches!(
+                decode32(fp_enc(3, rm, 1, 0, 0b0101100), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+        }
+        assert!(matches!(
+            decode32(fp_enc(3, 0, 1, 1, 0b0101100), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_enc(3, 0, 1, 2, 0b0000010), PC),
             Err(DecodeError::Illegal { .. })
         ));
     }

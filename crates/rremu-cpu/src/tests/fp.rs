@@ -308,6 +308,112 @@ fn fp_compare_flags_and_classify() {
 }
 
 #[test]
+fn fp_arithmetic_s_updates_result_flags_and_fs() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // 1.0
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x4000_0000)); // 2.0
+    h.cpu.write_fpr_s(3, Fp32::from_bits(0x4040_0000)); // 3.0
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 2, 0b0000000), // fadd.s 1+2
+            fp_r_enc(11, 0, 1, 2, 0b0000100), // fsub.s 1-2
+            fp_r_enc(12, 0, 1, 2, 0b0001000), // fmul.s 1*2
+            fp_r_enc(13, 0, 1, 3, 0b0001100), // fdiv.s 1/3
+            fp_r_enc(14, 0, 2, 0, 0b0101100), // fsqrt.s sqrt(2)
+        ],
+    );
+
+    h.run(4);
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x4040_0000);
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0xbf80_0000);
+    assert_eq!(h.cpu.fpr_s(12).to_bits(), 0x4000_0000);
+    assert_eq!(h.cpu.fpr_s(13).to_bits(), 0x3eaa_aaab);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    h.step();
+    assert_eq!(h.cpu.fpr_s(14).to_bits(), 0x3fb5_04f3);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+}
+
+#[test]
+fn fp_arithmetic_d_updates_result_flags_and_fs() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_d(1, Fp64::from_bits(0x3ff0_0000_0000_0000)); // 1.0
+    h.cpu.write_fpr_d(2, Fp64::from_bits(0x4000_0000_0000_0000)); // 2.0
+    h.cpu.write_fpr_d(3, Fp64::from_bits(0x4008_0000_0000_0000)); // 3.0
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 2, 0b0000001), // fadd.d 1+2
+            fp_r_enc(11, 0, 1, 2, 0b0000101), // fsub.d 1-2
+            fp_r_enc(12, 0, 1, 2, 0b0001001), // fmul.d 1*2
+            fp_r_enc(13, 0, 1, 3, 0b0001101), // fdiv.d 1/3
+            fp_r_enc(14, 0, 2, 0, 0b0101101), // fsqrt.d sqrt(2)
+        ],
+    );
+
+    h.run(4);
+    assert_eq!(h.cpu.fpr_d(10).to_bits(), 0x4008_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(11).to_bits(), 0xbff0_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(12).to_bits(), 0x4000_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(13).to_bits(), 0x3fd5_5555_5555_5555);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    h.step();
+    assert_eq!(h.cpu.fpr_d(14).to_bits(), 0x3ff6_a09e_667f_3bcd);
+    assert_eq!(fflags(&h), 0x01);
+}
+
+#[test]
+fn fp_dynamic_rounding_mode_and_reserved_modes() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // 1.0
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x4040_0000)); // 3.0
+    h.cpu.csr.fcsr = 1 << csr::FCSR_FRM_SHIFT; // rtz
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE, &[fp_r_enc(10, 7, 1, 2, 0b0001100)]); // fdiv.s rtz
+
+    h.step();
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x3eaa_aaaa);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    // 动态 frm 为保留值时，指令本身是合法编码，但执行时 illegal。
+    let raw = fp_r_enc(11, 7, 1, 2, 0b0001100);
+    h.cpu.csr.fcsr = 5 << csr::FCSR_FRM_SHIFT;
+    h.cpu.write_fpr_s(11, Fp32::from_bits(0x3f80_0000));
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE + 4, &[raw]);
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+    );
+    assert_eq!(h.cpu.csr_state().mtval, raw);
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0x3f80_0000);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    // 静态 rm=5/6 在解码阶段就被拒绝。
+    for rm in [5, 6] {
+        let raw = fp_r_enc(12, rm, 1, 2, 0b0000000);
+        let mut h = Harness::new();
+        h.load(BASE, &[raw]);
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+    }
+}
+
+#[test]
 fn fp_instructions_are_illegal_when_fs_off() {
     let instructions = [
         fp_load_enc(0b010, 1, 0, 0),
@@ -318,6 +424,9 @@ fn fp_instructions_are_illegal_when_fs_off() {
         fp_r_enc(1, 0b000, 2, 3, 0b0010000),
         fp_r_enc(1, 0b010, 2, 3, 0b1010000),
         fp_r_enc(1, 0b001, 2, 0, 0b1110000),
+        fp_r_enc(1, 0b000, 2, 3, 0b0000000),
+        fp_r_enc(1, 0b000, 2, 3, 0b0001100),
+        fp_r_enc(1, 0b000, 2, 0, 0b0101100),
     ];
     for raw in instructions {
         let mut h = Harness::new();

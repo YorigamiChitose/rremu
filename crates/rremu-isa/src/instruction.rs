@@ -95,6 +95,17 @@ pub enum Instruction {
     FleD { rd: u8, rs1: u8, rs2: u8 },
     FclassS { rd: u8, rs1: u8 },
     FclassD { rd: u8, rs1: u8 },
+    // ---- F/D 扩展：算术 ----
+    FaddS { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FsubS { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FmulS { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FdivS { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FsqrtS { rd: u8, rs1: u8, rm: u8 },
+    FaddD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FsubD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FmulD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FdivD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
+    FsqrtD { rd: u8, rs1: u8, rm: u8 },
     // ---- misc / system ----
     Fence,
     FenceI,
@@ -148,6 +159,18 @@ pub enum Instruction {
     CFswsp { rs2: u8, imm: i32 },
     CFldsp { rd: u8, imm: i32 },
     CFsdsp { rs2: u8, imm: i32 },
+}
+
+fn fp_rm_name(rm: u8) -> &'static str {
+    match rm {
+        0 => "rne",
+        1 => "rtz",
+        2 => "rdn",
+        3 => "rup",
+        4 => "rmm",
+        7 => "dyn",
+        _ => "invalid",
+    }
 }
 
 impl core::fmt::Display for Instruction {
@@ -337,6 +360,36 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::FclassD { rd, rs1 } => {
                 write!(f, "fclass.d {}, {}", reg_name(rd), freg_name(rs1))
+            }
+            Instruction::FaddS { rd, rs1, rs2, rm } => {
+                write!(f, "fadd.s {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FsubS { rd, rs1, rs2, rm } => {
+                write!(f, "fsub.s {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FmulS { rd, rs1, rs2, rm } => {
+                write!(f, "fmul.s {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FdivS { rd, rs1, rs2, rm } => {
+                write!(f, "fdiv.s {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FsqrtS { rd, rs1, rm } => {
+                write!(f, "fsqrt.s {}, {}, {}", freg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FaddD { rd, rs1, rs2, rm } => {
+                write!(f, "fadd.d {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FsubD { rd, rs1, rs2, rm } => {
+                write!(f, "fsub.d {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FmulD { rd, rs1, rs2, rm } => {
+                write!(f, "fmul.d {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FdivD { rd, rs1, rs2, rm } => {
+                write!(f, "fdiv.d {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), fp_rm_name(rm))
+            }
+            Instruction::FsqrtD { rd, rs1, rm } => {
+                write!(f, "fsqrt.d {}, {}, {}", freg_name(rd), freg_name(rs1), fp_rm_name(rm))
             }
             Instruction::Fence => write!(f, "fence"),
             Instruction::FenceI => write!(f, "fence.i"),
