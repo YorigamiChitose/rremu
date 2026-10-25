@@ -57,6 +57,8 @@ RV32GC（F/D）支持已落地，当前进行最终验收与文档收尾。
 - 不提供磁盘、真实块设备、virtio-blk 或磁盘 rootfs；Linux 使用内置 initramfs。
 - Goldfish RTC 仅实现时间/alarm 寄存器，不注入 alarm IRQ。
 - syscon `0x5555` poweroff 退出码为 0；`0x7777` reboot 退出码为 2。
+- 非目标：B 扩展（Zba/Zbb/Zbs）、Sstc、HPM 计数器与 `mcountinhibit`、
+  `cycleh/instreth/mcycleh/minstreth` 高半计数器暂未实现。
 
 ## 架构
 

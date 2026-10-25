@@ -131,6 +131,9 @@
 
 ```text
 rremu:
+  cargo test -p rremu-fp
+  cargo test -p rremu-decode
+  cargo test -p rremu-isa
   cargo test -p rremu-cpu
   cargo test -p rremu-bus
   cargo test -p rremu-machine
@@ -141,4 +144,4 @@ rremu-am:
   cargo test --workspace
 ```
 
-端到端回归由 `rremu-test` 提供，当前 57 个用例。
+端到端回归由 `rremu-test` 提供，当前 72 个用例（含 15 个 FP）。
