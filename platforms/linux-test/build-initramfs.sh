@@ -10,7 +10,7 @@ LIST="$HERE/initramfs.list"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 "$CC" \
-  -march=rv32imac -mabi=ilp32 \
+  -march=rv32imafdc -mabi=ilp32 \
   -nostdlib -static -fno-stack-protector -fno-pic \
   -o "$OUT/init" "$HERE/init.c" \
   -Wl,-e,_start

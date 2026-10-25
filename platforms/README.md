@@ -61,7 +61,7 @@ Platform Console Device     : uart8250
 Domain0 Next Address        : 0x80200000
 Domain0 Next Arg1           : 0x80f00000
 Domain0 Next Mode           : S-mode
-Boot HART Base ISA          : rv32imac
+Boot HART Base ISA          : rv32imafdc
 ```
 
 之后跳转到空的 `0x80200000`（尚无 payload/Linux），符合预期。
