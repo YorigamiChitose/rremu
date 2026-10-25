@@ -588,6 +588,148 @@ fn fp_fma_d_operations_and_rounding_modes() {
 }
 
 #[test]
+fn fp_convert_float_to_int_and_flags() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3fc0_0000)); // 1.5
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x4020_0000)); // 2.5
+    h.cpu.write_fpr_s(3, Fp32::from_bits(0x4f00_0000)); // 2^31
+    h.cpu.write_fpr_s(4, Fp32::from_bits(0xbf00_0000)); // -0.5
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 0, 0b1100000), // fcvt.w.s rne
+            fp_r_enc(11, 1, 2, 1, 0b1100000), // fcvt.wu.s rtz
+            fp_r_enc(12, 1, 3, 0, 0b1100000), // fcvt.w.s rtz overflow
+            fp_r_enc(13, 0, 4, 1, 0b1100000), // fcvt.wu.s rne negative fraction
+            fp_r_enc(14, 2, 4, 0, 0b1100000), // fcvt.w.s rdn negative fraction
+        ],
+    );
+
+    h.run(5);
+    assert_eq!(h.cpu.reg(10), 2);
+    assert_eq!(h.cpu.reg(11), 2);
+    assert_eq!(h.cpu.reg(12), 0x7fff_ffff);
+    assert_eq!(h.cpu.reg(13), 0);
+    assert_eq!(h.cpu.reg(14), 0xffff_ffff);
+    assert_eq!(fflags(&h), 0x11); // INVALID | INEXACT
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    // 精确且无 flags 的 f->x 转换不应写 FP 状态。
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // 1.0
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE, &[fp_r_enc(10, 0, 1, 0, 0b1100000)]);
+    h.step();
+    assert_eq!(h.cpu.reg(10), 1);
+    assert_eq!(fflags(&h), 0);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+}
+
+#[test]
+fn fp_convert_double_to_int_and_flags() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_d(1, Fp64::from_bits(0x3ff8_0000_0000_0000)); // 1.5
+    h.cpu.write_fpr_d(2, Fp64::from_bits(0x4004_0000_0000_0000)); // 2.5
+    h.cpu.write_fpr_d(3, Fp64::from_bits(0x41e0_0000_0000_0000)); // 2^31
+    h.cpu.write_fpr_d(4, Fp64::from_bits(0xbfe0_0000_0000_0000)); // -0.5
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 0, 0b1100001), // fcvt.w.d rne
+            fp_r_enc(11, 1, 2, 1, 0b1100001), // fcvt.wu.d rtz
+            fp_r_enc(12, 1, 3, 0, 0b1100001), // fcvt.w.d rtz overflow
+            fp_r_enc(13, 0, 4, 1, 0b1100001), // fcvt.wu.d rne negative fraction
+            fp_r_enc(14, 2, 4, 0, 0b1100001), // fcvt.w.d rdn negative fraction
+        ],
+    );
+
+    h.run(5);
+    assert_eq!(h.cpu.reg(10), 2);
+    assert_eq!(h.cpu.reg(11), 2);
+    assert_eq!(h.cpu.reg(12), 0x7fff_ffff);
+    assert_eq!(h.cpu.reg(13), 0);
+    assert_eq!(h.cpu.reg(14), 0xffff_ffff);
+    assert_eq!(fflags(&h), 0x11);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+}
+
+#[test]
+fn fp_convert_int_to_float_and_cross_precision() {
+    let mut h = Harness::new();
+    h.cpu.x[1] = 0x0100_0001; // 2^24 + 1
+    h.cpu.x[2] = 0xffff_ffff; // u32::MAX
+    h.cpu.x[3] = 0x8000_0000; // i32::MIN
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 0, 0b1101000), // fcvt.s.w rne
+            fp_r_enc(11, 0, 2, 1, 0b1101000), // fcvt.s.wu rne
+            fp_r_enc(12, 0, 3, 0, 0b1101001), // fcvt.d.w rne
+            fp_r_enc(13, 0, 2, 1, 0b1101001), // fcvt.d.wu rne
+            fp_r_enc(14, 0, 12, 1, 0b0100000), // fcvt.s.d rne
+            fp_r_enc(15, 0, 14, 0, 0b0100001), // fcvt.d.s
+        ],
+    );
+
+    h.run(4);
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x4b80_0000);
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0x4f80_0000);
+    assert_eq!(h.cpu.fpr_d(12).to_bits(), 0xc1e0_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(13).to_bits(), 0x41ef_ffff_ffe0_0000);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    h.step(); // fcvt.s.d -2^31
+    assert_eq!(h.cpu.fpr_s(14).to_bits(), 0xcf00_0000);
+    h.step(); // fcvt.d.s back
+    assert_eq!(h.cpu.fpr_d(15).to_bits(), 0xc1e0_0000_0000_0000);
+    assert_eq!(fflags(&h), 0x01);
+}
+
+#[test]
+fn fp_convert_dynamic_rounding_and_reserved_modes() {
+    let mut h = Harness::new();
+    h.cpu.x[1] = 0x0100_0001; // 2^24 + 1
+    h.cpu.csr.fcsr = 1 << csr::FCSR_FRM_SHIFT; // rtz
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE, &[fp_r_enc(10, 7, 1, 0, 0b1101000)]); // fcvt.s.w dyn
+    h.step();
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x4b80_0000);
+    assert_eq!(fflags(&h), 0x01);
+
+    let raw = fp_r_enc(11, 7, 1, 0, 0b1100000); // fcvt.w.s dyn
+    h.cpu.csr.fcsr = 5 << csr::FCSR_FRM_SHIFT;
+    h.cpu.x[11] = 0x1234_5678;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE + 4, &[raw]);
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+    );
+    assert_eq!(h.cpu.csr_state().mtval, raw);
+    assert_eq!(h.cpu.reg(11), 0x1234_5678);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    for rm in [5, 6] {
+        let raw = fp_r_enc(12, rm, 1, 0, 0b1100000);
+        let mut h = Harness::new();
+        h.load(BASE, &[raw]);
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+    }
+}
+
+#[test]
 fn fp_instructions_are_illegal_when_fs_off() {
     let instructions = [
         fp_load_enc(0b010, 1, 0, 0),
@@ -604,6 +746,12 @@ fn fp_instructions_are_illegal_when_fs_off() {
         fp_r_enc(1, 0b000, 2, 3, 0b0010100),
         fp_r_enc(1, 0b001, 2, 3, 0b0010101),
         fp_fma_enc(0b1000011, 1, 2, 3, 4, 0, 0),
+        fp_r_enc(1, 0, 2, 0, 0b1100000),
+        fp_r_enc(1, 0, 2, 1, 0b1100001),
+        fp_r_enc(1, 0, 2, 0, 0b1101000),
+        fp_r_enc(1, 0, 2, 1, 0b1101001),
+        fp_r_enc(1, 0, 2, 1, 0b0100000),
+        fp_r_enc(1, 0, 2, 0, 0b0100001),
     ];
     for raw in instructions {
         let mut h = Harness::new();

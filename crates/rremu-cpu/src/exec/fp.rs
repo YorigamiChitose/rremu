@@ -4,9 +4,10 @@ use core::cmp::Ordering;
 
 use rremu_bus::{AccessSize, Bus, EventSink};
 use rremu_fp::{
-    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, fmadd32, fmadd64, fmsub32,
-    fmsub64, fnmadd32, fnmadd64, fnmsub32, fnmsub64, max32, max64, min32, min64, mul32, mul64,
-    sqrt32, sqrt64, sub32, sub64,
+    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, fcvt_d_s, fcvt_d_w, fcvt_d_wu,
+    fcvt_s_d, fcvt_s_w, fcvt_s_wu, fcvt_w_d, fcvt_w_s, fcvt_wu_d, fcvt_wu_s, fmadd32, fmadd64,
+    fmsub32, fmsub64, fnmadd32, fnmadd64, fnmsub32, fnmsub64, max32, max64, min32, min64, mul32,
+    mul64, sqrt32, sqrt64, sub32, sub64,
 };
 use rremu_isa::{Instruction, cause, csr};
 
@@ -303,6 +304,74 @@ impl Cpu {
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
+            Instruction::FcvtWS { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_w_s(self.fpr_s(rs1), mode);
+                self.raise_fp_flags(flags);
+                if rd != 0 {
+                    self.x[usize::from(rd)] = value;
+                }
+            }
+            Instruction::FcvtWuS { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_wu_s(self.fpr_s(rs1), mode);
+                self.raise_fp_flags(flags);
+                if rd != 0 {
+                    self.x[usize::from(rd)] = value;
+                }
+            }
+            Instruction::FcvtWD { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_w_d(self.fpr_d(rs1), mode);
+                self.raise_fp_flags(flags);
+                if rd != 0 {
+                    self.x[usize::from(rd)] = value;
+                }
+            }
+            Instruction::FcvtWuD { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_wu_d(self.fpr_d(rs1), mode);
+                self.raise_fp_flags(flags);
+                if rd != 0 {
+                    self.x[usize::from(rd)] = value;
+                }
+            }
+            Instruction::FcvtSW { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_s_w(x(self, rs1) as i32, mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FcvtSWu { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_s_wu(x(self, rs1), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FcvtDW { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_d_w(x(self, rs1) as i32, mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FcvtDWu { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_d_wu(x(self, rs1), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FcvtSD { rd, rs1, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_s_d(self.fpr_d(rs1), mode);
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FcvtDS { rd, rs1, rm } => {
+                let _mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fcvt_d_s(self.fpr_s(rs1));
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
             Instruction::CFlw { rd, rs1, imm } => {
                 let addr = x(self, rs1).wrapping_add(imm as u32);
                 let bits = self.load(bus, sink, addr, AccessSize::Word)?;
@@ -477,6 +546,16 @@ fn is_fp_instruction(instr: Instruction) -> bool {
             | Instruction::FmsubD { .. }
             | Instruction::FnmaddD { .. }
             | Instruction::FnmsubD { .. }
+            | Instruction::FcvtWS { .. }
+            | Instruction::FcvtWuS { .. }
+            | Instruction::FcvtWD { .. }
+            | Instruction::FcvtWuD { .. }
+            | Instruction::FcvtSW { .. }
+            | Instruction::FcvtSWu { .. }
+            | Instruction::FcvtDW { .. }
+            | Instruction::FcvtDWu { .. }
+            | Instruction::FcvtSD { .. }
+            | Instruction::FcvtDS { .. }
             | Instruction::CFlw { .. }
             | Instruction::CFsw { .. }
             | Instruction::CFld { .. }

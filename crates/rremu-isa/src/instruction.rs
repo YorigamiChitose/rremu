@@ -119,6 +119,17 @@ pub enum Instruction {
     FmsubD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
     FnmaddD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
     FnmsubD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    // ---- F/D 扩展：转换 ----
+    FcvtWS { rd: u8, rs1: u8, rm: u8 },
+    FcvtWuS { rd: u8, rs1: u8, rm: u8 },
+    FcvtWD { rd: u8, rs1: u8, rm: u8 },
+    FcvtWuD { rd: u8, rs1: u8, rm: u8 },
+    FcvtSW { rd: u8, rs1: u8, rm: u8 },
+    FcvtSWu { rd: u8, rs1: u8, rm: u8 },
+    FcvtDW { rd: u8, rs1: u8, rm: u8 },
+    FcvtDWu { rd: u8, rs1: u8, rm: u8 },
+    FcvtSD { rd: u8, rs1: u8, rm: u8 },
+    FcvtDS { rd: u8, rs1: u8, rm: u8 },
     // ---- misc / system ----
     Fence,
     FenceI,
@@ -439,6 +450,36 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::FnmsubD { rd, rs1, rs2, rs3, rm } => {
                 write!(f, "fnmsub.d {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FcvtWS { rd, rs1, rm } => {
+                write!(f, "fcvt.w.s {}, {}, {}", reg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtWuS { rd, rs1, rm } => {
+                write!(f, "fcvt.wu.s {}, {}, {}", reg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtWD { rd, rs1, rm } => {
+                write!(f, "fcvt.w.d {}, {}, {}", reg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtWuD { rd, rs1, rm } => {
+                write!(f, "fcvt.wu.d {}, {}, {}", reg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtSW { rd, rs1, rm } => {
+                write!(f, "fcvt.s.w {}, {}, {}", freg_name(rd), reg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtSWu { rd, rs1, rm } => {
+                write!(f, "fcvt.s.wu {}, {}, {}", freg_name(rd), reg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtDW { rd, rs1, rm } => {
+                write!(f, "fcvt.d.w {}, {}, {}", freg_name(rd), reg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtDWu { rd, rs1, rm } => {
+                write!(f, "fcvt.d.wu {}, {}, {}", freg_name(rd), reg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtSD { rd, rs1, rm } => {
+                write!(f, "fcvt.s.d {}, {}, {}", freg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FcvtDS { rd, rs1, rm } => {
+                write!(f, "fcvt.d.s {}, {}, {}", freg_name(rd), freg_name(rs1), fp_rm_name(rm))
             }
             Instruction::Fence => write!(f, "fence"),
             Instruction::FenceI => write!(f, "fence.i"),

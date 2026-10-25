@@ -159,6 +159,16 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 (0b0010100, 0b001) => Ok(Instruction::FmaxS { rd, rs1, rs2 }),
                 (0b0010101, 0b000) => Ok(Instruction::FminD { rd, rs1, rs2 }),
                 (0b0010101, 0b001) => Ok(Instruction::FmaxD { rd, rs1, rs2 }),
+                (0b1100000, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtWS { rd, rs1, rm }),
+                (0b1100000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtWuS { rd, rs1, rm }),
+                (0b1100001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtWD { rd, rs1, rm }),
+                (0b1100001, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtWuD { rd, rs1, rm }),
+                (0b1101000, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtSW { rd, rs1, rm }),
+                (0b1101000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtSWu { rd, rs1, rm }),
+                (0b1101001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtDW { rd, rs1, rm }),
+                (0b1101001, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtDWu { rd, rs1, rm }),
+                (0b0100000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtSD { rd, rs1, rm }),
+                (0b0100001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtDS { rd, rs1, rm }),
                 (0b0010000, 0b000) => Ok(Instruction::FsgnjS { rd, rs1, rs2 }),
                 (0b0010000, 0b001) => Ok(Instruction::FsgnjnS { rd, rs1, rs2 }),
                 (0b0010000, 0b010) => Ok(Instruction::FsgnjxS { rd, rs1, rs2 }),
@@ -1200,6 +1210,72 @@ mod tests {
         for rm in [5, 6] {
             assert!(matches!(
                 decode32(fp_fma_enc(0b1000011, 3, 1, 2, 5, 0, rm), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn decode_fp_conversions() {
+        assert_eq!(
+            decode32(fp_enc(3, 0, 1, 0, 0b1100000), PC),
+            Ok(Instruction::FcvtWS { rd: 3, rs1: 1, rm: 0 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 1, 2, 1, 0b1100000), PC),
+            Ok(Instruction::FcvtWuS { rd: 4, rs1: 2, rm: 1 })
+        );
+        assert_eq!(
+            decode32(fp_enc(5, 2, 3, 0, 0b1100001), PC),
+            Ok(Instruction::FcvtWD { rd: 5, rs1: 3, rm: 2 })
+        );
+        assert_eq!(
+            decode32(fp_enc(6, 3, 4, 1, 0b1100001), PC),
+            Ok(Instruction::FcvtWuD { rd: 6, rs1: 4, rm: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(7, 4, 5, 0, 0b1101000), PC),
+            Ok(Instruction::FcvtSW { rd: 7, rs1: 5, rm: 4 })
+        );
+        assert_eq!(
+            decode32(fp_enc(8, 7, 6, 1, 0b1101000), PC),
+            Ok(Instruction::FcvtSWu { rd: 8, rs1: 6, rm: 7 })
+        );
+        assert_eq!(
+            decode32(fp_enc(9, 0, 7, 0, 0b1101001), PC),
+            Ok(Instruction::FcvtDW { rd: 9, rs1: 7, rm: 0 })
+        );
+        assert_eq!(
+            decode32(fp_enc(10, 1, 8, 1, 0b1101001), PC),
+            Ok(Instruction::FcvtDWu { rd: 10, rs1: 8, rm: 1 })
+        );
+        assert_eq!(
+            decode32(fp_enc(11, 2, 9, 1, 0b0100000), PC),
+            Ok(Instruction::FcvtSD { rd: 11, rs1: 9, rm: 2 })
+        );
+        assert_eq!(
+            decode32(fp_enc(12, 3, 10, 0, 0b0100001), PC),
+            Ok(Instruction::FcvtDS { rd: 12, rs1: 10, rm: 3 })
+        );
+
+        // rs2 选择子不合法。
+        assert!(matches!(
+            decode32(fp_enc(3, 0, 1, 2, 0b1100000), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_enc(11, 2, 9, 0, 0b0100000), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+        assert!(matches!(
+            decode32(fp_enc(12, 3, 10, 1, 0b0100001), PC),
+            Err(DecodeError::Illegal { .. })
+        ));
+
+        // rm=5/6 是保留编码。
+        for rm in [5, 6] {
+            assert!(matches!(
+                decode32(fp_enc(3, rm, 1, 0, 0b1100000), PC),
                 Err(DecodeError::Illegal { .. })
             ));
         }

@@ -93,6 +93,26 @@ mod tests {
     }
 
     #[test]
+    fn display_fp_conversions() {
+        assert_eq!(
+            Instruction::FcvtWS { rd: 10, rs1: 11, rm: 0 }.to_string(),
+            "fcvt.w.s a0, fa1, rne"
+        );
+        assert_eq!(
+            Instruction::FcvtWuD { rd: 10, rs1: 11, rm: 7 }.to_string(),
+            "fcvt.wu.d a0, fa1, dyn"
+        );
+        assert_eq!(
+            Instruction::FcvtSWu { rd: 10, rs1: 11, rm: 1 }.to_string(),
+            "fcvt.s.wu fa0, a1, rtz"
+        );
+        assert_eq!(
+            Instruction::FcvtSD { rd: 10, rs1: 11, rm: 4 }.to_string(),
+            "fcvt.s.d fa0, fa1, rmm"
+        );
+    }
+
+    #[test]
     fn display_system() {
         assert_eq!(Instruction::Ecall.to_string(), "ecall");
         assert_eq!(Instruction::Ebreak.to_string(), "ebreak");
