@@ -69,28 +69,38 @@ Boot HART Base ISA          : rv32imafdc
 
 ## 运行 Linux
 
-需要一份 RV32 Linux Image，建议内核内置 initramfs：
+当前验证的 Linux 组合为 **Linux 6.12 RV32GC（FPU）+ ilp32d BusyBox initramfs**。
+默认产物：
+
+- `../linux/arch/riscv/boot/Image`
+- `../opensbi/build/platform/generic/firmware/fw_payload.elf`
+- `rremu-linux.dtb`
+- 用户态工具链：`../toolchains/rv32gc-ilp32d`
+
+直接启动：
 
 ```sh
-cd platforms
-LINUX_IMAGE=/path/to/Image ./run-linux.sh        # 或 --tui
+cd rremu
+rm -f /tmp/rremu.in && mkfifo /tmp/rremu.in
+./target/release/rremu \
+  ../opensbi/build/platform/generic/firmware/fw_payload.elf \
+  --load-base 0x80000000 --dtb platforms/rremu-linux.dtb \
+  -m 128M --no-fb --uart-in /tmp/rremu.in -c c
 ```
 
-脚本使用：
+另开终端：
 
-- `rremu-linux.dts`：128MiB RAM，`bootargs = "console=ttyS0 earlycon keep_bootcon"`
-- OpenSBI `FW_PAYLOAD`，payload offset `0x400000`（RV32 Linux Image 头要求 4MiB）
-- DTB/FDT 地址 `0x87f00000`
-- rremu `-m 128M`
+```sh
+printf '\n\nuname -a\n' > /tmp/rremu.in
+```
 
-如果 Linux Image 未内置 initramfs，需要自行构建带 initramfs 的内核或改用其他
-initrd 注入方案。
-
-Linux 成功启动后应看到：
+成功启动后应看到：
 
 ```text
-Run /init as init process
-rremu: linux userspace init reached
-reboot: Power down
-Program exited with code 0.
+rremu: RV32 Linux + busybox ready
+BusyBox v1.38.0 multi-call binary
 ```
+
+`run-linux.sh` 仍可通过 `LINUX_IMAGE=/path/to/Image` 重建 OpenSBI payload 并启动；
+它使用 `rremu-linux.dts`、payload offset `0x400000`、FDT 地址 `0x87f00000` 和
+`-m 128M`。`linux-test/` 仅保留最小 initramfs 回归夹具。

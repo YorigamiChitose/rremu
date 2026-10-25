@@ -123,6 +123,26 @@ Cpu::pending_interrupt(&self) -> Option<u32>
 - 优先级：MEI > MSI > MTI > SEI > SSI > STI。
 - 是否可接收由当前特权级、`mideleg`、`mstatus.MIE/SIE` 共同决定。
 
+### 1.8 浮点状态
+
+```rust
+Cpu::fprs(&self) -> &[u64; 32]
+Cpu::fpr(&self, i: u8) -> u64
+Cpu::fpr_s(&self, i: u8) -> Fp32
+Cpu::fpr_d(&self, i: u8) -> Fp64
+Cpu::fcsr(&self) -> u32
+Cpu::restore_fp_state(&mut self, fprs: &[u64; 32], fcsr: u32, fs: u32)
+```
+
+契约：
+
+- FLEN=64；`.s` 读取要求高 32 位为全 1 的 NaN box，否则返回 canonical NaN。
+- `.s` 写入统一置 NaN box；FPR 写入后 `mstatus.FS=Dirty`。
+- `fcsr` 包含 `fflags/frm`；异常标志 sticky，只有值变化时 `FS=Dirty`。
+- `mstatus.FS=Off` 时 F/D 指令与 FP CSR 访问 illegal。
+- `mstatus.SD` 只在读取时由 `FS=Dirty` 合成，写入忽略。
+- `restore_fp_state` 是快照恢复 FP 状态的唯一入口。
+
 ## 2. Bus
 
 ### 2.1 访问原语

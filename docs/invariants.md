@@ -125,7 +125,20 @@
 | ABI-7 | `enter_supervisor` 设置 MPP=S、mepc、a0/a1 后 `mret` |
 | ABI-8 | `halt` 使用 M-mode ecall + `EXIT_MAGIC` |
 
-## 12. 测试映射
+## 12. 浮点
+
+| 编号 | 不变量 |
+|---|---|
+| FP-1 | FLEN=64；32 个 FPR，`.s` 使用 NaN boxing |
+| FP-2 | `.s` 读取非法 NaN box 返回 canonical NaN |
+| FP-3 | 所有 NaN 结果统一为 canonical NaN；sNaN 置 `INVALID` |
+| FP-4 | `fflags` 五个标志 sticky；`frm` 保留编码非法 |
+| FP-5 | `mstatus.FS=Off` 时 F/D 指令与 FP CSR 访问 illegal |
+| FP-6 | FPR / FP CSR 写后 `FS=Dirty`；`SD` 只读合成 |
+| FP-7 | FP 算术/FMA 单次舍入；转换越界饱和并置 `INVALID` |
+| FP-8 | 快照/dump 含 FPR 与 `fcsr`，旧 dump 缺省字段可解析 |
+
+## 13. 测试映射
 
 核心测试分组：
 

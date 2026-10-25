@@ -8,7 +8,9 @@ bin / cli / tui / window
         ▼
 rremu-machine
   ├── rremu-cpu
-  │     └── rremu-isa
+  │     ├── rremu-isa
+  │     ├── rremu-decode
+  │     └── rremu-fp
   ├── rremu-bus
   ├── rremu-devices
   ├── rremu-config
@@ -19,12 +21,13 @@ rremu-machine
 依赖方向必须保持：
 
 ```text
-cpu   -> bus, isa, decode
+cpu   -> bus, isa, decode, fp
 bus   -> 无 CPU / Machine 依赖
 devices -> bus
 machine -> cpu, bus, devices, config, loader, expr, decode, isa
 config -> 无运行时依赖
 loader -> 无运行时依赖
+fp    -> 无运行时依赖（no_std 叶子 crate）
 ```
 
 禁止：
@@ -45,7 +48,9 @@ loader -> 无运行时依赖
 - 32 个通用寄存器
 - PC
 - 当前特权级
-- `CsrState`
+- `CsrState`（含 `fcsr`）
+- 32 个 64-bit FPR（FLEN=64，`.s` 使用 NaN boxing）
+- `mstatus.FS/SD` 视图
 - `cycle`
 - `instret`
 - `lr/sc` reservation
@@ -155,10 +160,27 @@ mmu.rs        Sv32 翻译
 pmp.rs        PMP 检查
 trap.rs       trap 入口与委派
 interrupt.rs  中断投影与仲裁
-exec/         指令执行
+fp.rs         FPR / NaN boxing / fcsr 访问
+exec/         指令执行（含 exec/fp.rs）
 fetch.rs      取指
 tests/        测试
 ```
+
+### `rremu-fp`
+
+```text
+softfloat.rs  解码、规范化、单次舍入/编码
+add.rs / muldiv.rs / sqrt.rs       f32 算术
+add64.rs / muldiv64.rs / sqrt64.rs f64 算术
+fma.rs        FMA
+minmax.rs     fmin / fmax
+convert.rs    fcvt.*
+format.rs     ±0/NaN/Inf/subnormal 分类与顺序
+flags.rs      fflags
+round.rs      舍入模式
+```
+
+纯整数/位操作实现，不依赖宿主浮点环境；测试包含 100k 组固定种子确定性向量。
 
 ### `rremu-machine`
 
@@ -199,7 +221,7 @@ lib.rs       Config / Overrides / resolve / validate
 
 | 操作 | 允许者 |
 |---|---|
-| 修改 GPR/PC/CSR/cycle | `Cpu` 内部 |
+| 修改 GPR/FPR/PC/CSR/cycle | `Cpu` 内部 |
 | 修改设备寄存器 | 对应 `BusDevice` |
 | 修改地址映射 | `Machine` 构造阶段 |
 | 修改断点/监视点 | `DebugController` |

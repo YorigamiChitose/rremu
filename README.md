@@ -48,7 +48,7 @@
 - `/init` 用户态、UART 输出、syscon poweroff
 - rremu-test 端到端回归 72 个用例（含 15 个 FP）
 
-RV32GC（F/D）支持已落地，当前进行最终验收与文档收尾。
+RV32GC（F/D）与 ilp32d Linux/BusyBox 全栈已验证。
 
 ## 已知限制
 
@@ -220,23 +220,36 @@ cd platforms && ./run-opensbi.sh        # 或 --tui
 
 平台说明见 [`platforms/README.md`](platforms/README.md)，端到端测试见 [`../rremu-test`](../rremu-test)。
 
-Linux 启动脚本（需要 RV32 Linux Image，建议内置 initramfs）：
+当前已验证的 Linux 组合是 **Linux 6.12 RV32GC（FPU）+ ilp32d BusyBox initramfs**。
+已有产物：
+
+- `../linux/arch/riscv/boot/Image`
+- `../opensbi/build/platform/generic/firmware/fw_payload.elf`
+- `platforms/rremu-linux.dtb`
+- 用户态工具链：`../toolchains/rv32gc-ilp32d`
+
+启动：
 
 ```sh
-# 构建固定 initramfs 和 Linux Image
-./platforms/linux-test/build-linux.sh
-
-# 构建 DTB/OpenSBI FW_PAYLOAD 并启动 Linux
-./platforms/run-linux.sh        # 或 --tui
+cd rremu
+rm -f /tmp/rremu.in && mkfifo /tmp/rremu.in
+./target/release/rremu \
+  ../opensbi/build/platform/generic/firmware/fw_payload.elf \
+  --load-base 0x80000000 \
+  --dtb platforms/rremu-linux.dtb \
+  -m 128M --no-fb \
+  --uart-in /tmp/rremu.in -c c
 ```
 
-成功时退出码为 0，并输出：
+另开终端输入：
 
-```text
-rremu: linux userspace init reached
-reboot: Power down
-Program exited with code 0.
+```sh
+printf '\n\nuname -a\n' > /tmp/rremu.in
 ```
+
+进入 shell 后可用 `poweroff -f` 退出。成功时 rremu 退出码为 0。
+
+`platforms/linux-test/` 保留最小 initramfs 回归夹具；完整 BusyBox 栈使用上面的产物。
 
 ## 测试
 
