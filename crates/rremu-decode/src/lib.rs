@@ -30,7 +30,9 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
     let funct3 = ((word >> 12) & 0b111) as u8;
     let rs1 = ((word >> 15) & 0x1f) as u8;
     let rs2 = ((word >> 20) & 0x1f) as u8;
+    let rs3 = ((word >> 27) & 0x1f) as u8;
     let funct7 = word >> 25;
+    let fmt = ((word >> 25) & 0x3) as u8;
     let illegal = DecodeError::Illegal { bits: word, pc };
 
     match opcode {
@@ -201,6 +203,26 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 _ => Err(illegal),
             }
         }
+        0b1000011 => match (fmt, funct3) {
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddS { rd, rs1, rs2, rs3, rm }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddD { rd, rs1, rs2, rs3, rm }),
+            _ => Err(illegal),
+        },
+        0b1000111 => match (fmt, funct3) {
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubS { rd, rs1, rs2, rs3, rm }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubD { rd, rs1, rs2, rs3, rm }),
+            _ => Err(illegal),
+        },
+        0b1001011 => match (fmt, funct3) {
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubS { rd, rs1, rs2, rs3, rm }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubD { rd, rs1, rs2, rs3, rm }),
+            _ => Err(illegal),
+        },
+        0b1001111 => match (fmt, funct3) {
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddS { rd, rs1, rs2, rs3, rm }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddD { rd, rs1, rs2, rs3, rm }),
+            _ => Err(illegal),
+        },
         0b1110011 => {
             // SYSTEM：ecall/ebreak/mret + Zicsr CSR 读写
             let csr_addr = ((word >> 20) & 0xfff) as u16;
@@ -848,6 +870,15 @@ mod tests {
     fn fp_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
         (f7 << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b1010011
     }
+    fn fp_fma_enc(op: u32, rd: u8, rs1: u8, rs2: u8, rs3: u8, fmt: u32, rm: u32) -> Word {
+        (u32::from(rs3) << 27)
+            | (fmt << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (rm << 12)
+            | (u32::from(rd) << 7)
+            | op
+    }
     fn fp_load_enc(f3: u32, rd: u8, rs1: u8, imm: i32) -> Word {
         i_enc(0b0000111, rd, f3, rs1, imm)
     }
@@ -1120,6 +1151,55 @@ mod tests {
         for funct3 in [2, 3, 4, 7] {
             assert!(matches!(
                 decode32(fp_enc(3, funct3, 1, 2, 0b0010100), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn decode_fp_fma() {
+        assert_eq!(
+            decode32(fp_fma_enc(0b1000011, 3, 1, 2, 5, 0, 0), PC),
+            Ok(Instruction::FmaddS { rd: 3, rs1: 1, rs2: 2, rs3: 5, rm: 0 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1000011, 4, 2, 3, 6, 1, 7), PC),
+            Ok(Instruction::FmaddD { rd: 4, rs1: 2, rs2: 3, rs3: 6, rm: 7 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1000111, 5, 3, 4, 7, 0, 1), PC),
+            Ok(Instruction::FmsubS { rd: 5, rs1: 3, rs2: 4, rs3: 7, rm: 1 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1000111, 6, 4, 5, 8, 1, 2), PC),
+            Ok(Instruction::FmsubD { rd: 6, rs1: 4, rs2: 5, rs3: 8, rm: 2 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1001011, 7, 5, 6, 9, 0, 3), PC),
+            Ok(Instruction::FnmsubS { rd: 7, rs1: 5, rs2: 6, rs3: 9, rm: 3 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1001011, 8, 6, 7, 10, 1, 4), PC),
+            Ok(Instruction::FnmsubD { rd: 8, rs1: 6, rs2: 7, rs3: 10, rm: 4 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1001111, 9, 7, 8, 11, 0, 7), PC),
+            Ok(Instruction::FnmaddS { rd: 9, rs1: 7, rs2: 8, rs3: 11, rm: 7 })
+        );
+        assert_eq!(
+            decode32(fp_fma_enc(0b1001111, 10, 8, 9, 12, 1, 0), PC),
+            Ok(Instruction::FnmaddD { rd: 10, rs1: 8, rs2: 9, rs3: 12, rm: 0 })
+        );
+
+        for fmt in [2, 3] {
+            assert!(matches!(
+                decode32(fp_fma_enc(0b1000011, 3, 1, 2, 5, fmt, 0), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+        }
+        for rm in [5, 6] {
+            assert!(matches!(
+                decode32(fp_fma_enc(0b1000011, 3, 1, 2, 5, 0, rm), PC),
                 Err(DecodeError::Illegal { .. })
             ));
         }

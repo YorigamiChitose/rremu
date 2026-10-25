@@ -110,6 +110,15 @@ pub enum Instruction {
     FmaxS { rd: u8, rs1: u8, rs2: u8 },
     FminD { rd: u8, rs1: u8, rs2: u8 },
     FmaxD { rd: u8, rs1: u8, rs2: u8 },
+    // ---- F/D 扩展：融合乘加 ----
+    FmaddS { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FmsubS { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FnmaddS { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FnmsubS { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FmaddD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FmsubD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FnmaddD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
+    FnmsubD { rd: u8, rs1: u8, rs2: u8, rs3: u8, rm: u8 },
     // ---- misc / system ----
     Fence,
     FenceI,
@@ -406,6 +415,30 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::FmaxD { rd, rs1, rs2 } => {
                 write!(f, "fmax.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FmaddS { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fmadd.s {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FmsubS { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fmsub.s {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FnmaddS { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fnmadd.s {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FnmsubS { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fnmsub.s {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FmaddD { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fmadd.d {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FmsubD { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fmsub.d {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FnmaddD { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fnmadd.d {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
+            }
+            Instruction::FnmsubD { rd, rs1, rs2, rs3, rm } => {
+                write!(f, "fnmsub.d {}, {}, {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2), freg_name(rs3), fp_rm_name(rm))
             }
             Instruction::Fence => write!(f, "fence"),
             Instruction::FenceI => write!(f, "fence.i"),

@@ -4,8 +4,9 @@ use core::cmp::Ordering;
 
 use rremu_bus::{AccessSize, Bus, EventSink};
 use rremu_fp::{
-    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, max32, max64, min32, min64,
-    mul32, mul64, sqrt32, sqrt64, sub32, sub64,
+    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, fmadd32, fmadd64, fmsub32,
+    fmsub64, fnmadd32, fnmadd64, fnmsub32, fnmsub64, max32, max64, min32, min64, mul32, mul64,
+    sqrt32, sqrt64, sub32, sub64,
 };
 use rremu_isa::{Instruction, cause, csr};
 
@@ -214,6 +215,94 @@ impl Cpu {
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
+            Instruction::FmaddS { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fmadd32(
+                    self.fpr_s(rs1),
+                    self.fpr_s(rs2),
+                    self.fpr_s(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FmsubS { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fmsub32(
+                    self.fpr_s(rs1),
+                    self.fpr_s(rs2),
+                    self.fpr_s(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FnmaddS { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fnmadd32(
+                    self.fpr_s(rs1),
+                    self.fpr_s(rs2),
+                    self.fpr_s(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FnmsubS { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fnmsub32(
+                    self.fpr_s(rs1),
+                    self.fpr_s(rs2),
+                    self.fpr_s(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FmaddD { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fmadd64(
+                    self.fpr_d(rs1),
+                    self.fpr_d(rs2),
+                    self.fpr_d(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FmsubD { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fmsub64(
+                    self.fpr_d(rs1),
+                    self.fpr_d(rs2),
+                    self.fpr_d(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FnmaddD { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fnmadd64(
+                    self.fpr_d(rs1),
+                    self.fpr_d(rs2),
+                    self.fpr_d(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FnmsubD { rd, rs1, rs2, rs3, rm } => {
+                let mode = self.fp_rounding_mode(rm, raw)?;
+                let (value, flags) = fnmsub64(
+                    self.fpr_d(rs1),
+                    self.fpr_d(rs2),
+                    self.fpr_d(rs3),
+                    mode,
+                );
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
             Instruction::CFlw { rd, rs1, imm } => {
                 let addr = x(self, rs1).wrapping_add(imm as u32);
                 let bits = self.load(bus, sink, addr, AccessSize::Word)?;
@@ -380,6 +469,14 @@ fn is_fp_instruction(instr: Instruction) -> bool {
             | Instruction::FmaxS { .. }
             | Instruction::FminD { .. }
             | Instruction::FmaxD { .. }
+            | Instruction::FmaddS { .. }
+            | Instruction::FmsubS { .. }
+            | Instruction::FnmaddS { .. }
+            | Instruction::FnmsubS { .. }
+            | Instruction::FmaddD { .. }
+            | Instruction::FmsubD { .. }
+            | Instruction::FnmaddD { .. }
+            | Instruction::FnmsubD { .. }
             | Instruction::CFlw { .. }
             | Instruction::CFsw { .. }
             | Instruction::CFld { .. }

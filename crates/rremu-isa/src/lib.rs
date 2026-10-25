@@ -81,6 +81,18 @@ mod tests {
     }
 
     #[test]
+    fn display_fp_fma() {
+        assert_eq!(
+            Instruction::FmaddS { rd: 10, rs1: 11, rs2: 12, rs3: 13, rm: 0 }.to_string(),
+            "fmadd.s fa0, fa1, fa2, fa3, rne"
+        );
+        assert_eq!(
+            Instruction::FnmsubD { rd: 10, rs1: 11, rs2: 12, rs3: 13, rm: 7 }.to_string(),
+            "fnmsub.d fa0, fa1, fa2, fa3, dyn"
+        );
+    }
+
+    #[test]
     fn display_system() {
         assert_eq!(Instruction::Ecall.to_string(), "ecall");
         assert_eq!(Instruction::Ebreak.to_string(), "ebreak");

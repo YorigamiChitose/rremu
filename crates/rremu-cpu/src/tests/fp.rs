@@ -113,6 +113,16 @@ fn fp_r_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
         | 0b1010011
 }
 
+fn fp_fma_enc(op: u32, rd: u8, rs1: u8, rs2: u8, rs3: u8, fmt: u32, rm: u32) -> Word {
+    (u32::from(rs3) << 27)
+        | (fmt << 25)
+        | (u32::from(rs2) << 20)
+        | (u32::from(rs1) << 15)
+        | (rm << 12)
+        | (u32::from(rd) << 7)
+        | op
+}
+
 fn set_fs(h: &mut Harness, fs: u32) {
     h.cpu.csr.mstatus = (h.cpu.csr.mstatus & !csr::MSTATUS_FS_MASK) | fs;
 }
@@ -491,6 +501,93 @@ fn fp_minmax_d_zero_nan_and_flags() {
 }
 
 #[test]
+fn fp_fma_s_operations_and_single_rounding() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // 1.0
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x4000_0000)); // 2.0
+    h.cpu.write_fpr_s(3, Fp32::from_bits(0x4040_0000)); // 3.0
+    h.cpu.write_fpr_s(4, Fp32::from_bits(0x3f80_0001)); // 1+ulp
+    h.cpu.write_fpr_s(5, Fp32::from_bits(0xbf80_0002)); // -(1+2ulp)
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_fma_enc(0b1000011, 10, 1, 2, 3, 0, 0), // fmadd.s 1*2+3
+            fp_fma_enc(0b1000111, 11, 1, 2, 3, 0, 0), // fmsub.s 1*2-3
+            fp_fma_enc(0b1001011, 12, 1, 2, 3, 0, 0), // fnmsub.s -(1*2)+3
+            fp_fma_enc(0b1001111, 13, 1, 2, 3, 0, 0), // fnmadd.s -(1*2)-3
+            fp_fma_enc(0b1000011, 14, 4, 4, 5, 0, 0), // fused exact 2^-46
+        ],
+    );
+
+    h.run(5);
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x40a0_0000);
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0xbf80_0000);
+    assert_eq!(h.cpu.fpr_s(12).to_bits(), 0x3f80_0000);
+    assert_eq!(h.cpu.fpr_s(13).to_bits(), 0xc0a0_0000);
+    assert_eq!(h.cpu.fpr_s(14).to_bits(), 0x2880_0000);
+    assert_eq!(fflags(&h), 0);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+}
+
+#[test]
+fn fp_fma_d_operations_and_rounding_modes() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_d(1, Fp64::from_bits(0x3ff0_0000_0000_0000)); // 1.0
+    h.cpu.write_fpr_d(2, Fp64::from_bits(0x4000_0000_0000_0000)); // 2.0
+    h.cpu.write_fpr_d(3, Fp64::from_bits(0x4008_0000_0000_0000)); // 3.0
+    h.cpu.write_fpr_d(4, Fp64::from_bits(0x3ca0_0000_0000_0000)); // 2^-53
+    h.cpu.csr.fcsr = 1 << csr::FCSR_FRM_SHIFT; // rtz
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_fma_enc(0b1000011, 10, 1, 2, 3, 1, 0), // fmadd.d 1*2+3
+            fp_fma_enc(0b1000111, 11, 1, 2, 3, 1, 0), // fmsub.d 1*2-3
+            fp_fma_enc(0b1001011, 12, 1, 2, 3, 1, 0), // fnmsub.d -(1*2)+3
+            fp_fma_enc(0b1001111, 13, 1, 2, 3, 1, 0), // fnmadd.d -(1*2)-3
+            fp_fma_enc(0b1000011, 14, 1, 1, 4, 1, 7), // fmadd.d dyn rtz tie
+        ],
+    );
+
+    h.run(5);
+    assert_eq!(h.cpu.fpr_d(10).to_bits(), 0x4014_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(11).to_bits(), 0xbff0_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(12).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(13).to_bits(), 0xc014_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(14).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(fflags(&h), 0x01);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    // 动态 frm 为保留值时 FMA 在执行阶段 illegal。
+    let raw = fp_fma_enc(0b1000011, 15, 1, 2, 3, 1, 7);
+    h.cpu.csr.fcsr = 5 << csr::FCSR_FRM_SHIFT;
+    h.cpu.write_fpr_d(15, Fp64::from_bits(0x3ff0_0000_0000_0000));
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(BASE + 20, &[raw]);
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+    );
+    assert_eq!(h.cpu.csr_state().mtval, raw);
+    assert_eq!(h.cpu.fpr_d(15).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
+
+    // 静态 rm=5/6 在解码阶段被拒绝。
+    for rm in [5, 6] {
+        let raw = fp_fma_enc(0b1000011, 16, 1, 2, 3, 1, rm);
+        let mut h = Harness::new();
+        h.load(BASE, &[raw]);
+        assert_eq!(
+            h.step(),
+            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        );
+        assert_eq!(h.cpu.csr_state().mtval, raw);
+    }
+}
+
+#[test]
 fn fp_instructions_are_illegal_when_fs_off() {
     let instructions = [
         fp_load_enc(0b010, 1, 0, 0),
@@ -506,6 +603,7 @@ fn fp_instructions_are_illegal_when_fs_off() {
         fp_r_enc(1, 0b000, 2, 0, 0b0101100),
         fp_r_enc(1, 0b000, 2, 3, 0b0010100),
         fp_r_enc(1, 0b001, 2, 3, 0b0010101),
+        fp_fma_enc(0b1000011, 1, 2, 3, 4, 0, 0),
     ];
     for raw in instructions {
         let mut h = Harness::new();
