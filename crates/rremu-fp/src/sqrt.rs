@@ -59,7 +59,7 @@ pub fn sqrt32(a: Fp32, mode: RoundingMode) -> (Fp32, Flags) {
 }
 
 /// 返回 `value` 的整数平方根，只使用整数运算。
-fn isqrt_u128(value: u128) -> u64 {
+pub(crate) fn isqrt_u128(value: u128) -> u64 {
     let mut low = 0u64;
     let mut high = 1u64 << 63;
 
