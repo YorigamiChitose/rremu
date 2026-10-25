@@ -4,7 +4,7 @@
 //! 以及不依赖宿主浮点环境的解码/规范化/舍入/编码原语。
 //! 单精度运算在 [`add`]、[`muldiv`]、[`sqrt`] 中实现，
 //! 双精度运算在 [`add64`]、[`muldiv64`]、[`sqrt64`] 中实现，
-//! [`minmax`] 提供 `fmin` / `fmax`；融合乘加在后续模块中实现。
+//! [`minmax`] 提供 `fmin` / `fmax`，[`fma`] 提供融合乘加。
 //!
 //! 所有原语都使用整数和位操作，禁止先转换为宿主 `f32`/`f64`。
 
@@ -13,6 +13,7 @@
 pub mod add;
 pub mod add64;
 pub mod flags;
+pub mod fma;
 pub mod format;
 pub mod minmax;
 pub mod muldiv;
@@ -25,6 +26,7 @@ pub mod sqrt64;
 pub use add::{add32, sub32};
 pub use add64::{add64, sub64};
 pub use flags::Flags;
+pub use fma::{fmadd32, fmadd64, fmsub32, fmsub64, fnmadd32, fnmadd64, fnmsub32, fnmsub64};
 pub use format::{Fp32, Fp64, FpClass};
 pub use minmax::{max32, max64, min32, min64};
 pub use muldiv::{div32, mul32};
