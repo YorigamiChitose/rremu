@@ -131,7 +131,15 @@ use super::*;
     fn misa_advertises_extensions() {
         let h = Harness::new();
         let misa = h.cpu.debug_csr_read(csr::MISA).unwrap();
-        for bit in [csr::MISA_I, csr::MISA_M, csr::MISA_A, csr::MISA_C, csr::MISA_U] {
+        for bit in [
+            csr::MISA_I,
+            csr::MISA_M,
+            csr::MISA_A,
+            csr::MISA_C,
+            csr::MISA_F,
+            csr::MISA_D,
+            csr::MISA_U,
+        ] {
             assert_eq!(misa & bit, bit, "missing misa bit {bit:#x}");
         }
         assert_eq!((misa >> 30) & 0b11, 0b01); // MXL=RV32

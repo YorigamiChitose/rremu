@@ -37,12 +37,14 @@ impl CsrState {
     pub(crate) fn new() -> Self {
         Self {
             mstatus: csr::MSTATUS_MPP_M, // 复位进入 M-mode
-            // RV32 + I/M/A/C/S/U
+            // RV32 + I/M/A/C/F/D/S/U
             misa: csr::MISA_MXL_32
                 | csr::MISA_I
                 | csr::MISA_M
                 | csr::MISA_A
                 | csr::MISA_C
+                | csr::MISA_F
+                | csr::MISA_D
                 | csr::MISA_S
                 | csr::MISA_U,
             mie: 0,
