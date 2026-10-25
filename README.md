@@ -29,7 +29,7 @@
   - TUI：ratatui 多面板（寄存器 / 反汇编 / 内存事件 / UART）+ 键盘控制
   - 独立帧缓冲窗口（minifb，X11），**懒启动**：首次写 fb 才弹窗
 - **设备**：RAM、UART（NS16550A 子集）、CLINT（mtime/mtimecmp/msip）、
-  PLIC、Goldfish RTC、syscon（poweroff/reboot）、Framebuffer（RGB565 → 0x00RRGGBB），
+  PLIC、Goldfish RTC（含 alarm IRQ）、syscon（poweroff/reboot）、Framebuffer（RGB565 → 0x00RRGGBB），
   均经 `BusDevice` trait 接入总线。
   CLINT `mtimecmp` 复位为 `u32::MAX`（避免虚假定时器中断）；
   `mip` 的 MSIP/MTIP/MEIP 位由设备 pending 投影（软件只读）
@@ -55,7 +55,6 @@ RV32GC（F/D）与 ilp32d Linux/BusyBox 全栈已验证。
 - vectored `mtvec`/`stvec` 未实现；`cte_vectored_mtvec` 按 Fault 断言。
 - `wfi` 按 NOP 执行。
 - 不提供磁盘、真实块设备、virtio-blk 或磁盘 rootfs；Linux 使用内置 initramfs。
-- Goldfish RTC 仅实现时间/alarm 寄存器，不注入 alarm IRQ。
 - syscon `0x5555` poweroff 退出码为 0；`0x7777` reboot 退出码为 2。
 - 非目标：B 扩展（Zba/Zbb/Zbs）、Sstc、HPM 计数器与 `mcountinhibit`、
   `cycleh/instreth/mcycleh/minstreth` 高半计数器暂未实现。

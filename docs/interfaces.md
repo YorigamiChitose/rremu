@@ -248,7 +248,8 @@ BusDevice::as_resetable/as_input_sink/as_frame_source
 
 ### 3.3 RTC / syscon
 
-- RTC 只实现时间/alarm 寄存器子集，不提供 alarm IRQ。
+- RTC 的时间和 alarm 寄存器使用纳秒；alarm 到期后通过 PLIC source 11 断言中断。
+- `CLEAR_INTERRUPT` / `CLEAR_ALARM` 清除已断言的 alarm 状态。
 - syscon `0x5555` → `EmuEvent::PowerOff`。
 - syscon `0x7777` → `EmuEvent::Reboot`。
 - `PowerOff` 映射宿主 exit 0；`Reboot` 映射 exit 2。
