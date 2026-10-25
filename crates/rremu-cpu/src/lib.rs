@@ -166,7 +166,7 @@ impl Cpu {
             // 16 位压缩指令（mtval 为 16 位编码本身）
             match decode16(lo, pc) {
                 Ok(i) => (i, 2u8),
-                Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
+                Err(DecodeError::Illegal { .. }) => {
                     return self.trap(sink, cause::ILLEGAL_INSTR, u32::from(lo));
                 }
             }
@@ -174,7 +174,7 @@ impl Cpu {
             // 32 位指令：word 已包含完整 4 字节，直接解码
             match decode32(word, pc) {
                 Ok(i) => (i, 4u8),
-                Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
+                Err(DecodeError::Illegal { .. }) => {
                     return self.trap(sink, cause::ILLEGAL_INSTR, word);
                 }
             }

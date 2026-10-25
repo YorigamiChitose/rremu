@@ -18,9 +18,6 @@ pub enum DecodeError {
     /// 非法编码（opcode/funct 字段不属于任何已实现指令）。
     #[error("illegal instruction {bits:#010x} at pc {pc:#x}")]
     Illegal { bits: Word, pc: Address },
-    /// 编码属于尚未实现的指令类别。
-    #[error("unimplemented instruction {bits:#010x} at pc {pc:#x}")]
-    Unimplemented { bits: Word, pc: Address },
 }
 
 /// 解码 32 位指令。
