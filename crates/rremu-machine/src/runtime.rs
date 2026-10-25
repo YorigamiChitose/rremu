@@ -64,11 +64,8 @@ impl Machine {
         self.dbg.clear_suppress();
 
         let stepped = {
-            let mut sink = MachineSink::new(
-                &mut self.collector,
-                &mut self.terminal,
-                &mut self.uart_sink,
-            );
+            let mut sink =
+                MachineSink::new(&mut self.collector, &mut self.terminal, &mut self.uart_sink);
             self.cpu.step(&mut self.bus, &mut sink)
         };
         match stepped {
@@ -107,6 +104,4 @@ impl Machine {
             }
         }
     }
-
-
 }

@@ -46,11 +46,26 @@ impl Default for Layout {
         Self {
             ram_base: DEFAULT_RAM_BASE,
             ram_size: DEFAULT_RAM_SIZE,
-            uart: Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }),
-            clint: Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }),
-            plic: Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }),
-            syscon: Some(Device { base: DEFAULT_SYSCON_BASE, size: SYSCON_SIZE }),
-            rtc: Some(Device { base: DEFAULT_RTC_BASE, size: RTC_SIZE }),
+            uart: Some(Device {
+                base: DEFAULT_UART_BASE,
+                size: UART_SIZE,
+            }),
+            clint: Some(Device {
+                base: DEFAULT_CLINT_BASE,
+                size: CLINT_SIZE,
+            }),
+            plic: Some(Device {
+                base: DEFAULT_PLIC_BASE,
+                size: PLIC_SIZE,
+            }),
+            syscon: Some(Device {
+                base: DEFAULT_SYSCON_BASE,
+                size: SYSCON_SIZE,
+            }),
+            rtc: Some(Device {
+                base: DEFAULT_RTC_BASE,
+                size: RTC_SIZE,
+            }),
             fb: Some(FbLayout {
                 base: DEFAULT_FB_BASE,
                 width: DEFAULT_FB_WIDTH,
@@ -60,4 +75,3 @@ impl Default for Layout {
         }
     }
 }
-

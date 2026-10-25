@@ -1,6 +1,6 @@
 //! 设备中断投影与优先级仲裁。
 
-use rremu_isa::{cause, csr, Priv};
+use rremu_isa::{Priv, cause, csr};
 
 use super::Cpu;
 

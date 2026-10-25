@@ -160,7 +160,11 @@ fn eval_bin(op: BinOp, a: u32, b: u32) -> Result<u32, EvalError> {
                 return Err(EvalError::DivideByZero);
             }
             // INT_MIN / -1 溢出：按 RISC-V DIV 硬件惯例返回原值
-            if x == i32::MIN && y == -1 { a } else { (x / y) as u32 }
+            if x == i32::MIN && y == -1 {
+                a
+            } else {
+                (x / y) as u32
+            }
         }
         BinOp::Rem => {
             let (x, y) = (a as i32, b as i32);
@@ -168,7 +172,11 @@ fn eval_bin(op: BinOp, a: u32, b: u32) -> Result<u32, EvalError> {
                 return Err(EvalError::DivideByZero);
             }
             // INT_MIN % -1 → 0（RISC-V REM 语义）
-            if x == i32::MIN && y == -1 { 0 } else { (x % y) as u32 }
+            if x == i32::MIN && y == -1 {
+                0
+            } else {
+                (x % y) as u32
+            }
         }
         // wrapping_shl/shr 对 u32 自动取移位量低 5 位；u32 >> 即逻辑右移
         BinOp::Shl => a.wrapping_shl(b),
@@ -298,7 +306,9 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
                 i += 1;
             }
             let text = &src[start..i];
-            let (radix, raw_digits) = if let Some(rest) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+            let (radix, raw_digits) = if let Some(rest) =
+                text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+            {
                 (16u32, rest)
             } else if let Some(rest) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
                 (2, rest)
@@ -307,9 +317,14 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
             };
             // 允许视觉分隔下划线：解析前剥离
             let digits: String = raw_digits.chars().filter(|&c| c != '_').collect();
-            let v = u32::from_str_radix(&digits, radix)
-                .map_err(|_| ParseError { pos, msg: format!("invalid number literal `{text}`") })?;
-            toks.push(Tok { kind: TokKind::Num(v), pos });
+            let v = u32::from_str_radix(&digits, radix).map_err(|_| ParseError {
+                pos,
+                msg: format!("invalid number literal `{text}`"),
+            })?;
+            toks.push(Tok {
+                kind: TokKind::Num(v),
+                pos,
+            });
             continue;
         }
         // 标识符（寄存器名 / pc）
@@ -318,24 +333,58 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            toks.push(Tok { kind: TokKind::Ident(src[start..i].to_owned()), pos });
+            toks.push(Tok {
+                kind: TokKind::Ident(src[start..i].to_owned()),
+                pos,
+            });
             continue;
         }
         // 非 ASCII 字符直接报错（避免切到 UTF-8 中间字节）
         if !bytes[i].is_ascii() {
-            return Err(ParseError { pos: i, msg: "unexpected non-ASCII character".to_owned() });
+            return Err(ParseError {
+                pos: i,
+                msg: "unexpected non-ASCII character".to_owned(),
+            });
         }
         // 双字运算符优先
-        let two = if i + 1 < bytes.len() && bytes[i + 1].is_ascii() { Some(&src[i..i + 2]) } else { None };
+        let two = if i + 1 < bytes.len() && bytes[i + 1].is_ascii() {
+            Some(&src[i..i + 2])
+        } else {
+            None
+        };
         let kind = match two {
-            Some("||") => { i += 2; TokKind::PipePipe }
-            Some("&&") => { i += 2; TokKind::AmpAmp }
-            Some("==") => { i += 2; TokKind::Eq }
-            Some("!=") => { i += 2; TokKind::Ne }
-            Some("<=") => { i += 2; TokKind::Le }
-            Some(">=") => { i += 2; TokKind::Ge }
-            Some("<<") => { i += 2; TokKind::Shl }
-            Some(">>") => { i += 2; TokKind::Shr }
+            Some("||") => {
+                i += 2;
+                TokKind::PipePipe
+            }
+            Some("&&") => {
+                i += 2;
+                TokKind::AmpAmp
+            }
+            Some("==") => {
+                i += 2;
+                TokKind::Eq
+            }
+            Some("!=") => {
+                i += 2;
+                TokKind::Ne
+            }
+            Some("<=") => {
+                i += 2;
+                TokKind::Le
+            }
+            Some(">=") => {
+                i += 2;
+                TokKind::Ge
+            }
+            Some("<<") => {
+                i += 2;
+                TokKind::Shl
+            }
+            Some(">>") => {
+                i += 2;
+                TokKind::Shr
+            }
             _ => {
                 i += 1;
                 match c {
@@ -353,7 +402,12 @@ fn lex(src: &str) -> Result<Vec<Tok>, ParseError> {
                     '^' => TokKind::Caret,
                     '<' => TokKind::Lt,
                     '>' => TokKind::Gt,
-                    _ => return Err(ParseError { pos, msg: format!("unexpected character `{c}`") }),
+                    _ => {
+                        return Err(ParseError {
+                            pos,
+                            msg: format!("unexpected character `{c}`"),
+                        });
+                    }
                 }
             }
         };
@@ -387,14 +441,24 @@ impl Parser {
     }
 
     fn unexpected_end(&self) -> ParseError {
-        ParseError { pos: self.end, msg: "unexpected end of input".to_owned() }
+        ParseError {
+            pos: self.end,
+            msg: "unexpected end of input".to_owned(),
+        }
     }
 
     fn unexpected(&self, t: &Tok) -> ParseError {
-        ParseError { pos: t.pos, msg: format!("unexpected token {:?}", t.kind) }
+        ParseError {
+            pos: t.pos,
+            msg: format!("unexpected token {:?}", t.kind),
+        }
     }
 
-    fn binop_chain(&mut self, next: fn(&mut Self) -> Result<Expr, ParseError>, ops: &[(TokKind, BinOp)]) -> Result<Expr, ParseError> {
+    fn binop_chain(
+        &mut self,
+        next: fn(&mut Self) -> Result<Expr, ParseError>,
+        ops: &[(TokKind, BinOp)],
+    ) -> Result<Expr, ParseError> {
         let mut lhs = next(self)?;
         'outer: while let Some(t) = self.peek() {
             for (kind, op) in ops {
@@ -441,34 +505,54 @@ impl Parser {
     }
 
     fn parse_eq(&mut self) -> Result<Expr, ParseError> {
-        self.binop_chain(Self::parse_rel, &[(TokKind::Eq, BinOp::Eq), (TokKind::Ne, BinOp::Ne)])
+        self.binop_chain(
+            Self::parse_rel,
+            &[(TokKind::Eq, BinOp::Eq), (TokKind::Ne, BinOp::Ne)],
+        )
     }
 
     fn parse_rel(&mut self) -> Result<Expr, ParseError> {
         self.binop_chain(
             Self::parse_shift,
-            &[(TokKind::Lt, BinOp::Lt), (TokKind::Gt, BinOp::Gt), (TokKind::Le, BinOp::Le), (TokKind::Ge, BinOp::Ge)],
+            &[
+                (TokKind::Lt, BinOp::Lt),
+                (TokKind::Gt, BinOp::Gt),
+                (TokKind::Le, BinOp::Le),
+                (TokKind::Ge, BinOp::Ge),
+            ],
         )
     }
 
     fn parse_shift(&mut self) -> Result<Expr, ParseError> {
-        self.binop_chain(Self::parse_add, &[(TokKind::Shl, BinOp::Shl), (TokKind::Shr, BinOp::Shr)])
+        self.binop_chain(
+            Self::parse_add,
+            &[(TokKind::Shl, BinOp::Shl), (TokKind::Shr, BinOp::Shr)],
+        )
     }
 
     fn parse_add(&mut self) -> Result<Expr, ParseError> {
-        self.binop_chain(Self::parse_mul, &[(TokKind::Plus, BinOp::Add), (TokKind::Minus, BinOp::Sub)])
+        self.binop_chain(
+            Self::parse_mul,
+            &[(TokKind::Plus, BinOp::Add), (TokKind::Minus, BinOp::Sub)],
+        )
     }
 
     fn parse_mul(&mut self) -> Result<Expr, ParseError> {
         self.binop_chain(
             Self::parse_unary,
-            &[(TokKind::Star, BinOp::Mul), (TokKind::Slash, BinOp::Div), (TokKind::Percent, BinOp::Rem)],
+            &[
+                (TokKind::Star, BinOp::Mul),
+                (TokKind::Slash, BinOp::Div),
+                (TokKind::Percent, BinOp::Rem),
+            ],
         )
     }
 
     /// unary := ("-"|"~"|"!") unary | primary；`*`（primary 层）折叠到此处等价且支持 `**p`。
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
-        let Some(t) = self.peek() else { return Err(self.unexpected_end()) };
+        let Some(t) = self.peek() else {
+            return Err(self.unexpected_end());
+        };
         let op = match t.kind {
             TokKind::Minus => Some(UnOp::Neg),
             TokKind::Tilde => Some(UnOp::BitNot),
@@ -488,7 +572,9 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        let Some(t) = self.toks.get(self.i).cloned() else { return Err(self.unexpected_end()) };
+        let Some(t) = self.toks.get(self.i).cloned() else {
+            return Err(self.unexpected_end());
+        };
         self.i += 1;
         match t.kind {
             TokKind::Num(v) => Ok(Expr::Num(v)),
@@ -496,7 +582,9 @@ impl Parser {
             TokKind::LParen => {
                 let e = self.parse_or()?;
                 if !self.eat(|k| matches!(k, TokKind::RParen)) {
-                    return Err(self.peek().map_or_else(|| self.unexpected_end(), |t| self.unexpected(t)));
+                    return Err(self
+                        .peek()
+                        .map_or_else(|| self.unexpected_end(), |t| self.unexpected(t)));
                 }
                 Ok(e)
             }
@@ -511,13 +599,20 @@ fn resolve_ident(name: &str, pos: usize) -> Result<Expr, ParseError> {
     }
     reg_from_name(name)
         .map(Expr::Reg)
-        .ok_or_else(|| ParseError { pos, msg: format!("unknown register `{name}`") })
+        .ok_or_else(|| ParseError {
+            pos,
+            msg: format!("unknown register `{name}`"),
+        })
 }
 
 /// 解析表达式；错误带字节位置。
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
     let toks = lex(src)?;
-    let mut p = Parser { toks, i: 0, end: src.len() };
+    let mut p = Parser {
+        toks,
+        i: 0,
+        end: src.len(),
+    };
     let e = p.parse_or()?;
     if let Some(t) = p.peek() {
         return Err(p.unexpected(t));
@@ -542,7 +637,11 @@ mod tests {
 
     impl Ctx {
         fn new() -> Self {
-            Self { regs: [0; 32], pc: 0x8000_0000, mem: Vec::new() }
+            Self {
+                regs: [0; 32],
+                pc: 0x8000_0000,
+                mem: Vec::new(),
+            }
         }
         fn with_reg(mut self, i: u8, v: u32) -> Self {
             self.regs[usize::from(i)] = v;
@@ -566,7 +665,10 @@ mod tests {
                 .iter()
                 .find(|(a, _)| *a == addr)
                 .map(|(_, v)| *v)
-                .ok_or_else(|| EvalError::Peek { addr, msg: "unmapped".to_owned() })
+                .ok_or_else(|| EvalError::Peek {
+                    addr,
+                    msg: "unmapped".to_owned(),
+                })
         }
     }
 
@@ -684,8 +786,14 @@ mod tests {
 
     #[test]
     fn div_by_zero_errors() {
-        assert_eq!(parse("1/0").unwrap().eval(&mut Ctx::new()), Err(EvalError::DivideByZero));
-        assert_eq!(parse("5%0").unwrap().eval(&mut Ctx::new()), Err(EvalError::DivideByZero));
+        assert_eq!(
+            parse("1/0").unwrap().eval(&mut Ctx::new()),
+            Err(EvalError::DivideByZero)
+        );
+        assert_eq!(
+            parse("5%0").unwrap().eval(&mut Ctx::new()),
+            Err(EvalError::DivideByZero)
+        );
     }
 
     #[test]
@@ -707,7 +815,10 @@ mod tests {
 
     #[test]
     fn aliases_and_xn_agree() {
-        let mut ctx = Ctx::new().with_reg(2, 0x100).with_reg(10, 7).with_reg(8, 0x40);
+        let mut ctx = Ctx::new()
+            .with_reg(2, 0x100)
+            .with_reg(10, 7)
+            .with_reg(8, 0x40);
         assert_eq!(eval("sp", &mut ctx), 0x100);
         assert_eq!(eval("x2", &mut ctx), 0x100);
         assert_eq!(eval("a0", &mut ctx), 7);
@@ -727,7 +838,9 @@ mod tests {
 
     #[test]
     fn deref_reads_context_memory() {
-        let mut ctx = Ctx::new().with_mem(0x100, 0x200).with_mem(0x200, 0xdead_beef);
+        let mut ctx = Ctx::new()
+            .with_mem(0x100, 0x200)
+            .with_mem(0x200, 0xdead_beef);
         assert_eq!(eval("*0x100", &mut ctx), 0x200);
         assert_eq!(eval("**0x100", &mut ctx), 0xdead_beef);
         assert_eq!(eval("*(0x100+0x100)", &mut ctx), 0xdead_beef);
@@ -737,7 +850,13 @@ mod tests {
     fn deref_unmapped_is_error() {
         let mut ctx = Ctx::new();
         let e = parse("*0x1234").unwrap().eval(&mut ctx).unwrap_err();
-        assert_eq!(e, EvalError::Peek { addr: 0x1234, msg: "unmapped".to_owned() });
+        assert_eq!(
+            e,
+            EvalError::Peek {
+                addr: 0x1234,
+                msg: "unmapped".to_owned()
+            }
+        );
     }
 
     // ---- 解析错误与位置 ----

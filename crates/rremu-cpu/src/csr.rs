@@ -1,6 +1,6 @@
 //! CSR 状态、存在性与访问权限。
 
-use rremu_isa::{cause, csr, Priv};
+use rremu_isa::{Priv, cause, csr};
 
 use super::{Cpu, TrapErr};
 
@@ -120,7 +120,10 @@ impl Cpu {
     /// 架构读取：未实现 CSR 必须 illegal。仅用于 CSR 指令路径。
     pub(crate) fn architectural_csr_read(&self, addr: u16) -> Result<u32, TrapErr> {
         if !Self::csr_implemented(addr) {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: 0 });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: 0,
+            });
         }
         Ok(self.debug_csr_read(addr).unwrap_or(0))
     }
@@ -229,10 +232,7 @@ impl Cpu {
                     return;
                 }
                 // entry i+1 为锁定 TOR 时，pmpaddr[i] 是其下界，忽略写入。
-                if i + 1 < 16
-                    && self.pmp_entry_locked(i + 1)
-                    && self.pmp_entry_mode(i + 1) == 1
-                {
+                if i + 1 < 16 && self.pmp_entry_locked(i + 1) && self.pmp_entry_mode(i + 1) == 1 {
                     return;
                 }
                 self.csr.pmpaddr[i] = val;
@@ -308,13 +308,13 @@ impl Cpu {
 
     /// S/U 读取计数器时检查 mcounteren/scounteren；M-mode 不受限制。
     fn counter_access_allowed(&self, addr: u16) -> bool {
-        let Some(bit) = Self::counter_enable_bit(addr) else { return true };
+        let Some(bit) = Self::counter_enable_bit(addr) else {
+            return true;
+        };
         match self.priv_ {
             Priv::Machine => true,
             Priv::Supervisor => self.csr.mcounteren & bit != 0,
-            Priv::User => {
-                self.csr.mcounteren & bit != 0 && self.csr.scounteren & bit != 0
-            }
+            Priv::User => self.csr.mcounteren & bit != 0 && self.csr.scounteren & bit != 0,
         }
     }
 
@@ -323,18 +323,30 @@ impl Cpu {
     /// 不构成写）。
     pub(crate) fn check_csr_access(&self, addr: u16, write: bool, raw: u32) -> Result<(), TrapErr> {
         if !Self::csr_implemented(addr) {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: raw,
+            });
         }
         if Self::is_fp_csr(addr) && !self.fp_enabled() {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: raw,
+            });
         }
         let required = u32::from((addr >> 8) & 0x3);
         let read_only = (addr >> 10) & 0x3 == 0x3;
         if required > self.priv_csr_level() || (write && read_only) {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: raw,
+            });
         }
         if !write && !self.counter_access_allowed(addr) {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: raw,
+            });
         }
         Ok(())
     }

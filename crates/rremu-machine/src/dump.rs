@@ -62,7 +62,10 @@ impl ElfRef {
     /// 从路径构造（计算 sha256；读取失败时 sha256 为 None）。
     pub fn from_path(path: &str) -> Self {
         let sha256 = std::fs::read(path).ok().map(|b| sha256_hex(&b));
-        Self { path: path.to_owned(), sha256 }
+        Self {
+            path: path.to_owned(),
+            sha256,
+        }
     }
 }
 
@@ -142,16 +145,37 @@ pub struct TraceItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventItem {
-    Mem { cycle: u64, kind: String, size: String, addr: String, value: String, device: String },
-    Trap { cause: String, pc: String },
-    UartOut { byte: u8 },
-    UartIn { byte: u8 },
+    Mem {
+        cycle: u64,
+        kind: String,
+        size: String,
+        addr: String,
+        value: String,
+        device: String,
+    },
+    Trap {
+        cause: String,
+        pc: String,
+    },
+    UartOut {
+        byte: u8,
+    },
+    UartIn {
+        byte: u8,
+    },
 }
 
 impl EventItem {
     fn from_event(ev: &EmuEvent) -> Option<Self> {
         match ev {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, device } => Some(EventItem::Mem {
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                device,
+            } => Some(EventItem::Mem {
                 cycle: *cycle,
                 kind: kind.to_string(),
                 size: size.to_string(),
@@ -159,9 +183,10 @@ impl EventItem {
                 value: hex(*value),
                 device: device.clone(),
             }),
-            EmuEvent::Trap { cause, pc } => {
-                Some(EventItem::Trap { cause: hex(*cause), pc: hex(*pc) })
-            }
+            EmuEvent::Trap { cause, pc } => Some(EventItem::Trap {
+                cause: hex(*cause),
+                pc: hex(*pc),
+            }),
             EmuEvent::UartOutput { byte } => Some(EventItem::UartOut { byte: *byte }),
             EmuEvent::UartInput { byte } => Some(EventItem::UartIn { byte: *byte }),
             EmuEvent::Halt { .. } | EmuEvent::PowerOff | EmuEvent::Reboot => None,
@@ -207,12 +232,18 @@ impl Dump {
         }
 
         // trap 从 Machine 持久保留的 last_trap 取（不受事件环淘汰影响）
-        let trap = machine
-            .last_trap()
-            .map(|(cause, pc, mtval)| Trap { cause: hex(cause), pc: hex(pc), mtval: hex(mtval) });
+        let trap = machine.last_trap().map(|(cause, pc, mtval)| Trap {
+            cause: hex(cause),
+            pc: hex(pc),
+            mtval: hex(mtval),
+        });
 
         // trace 优先用 trap 时刻冻结的崩溃路径；否则用当前 trace
-        let to_item = |t: &TraceEntry| TraceItem { pc: hex(t.pc), bits: hex(t.bits), len: t.len };
+        let to_item = |t: &TraceEntry| TraceItem {
+            pc: hex(t.pc),
+            bits: hex(t.bits),
+            len: t.len,
+        };
         let trace: Vec<TraceItem> = match machine.trace_at_trap() {
             Some(frozen) => frozen.iter().map(to_item).collect(),
             None => machine.trace().iter().map(to_item).collect(),
@@ -259,7 +290,13 @@ mod tests {
     fn nop_image(entry: u32) -> Image {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes()); // addi x0, x0, 0
-        Image { segments: vec![Segment { addr: entry, data: bytes }], entry }
+        Image {
+            segments: vec![Segment {
+                addr: entry,
+                data: bytes,
+            }],
+            entry,
+        }
     }
 
     #[test]
@@ -267,7 +304,13 @@ mod tests {
         let base = 0x8000_0000;
         let mut m = test_machine(base, 0x1000, nop_image(base));
         m.step_n(1);
-        let d = Dump::from_machine(&m, Some(ElfRef { path: "prog.elf".to_owned(), sha256: None }));
+        let d = Dump::from_machine(
+            &m,
+            Some(ElfRef {
+                path: "prog.elf".to_owned(),
+                sha256: None,
+            }),
+        );
         assert_eq!(d.format_version, FORMAT_VERSION);
         assert_eq!(d.reason, Reason::Paused);
         assert_eq!(d.machine.pc, hex(base + 4));
@@ -290,7 +333,8 @@ mod tests {
         let mut fprs = [0u64; 32];
         fprs[1] = 0xffff_ffff_3f80_0000;
         fprs[10] = 0x3ff0_0000_0000_0000;
-        m.cpu.restore_fp_state(&fprs, 0xe5, rremu_isa::csr::MSTATUS_FS_DIRTY);
+        m.cpu
+            .restore_fp_state(&fprs, 0xe5, rremu_isa::csr::MSTATUS_FS_DIRTY);
 
         let d = Dump::from_machine(&m, None);
         assert_eq!(d.machine.fprs[1], "0xffffffff3f800000");
@@ -342,7 +386,13 @@ mod tests {
             bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes()); // nop
         }
         bytes.extend_from_slice(&0x0000u16.to_le_bytes()); // illegal
-        let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
+        let img = Image {
+            segments: vec![Segment {
+                addr: base,
+                data: bytes,
+            }],
+            entry: base,
+        };
         let mut m = test_machine(base, 0x1000, img);
         m.step_n(4);
         let d = Dump::from_machine(&m, None);
@@ -363,7 +413,13 @@ mod tests {
         for w in code {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
-        let img = Image { segments: vec![Segment { addr: base, data: bytes }], entry: base };
+        let img = Image {
+            segments: vec![Segment {
+                addr: base,
+                data: bytes,
+            }],
+            entry: base,
+        };
         let mut m = test_machine(base, 0x1000, img);
         m.step_n(3);
         let d = Dump::from_machine(&m, None);

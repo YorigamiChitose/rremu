@@ -2,27 +2,27 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use rremu_bus::{Bus, BusError, BusDevice, BusRouter, EventSink};
+use rremu_bus::{Bus, BusDevice, BusError, BusRouter, EventSink};
+#[cfg(test)]
+use rremu_config::Config;
 use rremu_cpu::Cpu;
 use rremu_decode::{decode16, decode32, instr_len};
 use rremu_expr::{EvalContext, EvalError, Expr, RegId};
 use rremu_isa::csr;
 use rremu_loader::Image;
-#[cfg(test)]
-use rremu_config::Config;
 use thiserror::Error;
 
 // 前端经 machine 间接使用（依赖红线：cli/tui 不得直接依赖 isa/bus）。
 // pub use 同时将名称引入本模块，供内部代码直接使用。
 pub use rremu_bus::{AccessSize, EmuEvent, MemKind};
-pub use rremu_isa::{freg_name, reg_name, Instruction, Priv};
+pub use rremu_isa::{Instruction, Priv, freg_name, reg_name};
 
-pub mod dump;
 mod builder;
 mod debugger;
+pub mod dump;
 mod events;
-mod runtime;
 mod framebuffer;
+mod runtime;
 mod snapshot;
 pub mod term;
 
@@ -30,9 +30,9 @@ use term::Terminal;
 
 pub use debugger::{DebugController, Watchpoint};
 pub use events::RingCollector;
+pub(crate) use framebuffer::FramebufferAccessor;
 pub use framebuffer::FramebufferFrame;
 pub use snapshot::{CsrSnapshot, MachineSnapshot, TraceEntry};
-pub(crate) use framebuffer::FramebufferAccessor;
 
 /// 运行状态（快照展示用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,12 +48,23 @@ pub enum RunState {
 /// 运行控制结果（含断点/监视点命中）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunResult {
-    Exited { code: i32 },
+    Exited {
+        code: i32,
+    },
     Paused,
-    HitBreakpoint { addr: u32 },
-    HitWatchpoint { id: usize, pc: u32, old: u32, new: u32 },
+    HitBreakpoint {
+        addr: u32,
+    },
+    HitWatchpoint {
+        id: usize,
+        pc: u32,
+        old: u32,
+        new: u32,
+    },
     /// 模拟遇到不可恢复错误，已终止；reason 为故障描述。
-    Faulted { reason: String },
+    Faulted {
+        reason: String,
+    },
 }
 
 /// 反汇编行（TUI 前端用）。
@@ -68,7 +79,12 @@ pub struct DisasmLine {
 #[derive(Debug, Error)]
 pub enum MachineError {
     #[error("segment {addr:#x}+{len} out of RAM range {ram_base:#x}..{ram_end:#x}")]
-    SegmentOutOfRange { addr: u32, len: usize, ram_base: u32, ram_end: u32 },
+    SegmentOutOfRange {
+        addr: u32,
+        len: usize,
+        ram_base: u32,
+        ram_end: u32,
+    },
     #[error("no entry point (neither override nor ELF entry)")]
     NoEntry,
     #[error(transparent)]
@@ -154,14 +170,16 @@ impl Machine {
         self.dbg.watchpoints()
     }
 
-
     /// 复位：寄存器/计数器归零、RAM 清零、镜像重载。
     pub fn reset(&mut self) -> Result<(), MachineError> {
         self.cpu.reset(self.entry);
         // 复位 RAM（必须成功）
         self.reset_device(self.ram_base)?;
         // 复位其他已映射设备（UART/CLINT/FB）；未映射或不可复位则忽略
-        for base in [self.uart_base, self.clint_base, self.fb.base()].into_iter().flatten() {
+        for base in [self.uart_base, self.clint_base, self.fb.base()]
+            .into_iter()
+            .flatten()
+        {
             let _ = self.reset_device(base);
         }
         if let Some(img) = &self.image {
@@ -181,7 +199,9 @@ impl Machine {
 
     /// 复位单个设备：支持 Resetable 则复位，否则报错（调用方决定是否忽略）。
     fn reset_device(&mut self, base: u32) -> Result<(), MachineError> {
-        let dev = self.bus.device_mut(base)
+        let dev = self
+            .bus
+            .device_mut(base)
             .ok_or_else(|| MachineError::ResetFailed(format!("no device at {base:#x}")))?;
         if let Some(r) = dev.as_resetable() {
             r.reset();
@@ -245,7 +265,10 @@ impl Machine {
             Ok(h) => h,
             Err(_) => {
                 return DisasmLine {
-                    addr, len: 2, text: ".word ????????".into(), is_current,
+                    addr,
+                    len: 2,
+                    text: ".word ????????".into(),
+                    is_current,
                 };
             }
         };
@@ -255,7 +278,9 @@ impl Machine {
                 Ok(w) => decode32(w, addr),
                 Err(_) => {
                     return DisasmLine {
-                        addr, len: len as u8, text: format!(".word {:#010x}", 0),
+                        addr,
+                        len: len as u8,
+                        text: format!(".word {:#010x}", 0),
                         is_current,
                     };
                 }
@@ -274,12 +299,23 @@ impl Machine {
                 format!(".word {:#010x}", bits)
             }
         };
-        DisasmLine { addr, len: len as u8, text, is_current }
+        DisasmLine {
+            addr,
+            len: len as u8,
+            text,
+            is_current,
+        }
     }
 
     /// 扫描反汇编范围（TUI 反汇编面板用）。
     /// 从 start 向前解码直到产出 `max_lines` 条或越过 end。
-    pub fn disasm_range(&mut self, start: u32, end: u32, max_lines: usize, current_pc: u32) -> Vec<DisasmLine> {
+    pub fn disasm_range(
+        &mut self,
+        start: u32,
+        end: u32,
+        max_lines: usize,
+        current_pc: u32,
+    ) -> Vec<DisasmLine> {
         let mut lines = Vec::new();
         let mut addr = start;
         while addr <= end && lines.len() < max_lines {
@@ -345,8 +381,7 @@ impl Machine {
     /// 注入 UART 输入字节。
     pub fn uart_push_input(&mut self, byte: u8) {
         let Some(ub) = self.uart_base else { return };
-        if let Some(sink) = self.bus.device_mut(ub).and_then(|d| d.as_input_sink())
-        {
+        if let Some(sink) = self.bus.device_mut(ub).and_then(|d| d.as_input_sink()) {
             sink.push_input(byte);
             self.collector.emit(EmuEvent::UartInput { byte });
         }
@@ -365,7 +400,11 @@ impl Machine {
     /// 最近一条已执行指令（si 回显用）：pc 与指令。
     pub fn last_instruction(&self) -> Option<(u32, Instruction)> {
         let e = self.trace.back()?;
-        let decoded = if e.len == 2 { decode16(e.bits as u16, e.pc) } else { decode32(e.bits, e.pc) };
+        let decoded = if e.len == 2 {
+            decode16(e.bits as u16, e.pc)
+        } else {
+            decode32(e.bits, e.pc)
+        };
         decoded.ok().map(|i| (e.pc, i))
     }
 
@@ -451,9 +490,10 @@ impl EvalContext for MachineCtx<'_> {
         self.0.cpu.pc()
     }
     fn peek_word(&mut self, addr: u32) -> Result<u32, EvalError> {
-        self.0
-            .peek(addr)
-            .map_err(|e| EvalError::Peek { addr, msg: e.to_string() })
+        self.0.peek(addr).map_err(|e| EvalError::Peek {
+            addr,
+            msg: e.to_string(),
+        })
     }
 }
 
@@ -464,19 +504,28 @@ mod tests {
 
     /// 测试辅助：自定义 RAM 基址/大小（其余用默认布局）+ 镜像。
     pub(crate) fn test_machine(ram_base: u32, ram_size: u32, image: Image) -> Machine {
-        let cfg = Config::default()
-            .with_layout(rremu_config::Layout { ram_base, ram_size, ..Default::default() });
+        let cfg = Config::default().with_layout(rremu_config::Layout {
+            ram_base,
+            ram_size,
+            ..Default::default()
+        });
         Machine::from_config(&cfg, Some(image)).unwrap()
     }
 
     #[test]
     fn from_config_rejects_out_of_range_segment() {
         let image = Image {
-            segments: vec![rremu_loader::Segment { addr: 0x9000_0000, data: vec![0; 16] }],
+            segments: vec![rremu_loader::Segment {
+                addr: 0x9000_0000,
+                data: vec![0; 16],
+            }],
             entry: 0x9000_0000,
         };
-        let cfg = Config::default()
-            .with_layout(rremu_config::Layout { ram_base: 0x8000_0000, ram_size: 0x1000, ..Default::default() });
+        let cfg = Config::default().with_layout(rremu_config::Layout {
+            ram_base: 0x8000_0000,
+            ram_size: 0x1000,
+            ..Default::default()
+        });
         let Err(err) = Machine::from_config(&cfg, Some(image)) else {
             panic!("from_config should reject out-of-range segment")
         };
@@ -487,7 +536,11 @@ mod tests {
     fn from_config_injects_boot_args() {
         let base = 0x8000_0000;
         let cfg = Config::default()
-            .with_layout(rremu_config::Layout { ram_base: base, ram_size: 0x1000, ..Default::default() })
+            .with_layout(rremu_config::Layout {
+                ram_base: base,
+                ram_size: 0x1000,
+                ..Default::default()
+            })
             .with_boot_hartid(3)
             .with_boot_dtb_addr(Some(0x8000_0900));
         let machine = Machine::from_config(&cfg, Some(nop_image(base))).unwrap();
@@ -517,13 +570,18 @@ mod tests {
         let mut machine = test_machine(base, 0x1000, nop_image(base));
         let mut fprs = [0u64; 32];
         fprs[10] = 0xffff_ffff_3f80_0000;
-        machine.cpu.restore_fp_state(&fprs, 0xe5, csr::MSTATUS_FS_DIRTY);
+        machine
+            .cpu
+            .restore_fp_state(&fprs, 0xe5, csr::MSTATUS_FS_DIRTY);
 
         let snap = machine.snapshot();
 
         assert_eq!(snap.fprs, fprs);
         assert_eq!(snap.csrs.fcsr, 0xe5);
-        assert_eq!(snap.csrs.mstatus & csr::MSTATUS_FS_MASK, csr::MSTATUS_FS_DIRTY);
+        assert_eq!(
+            snap.csrs.mstatus & csr::MSTATUS_FS_MASK,
+            csr::MSTATUS_FS_DIRTY
+        );
         assert_eq!(snap.csrs.mstatus & csr::MSTATUS_SD, csr::MSTATUS_SD);
     }
 
@@ -533,15 +591,18 @@ mod tests {
         let base = 0x8000_0000;
         let code = [
             0x10100293u32, // addi x5, x0, 0x101  (mtvec=0x101, vectored)
-            0x30529073,     // csrrw x0, mtvec, x5
-            0x00000073,     // ecall
+            0x30529073,    // csrrw x0, mtvec, x5
+            0x00000073,    // ecall
         ];
         let mut bytes = Vec::new();
         for w in code {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
         let image = Image {
-            segments: vec![rremu_loader::Segment { addr: base, data: bytes }],
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: bytes,
+            }],
             entry: base,
         };
         let mut machine = test_machine(base, 0x1000, image);
@@ -554,7 +615,11 @@ mod tests {
     fn expr_alias_table_matches_isa() {
         // expr 与 isa 的双别名表由本测试锁定同步（ABI 别名漂移唯一防线）
         for (i, name) in rremu_isa::ABI_NAMES.iter().enumerate() {
-            assert_eq!(rremu_expr::reg_from_name(name), Some(i as u8), "alias `{name}`");
+            assert_eq!(
+                rremu_expr::reg_from_name(name),
+                Some(i as u8),
+                "alias `{name}`"
+            );
         }
         assert_eq!(rremu_expr::reg_from_name("fp"), Some(8)); // expr 侧补充别名
     }
@@ -564,7 +629,10 @@ mod tests {
         let base = 0x8000_0000;
         // 非法指令 0x0000（c.addi4spn nzuimm=0）
         let image = Image {
-            segments: vec![rremu_loader::Segment { addr: base, data: 0x0000u16.to_le_bytes().to_vec() }],
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: 0x0000u16.to_le_bytes().to_vec(),
+            }],
             entry: base,
         };
         let mut machine = test_machine(base, 0x1000, image);
@@ -583,7 +651,13 @@ mod tests {
             bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes());
         }
         bytes.extend_from_slice(&0x0000u16.to_le_bytes());
-        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let image = Image {
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: bytes,
+            }],
+            entry: base,
+        };
         let mut machine = test_machine(base, 0x1000, image);
         machine.step_n(4); // 3 nop + trap
         let frozen = machine.trace_at_trap().unwrap();
@@ -607,12 +681,16 @@ mod tests {
         for w in code {
             bytes.extend_from_slice(&w.to_le_bytes());
         }
-        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let image = Image {
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: bytes,
+            }],
+            entry: base,
+        };
         let mut m = test_machine(base, 0x1000, image);
         m.step_n(5);
-        let line: String = m
-            .terminal()
-            .lines()[0]
+        let line: String = m.terminal().lines()[0]
             .iter()
             .filter(|c| !c.wide_cont)
             .map(|c| c.ch)
@@ -628,7 +706,13 @@ mod tests {
         for _ in 0..40 {
             bytes.extend_from_slice(&nop.to_le_bytes());
         }
-        let image = Image { segments: vec![rremu_loader::Segment { addr: base, data: bytes }], entry: base };
+        let image = Image {
+            segments: vec![rremu_loader::Segment {
+                addr: base,
+                data: bytes,
+            }],
+            entry: base,
+        };
         let mut machine = test_machine(base, 0x1000, image);
         machine.step_n(40);
         // 容量 32：运行 40 条后只保留最后 32 条
@@ -644,7 +728,13 @@ mod tests {
     fn nop_image(entry: u32) -> Image {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0x0000_0013u32.to_le_bytes());
-        Image { segments: vec![rremu_loader::Segment { addr: entry, data: bytes }], entry }
+        Image {
+            segments: vec![rremu_loader::Segment {
+                addr: entry,
+                data: bytes,
+            }],
+            entry,
+        }
     }
 
     #[test]
@@ -672,7 +762,15 @@ mod tests {
         let expr = rremu_expr::parse("x5").unwrap();
         let id = machine.add_watchpoint(expr);
         let rr = machine.step_n(1);
-        assert_eq!(rr, RunResult::HitWatchpoint { id, pc: base, old: 0, new: 1 });
+        assert_eq!(
+            rr,
+            RunResult::HitWatchpoint {
+                id,
+                pc: base,
+                old: 0,
+                new: 1
+            }
+        );
     }
 
     #[test]
@@ -704,7 +802,8 @@ mod tests {
         {
             let dev = machine.device_mut(0x0200_0000).unwrap();
             let mut sink = rremu_bus::NullSink;
-            dev.write(0x0200_0000, AccessSize::Word, 1, &mut sink).unwrap();
+            dev.write(0x0200_0000, AccessSize::Word, 1, &mut sink)
+                .unwrap();
         }
 
         machine.reset().unwrap();

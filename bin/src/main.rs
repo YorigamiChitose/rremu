@@ -3,10 +3,10 @@
 //! 职责：解析命令行参数 → 配置日志 → 加载 ELF → 构建 Machine →
 //! 注册 Ctrl+C → 选择前端（CLI/TUI）→ 运行。所有组装只发生在这里。
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use clap::Parser;
 
 use rremu_cli::{FbDisplay, Repl};
@@ -126,15 +126,17 @@ fn try_main() -> anyhow::Result<i32> {
 
     let bytes = std::fs::read(&args.elf)
         .with_context(|| format!("failed to read ELF file: {}", args.elf))?;
-    let mut image = load_elf(&bytes)
-        .with_context(|| format!("failed to parse ELF: {}", args.elf))?;
+    let mut image =
+        load_elf(&bytes).with_context(|| format!("failed to parse ELF: {}", args.elf))?;
     if let Some(lb) = args.load_base {
         image.relocate(lb);
     }
 
     let mut machine = Machine::from_config(&cfg, Some(image)).context("failed to build machine")?;
     if let (Some(bytes), Some(addr)) = (&dtb, cfg.boot().dtb) {
-        machine.write_mem(addr, bytes).context("failed to load DTB")?;
+        machine
+            .write_mem(addr, bytes)
+            .context("failed to load DTB")?;
     }
 
     if args.tui {
@@ -220,6 +222,7 @@ fn parse_addr(s: &str) -> Result<u32, String> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         u32::from_str_radix(hex, 16).map_err(|e| format!("invalid hex address: {e}"))
     } else {
-        s.parse::<u32>().map_err(|e| format!("invalid address: {e}"))
+        s.parse::<u32>()
+            .map_err(|e| format!("invalid address: {e}"))
     }
 }

@@ -27,20 +27,35 @@ impl Machine {
         let mut bus = BusRouter::new();
         bus.map(ram_base..ram_end, Box::new(Ram::new(ram_base, ram_size)))?;
         if let Some(d) = cfg.layout().uart {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Uart::new(d.base)))?;
+            bus.map(
+                d.base..d.base.wrapping_add(d.size),
+                Box::new(Uart::new(d.base)),
+            )?;
         }
         if let Some(d) = cfg.layout().clint {
             // CLINT 范围覆盖 msip(0x0) / mtimecmp(0x4000) / mtime(0xBFF8)
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Clint::new(d.base)))?;
+            bus.map(
+                d.base..d.base.wrapping_add(d.size),
+                Box::new(Clint::new(d.base)),
+            )?;
         }
         if let Some(d) = cfg.layout().plic {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Plic::new(d.base)))?;
+            bus.map(
+                d.base..d.base.wrapping_add(d.size),
+                Box::new(Plic::new(d.base)),
+            )?;
         }
         if let Some(d) = cfg.layout().syscon {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Syscon::new(d.base)))?;
+            bus.map(
+                d.base..d.base.wrapping_add(d.size),
+                Box::new(Syscon::new(d.base)),
+            )?;
         }
         if let Some(d) = cfg.layout().rtc {
-            bus.map(d.base..d.base.wrapping_add(d.size), Box::new(Rtc::new(d.base)))?;
+            bus.map(
+                d.base..d.base.wrapping_add(d.size),
+                Box::new(Rtc::new(d.base)),
+            )?;
         }
         if let Some(f) = cfg.layout().fb {
             let fb_size = f
@@ -109,8 +124,9 @@ impl Machine {
         };
         machine.set_event_ring_capacity(cfg.diag().event_capacity, cfg.diag().uart_event_capacity);
         // 启动参数注入：a0=hartid、a1=dtb（qemu-virt 约定）
-        machine.cpu.set_args(cfg.boot().hartid, cfg.boot().dtb.unwrap_or(0));
+        machine
+            .cpu
+            .set_args(cfg.boot().hartid, cfg.boot().dtb.unwrap_or(0));
         Ok(machine)
     }
 }
-

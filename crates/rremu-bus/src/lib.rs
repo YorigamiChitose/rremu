@@ -24,7 +24,11 @@ mod tests {
 
     impl MockRam {
         fn new(base: u32, size: usize, name: &str) -> Self {
-            Self { base, mem: vec![0; size], name: name.to_owned() }
+            Self {
+                base,
+                mem: vec![0; size],
+                name: name.to_owned(),
+            }
         }
         fn offset(&self, addr: u32) -> usize {
             (addr - self.base) as usize
@@ -32,7 +36,12 @@ mod tests {
     }
 
     impl BusDevice for MockRam {
-        fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        fn read(
+            &mut self,
+            addr: u32,
+            size: AccessSize,
+            _sink: &mut dyn EventSink,
+        ) -> Result<u32, BusError> {
             let o = self.offset(addr);
             let mut v: u32 = 0;
             for i in 0..size.bytes() {
@@ -40,7 +49,13 @@ mod tests {
             }
             Ok(v)
         }
-        fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+        fn write(
+            &mut self,
+            addr: u32,
+            size: AccessSize,
+            data: u32,
+            _sink: &mut dyn EventSink,
+        ) -> Result<(), BusError> {
             let o = self.offset(addr);
             for i in 0..size.bytes() {
                 self.mem[o + i as usize] = (data >> (8 * i)) as u8;
@@ -73,23 +88,44 @@ mod tests {
     #[test]
     fn route_read_write() {
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         let mut sink = Collector::default();
-        bus.data_write(0x8000_0100, AccessSize::Word, 0xdead_beef, &mut sink).unwrap();
-        let v = bus.data_read(0x8000_0100, AccessSize::Word, &mut sink).unwrap();
+        bus.data_write(0x8000_0100, AccessSize::Word, 0xdead_beef, &mut sink)
+            .unwrap();
+        let v = bus
+            .data_read(0x8000_0100, AccessSize::Word, &mut sink)
+            .unwrap();
         assert_eq!(v, 0xdead_beef);
         // 子宽度写入低位
-        bus.data_write(0x8000_0100, AccessSize::Byte, 0x12, &mut sink).unwrap();
-        assert_eq!(bus.peek(0x8000_0100, AccessSize::Word).unwrap(), 0xdead_bef2 & 0xffff_ff00 | 0x12);
+        bus.data_write(0x8000_0100, AccessSize::Byte, 0x12, &mut sink)
+            .unwrap();
+        assert_eq!(
+            bus.peek(0x8000_0100, AccessSize::Word).unwrap(),
+            0xdead_bef2 & 0xffff_ff00 | 0x12
+        );
     }
 
     #[test]
     fn unmapped() {
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         let mut sink = Collector::default();
-        assert_eq!(bus.data_read(0x9000_0000, AccessSize::Word, &mut sink), Err(BusError::Unmapped { addr: 0x9000_0000 }));
-        assert_eq!(bus.data_write(0x1000_0000, AccessSize::Byte, 1, &mut sink), Err(BusError::Unmapped { addr: 0x1000_0000 }));
+        assert_eq!(
+            bus.data_read(0x9000_0000, AccessSize::Word, &mut sink),
+            Err(BusError::Unmapped { addr: 0x9000_0000 })
+        );
+        assert_eq!(
+            bus.data_write(0x1000_0000, AccessSize::Byte, 1, &mut sink),
+            Err(BusError::Unmapped { addr: 0x1000_0000 })
+        );
         assert!(bus.peek(0x0, AccessSize::Word).is_err());
     }
 
@@ -97,7 +133,11 @@ mod tests {
     fn access_crossing_region_end_returns_unmapped() {
         // RAM 大小非 4 的倍数时，跨末尾的 Word 访问应返回 Unmapped 而非 panic
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_000A, Box::new(MockRam::new(0x8000_0000, 10, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_000A,
+            Box::new(MockRam::new(0x8000_0000, 10, "ram")),
+        )
+        .unwrap();
         let mut sink = Collector::default();
         // Word 读 0x8000_0008 → 8..12 跨出 0x8000_000A
         assert_eq!(
@@ -109,41 +149,79 @@ mod tests {
             Err(BusError::Unmapped { addr: 0x8000_000C })
         );
         // 区间内访问仍正常
-        bus.data_write(0x8000_0000, AccessSize::Word, 0xDEAD_BEEF, &mut sink).unwrap();
-        assert_eq!(bus.peek(0x8000_0000, AccessSize::Word).unwrap(), 0xDEAD_BEEF);
+        bus.data_write(0x8000_0000, AccessSize::Word, 0xDEAD_BEEF, &mut sink)
+            .unwrap();
+        assert_eq!(
+            bus.peek(0x8000_0000, AccessSize::Word).unwrap(),
+            0xDEAD_BEEF
+        );
     }
 
     #[test]
     fn misaligned() {
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         let mut sink = Collector::default();
         assert_eq!(
             bus.data_read(0x8000_0002, AccessSize::Word, &mut sink),
-            Err(BusError::Misaligned { addr: 0x8000_0002, size: AccessSize::Word })
+            Err(BusError::Misaligned {
+                addr: 0x8000_0002,
+                size: AccessSize::Word
+            })
         );
         assert_eq!(
             bus.data_write(0x8000_0001, AccessSize::Half, 0, &mut sink),
-            Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
+            Err(BusError::Misaligned {
+                addr: 0x8000_0001,
+                size: AccessSize::Half
+            })
         );
         // 字节访问任意对齐皆可
-        bus.data_write(0x8000_0003, AccessSize::Byte, 0x55, &mut sink).unwrap();
+        bus.data_write(0x8000_0003, AccessSize::Byte, 0x55, &mut sink)
+            .unwrap();
     }
 
     #[test]
     fn inst_read_word_single_event() {
         // 取指原语：一次对齐 Word 读，只发一条 IF W，不做任何跨字处理
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         bus.set_cycle(99);
-        bus.write_bytes(0x8000_0000, &[0x13, 0x00, 0x00, 0x00]).unwrap(); // addi x0, x0, 0 (nop)
+        bus.write_bytes(0x8000_0000, &[0x13, 0x00, 0x00, 0x00])
+            .unwrap(); // addi x0, x0, 0 (nop)
         let mut sink = Collector::default();
-        let v = bus.inst_read(0x8000_0000, AccessSize::Word, &mut sink).unwrap();
+        let v = bus
+            .inst_read(0x8000_0000, AccessSize::Word, &mut sink)
+            .unwrap();
         assert_eq!(v, 0x0000_0013);
         assert_eq!(sink.0.len(), 1);
         match sink.0[0] {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (99, MemKind::Inst, AccessSize::Word, 0x8000_0000, 0x0000_0013));
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                ref device,
+            } => {
+                assert_eq!(
+                    (cycle, kind, size, addr, value),
+                    (
+                        99,
+                        MemKind::Inst,
+                        AccessSize::Word,
+                        0x8000_0000,
+                        0x0000_0013
+                    )
+                );
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
@@ -155,24 +233,56 @@ mod tests {
         // 取指原语：2 字节对齐 Half 读只发一条 IF H（跨 XLEN 拆分由 CPU 连续调两次，
         // 总线本身不拼合）。内存小端：@...02 = 78 56，@...04 = 34 12。
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         bus.set_cycle(7);
-        bus.write_bytes(0x8000_0000, &[0xAA, 0xBB, 0x78, 0x56, 0x34, 0x12, 0xCC, 0xDD]).unwrap();
+        bus.write_bytes(
+            0x8000_0000,
+            &[0xAA, 0xBB, 0x78, 0x56, 0x34, 0x12, 0xCC, 0xDD],
+        )
+        .unwrap();
         let mut sink = Collector::default();
-        let lo = bus.inst_read(0x8000_0002, AccessSize::Half, &mut sink).unwrap();
-        let hi = bus.inst_read(0x8000_0004, AccessSize::Half, &mut sink).unwrap();
+        let lo = bus
+            .inst_read(0x8000_0002, AccessSize::Half, &mut sink)
+            .unwrap();
+        let hi = bus
+            .inst_read(0x8000_0004, AccessSize::Half, &mut sink)
+            .unwrap();
         assert_eq!((lo, hi), (0x5678, 0x1234));
         assert_eq!(sink.0.len(), 2, "two primitive IF H calls emit two events");
         match sink.0[0] {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Half, 0x8000_0002, 0x5678));
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                ref device,
+            } => {
+                assert_eq!(
+                    (cycle, kind, size, addr, value),
+                    (7, MemKind::Inst, AccessSize::Half, 0x8000_0002, 0x5678)
+                );
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
         }
         match sink.0[1] {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (7, MemKind::Inst, AccessSize::Half, 0x8000_0004, 0x1234));
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                ref device,
+            } => {
+                assert_eq!(
+                    (cycle, kind, size, addr, value),
+                    (7, MemKind::Inst, AccessSize::Half, 0x8000_0004, 0x1234)
+                );
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
@@ -184,43 +294,90 @@ mod tests {
         // 原语严格按传入 size 校验对齐，不替调用方拆字：
         // Half @奇数 → Misaligned{Half}；Word @2字节对齐 → Misaligned{Word}（拼合是 CPU 的事）。
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         let mut sink = Collector::default();
         assert_eq!(
             bus.inst_read(0x8000_0001, AccessSize::Half, &mut sink),
-            Err(BusError::Misaligned { addr: 0x8000_0001, size: AccessSize::Half })
+            Err(BusError::Misaligned {
+                addr: 0x8000_0001,
+                size: AccessSize::Half
+            })
         );
         assert_eq!(
             bus.inst_read(0x8000_0002, AccessSize::Word, &mut sink),
-            Err(BusError::Misaligned { addr: 0x8000_0002, size: AccessSize::Word })
+            Err(BusError::Misaligned {
+                addr: 0x8000_0002,
+                size: AccessSize::Word
+            })
         );
     }
 
     #[test]
     fn overlap_rejected() {
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         // 完全重叠
-        assert!(bus.map(0x8000_0000..0x8000_0100, Box::new(MockRam::new(0x8000_0000, 0x100, "a"))).is_err());
+        assert!(
+            bus.map(
+                0x8000_0000..0x8000_0100,
+                Box::new(MockRam::new(0x8000_0000, 0x100, "a"))
+            )
+            .is_err()
+        );
         // 尾部相交
-        assert!(bus.map(0x8000_0f00..0x8000_1100, Box::new(MockRam::new(0x8000_0f00, 0x200, "b"))).is_err());
+        assert!(
+            bus.map(
+                0x8000_0f00..0x8000_1100,
+                Box::new(MockRam::new(0x8000_0f00, 0x200, "b"))
+            )
+            .is_err()
+        );
         // 相邻不重叠（合法）
-        bus.map(0x8000_1000..0x8000_2000, Box::new(MockRam::new(0x8000_1000, 0x1000, "c"))).unwrap();
+        bus.map(
+            0x8000_1000..0x8000_2000,
+            Box::new(MockRam::new(0x8000_1000, 0x1000, "c")),
+        )
+        .unwrap();
     }
 
     #[test]
     fn event_sink_collects_mem_access() {
         let mut bus = BusRouter::new();
-        bus.map(0x8000_0000..0x8000_1000, Box::new(MockRam::new(0x8000_0000, 0x1000, "ram"))).unwrap();
+        bus.map(
+            0x8000_0000..0x8000_1000,
+            Box::new(MockRam::new(0x8000_0000, 0x1000, "ram")),
+        )
+        .unwrap();
         bus.set_cycle(42);
         let mut sink = Collector::default();
-        bus.data_write(0x8000_0000, AccessSize::Word, 7, &mut sink).unwrap();
-        bus.data_read(0x8000_0000, AccessSize::Half, &mut sink).unwrap();
-        bus.inst_read(0x8000_0000, AccessSize::Word, &mut sink).unwrap();
+        bus.data_write(0x8000_0000, AccessSize::Word, 7, &mut sink)
+            .unwrap();
+        bus.data_read(0x8000_0000, AccessSize::Half, &mut sink)
+            .unwrap();
+        bus.inst_read(0x8000_0000, AccessSize::Word, &mut sink)
+            .unwrap();
         assert_eq!(sink.0.len(), 3);
         match sink.0[0] {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, ref device } => {
-                assert_eq!((cycle, kind, size, addr, value), (42, MemKind::DataWrite, AccessSize::Word, 0x8000_0000, 7));
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                ref device,
+            } => {
+                assert_eq!(
+                    (cycle, kind, size, addr, value),
+                    (42, MemKind::DataWrite, AccessSize::Word, 0x8000_0000, 7)
+                );
                 assert_eq!(device, "ram");
             }
             ref ev => panic!("expected MemAccess, got {ev:?}"),
@@ -245,18 +402,35 @@ mod tests {
 
     impl MockIrq {
         fn new(cause: u32) -> Self {
-            Self { causes: vec![cause], ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)) }
+            Self {
+                causes: vec![cause],
+                ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)),
+            }
         }
         fn none() -> Self {
-            Self { causes: Vec::new(), ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)) }
+            Self {
+                causes: Vec::new(),
+                ticked_cycle: std::rc::Rc::new(std::cell::Cell::new(0)),
+            }
         }
     }
 
     impl BusDevice for MockIrq {
-        fn read(&mut self, _addr: u32, _size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+        fn read(
+            &mut self,
+            _addr: u32,
+            _size: AccessSize,
+            _sink: &mut dyn EventSink,
+        ) -> Result<u32, BusError> {
             Ok(0)
         }
-        fn write(&mut self, _addr: u32, _size: AccessSize, _data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+        fn write(
+            &mut self,
+            _addr: u32,
+            _size: AccessSize,
+            _data: u32,
+            _sink: &mut dyn EventSink,
+        ) -> Result<(), BusError> {
             Ok(())
         }
         fn peek_read(&mut self, _addr: u32, _size: AccessSize) -> Result<u32, BusError> {
@@ -281,8 +455,16 @@ mod tests {
         // 设备侧不裁剪：所有 pending cause 原样返回，CPU 侧按 spec 序裁决
         let mut bus = BusRouter::new();
         // MSI=0x8000_0003, MTI=0x8000_0007
-        bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::new(0x8000_0003))).unwrap();
-        bus.map(0x2000_0000..0x2000_0010, Box::new(MockIrq::new(0x8000_0007))).unwrap();
+        bus.map(
+            0x1000_0000..0x1000_0010,
+            Box::new(MockIrq::new(0x8000_0003)),
+        )
+        .unwrap();
+        bus.map(
+            0x2000_0000..0x2000_0010,
+            Box::new(MockIrq::new(0x8000_0007)),
+        )
+        .unwrap();
         let causes = bus.service_interrupts();
         assert!(causes.contains(&0x8000_0003));
         assert!(causes.contains(&0x8000_0007));
@@ -291,8 +473,13 @@ mod tests {
     #[test]
     fn service_interrupts_empty_when_no_device_has_irq() {
         let mut bus = BusRouter::new();
-        bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::none())).unwrap();
-        bus.map(0x2000_0000..0x2000_0010, Box::new(MockRam::new(0x2000_0000, 0x10, "ram"))).unwrap();
+        bus.map(0x1000_0000..0x1000_0010, Box::new(MockIrq::none()))
+            .unwrap();
+        bus.map(
+            0x2000_0000..0x2000_0010,
+            Box::new(MockRam::new(0x2000_0000, 0x10, "ram")),
+        )
+        .unwrap();
         assert!(bus.service_interrupts().is_empty());
     }
 

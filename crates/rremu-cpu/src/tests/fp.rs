@@ -139,11 +139,18 @@ fn fp_load_store_and_compressed_track_fs() {
     h.load(BASE + 0x100, &[0x3f80_0000]);
     h.load(BASE, &[fp_load_enc(0b010, 1, 2, 0)]);
 
-    assert_eq!(h.step(), StepOutcome::Executed {
-        instr: Instruction::Flw { rd: 1, rs1: 2, imm: 0 },
-        len: 4,
-        bits: fp_load_enc(0b010, 1, 2, 0),
-    });
+    assert_eq!(
+        h.step(),
+        StepOutcome::Executed {
+            instr: Instruction::Flw {
+                rd: 1,
+                rs1: 2,
+                imm: 0
+            },
+            len: 4,
+            bits: fp_load_enc(0b010, 1, 2, 0),
+        }
+    );
     assert_eq!(h.cpu.fpr_s(1).to_bits(), 0x3f80_0000);
     assert_eq!(h.cpu.fprs()[1], 0xffff_ffff_3f80_0000);
     assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
@@ -152,13 +159,20 @@ fn fp_load_store_and_compressed_track_fs() {
     h.cpu.x[3] = BASE + 0x104;
     h.load(BASE + 4, &[fp_store_enc(0b010, 3, 1, 0)]);
     h.step();
-    assert_eq!(h.bus.peek(BASE + 0x104, AccessSize::Word).unwrap(), 0x3f80_0000);
+    assert_eq!(
+        h.bus.peek(BASE + 0x104, AccessSize::Word).unwrap(),
+        0x3f80_0000
+    );
     // fsw 只读取 FPR，不应把 Clean 变 Dirty。
     assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
 
     // C.FLW / C.FSW 复用相同路径。
     set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
-    let c_flw = encode_c(&Instruction::CFlw { rd: 8, rs1: 9, imm: 4 });
+    let c_flw = encode_c(&Instruction::CFlw {
+        rd: 8,
+        rs1: 9,
+        imm: 4,
+    });
     h.bus.write_bytes(BASE + 8, &c_flw.to_le_bytes()).unwrap();
     h.cpu.x[9] = BASE + 0x100;
     h.load(BASE + 0x110, &[0x4040_0000]);
@@ -167,27 +181,48 @@ fn fp_load_store_and_compressed_track_fs() {
     assert_eq!(h.cpu.fpr_s(8).to_bits(), 0x4040_0000);
     assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
 
-    let c_fsw = encode_c(&Instruction::CFsw { rs1: 9, rs2: 8, imm: 4 });
+    let c_fsw = encode_c(&Instruction::CFsw {
+        rs1: 9,
+        rs2: 8,
+        imm: 4,
+    });
     h.bus.write_bytes(BASE + 10, &c_fsw.to_le_bytes()).unwrap();
     h.cpu.pc = BASE + 10;
     h.step();
-    assert_eq!(h.bus.peek(BASE + 0x110, AccessSize::Word).unwrap(), 0x4040_0000);
+    assert_eq!(
+        h.bus.peek(BASE + 0x110, AccessSize::Word).unwrap(),
+        0x4040_0000
+    );
 
     // C.FLD / C.FSD 走 64 位读写路径。
     h.load(BASE + 0x140, &[0x0123_4567, 0x89ab_cdef]);
-    let c_fld = encode_c(&Instruction::CFld { rd: 10, rs1: 9, imm: 8 });
+    let c_fld = encode_c(&Instruction::CFld {
+        rd: 10,
+        rs1: 9,
+        imm: 8,
+    });
     h.bus.write_bytes(BASE + 12, &c_fld.to_le_bytes()).unwrap();
     h.cpu.pc = BASE + 12;
     h.cpu.x[9] = BASE + 0x138; // +8 -> BASE+0x140
     h.step();
     assert_eq!(h.cpu.fpr_d(10).to_bits(), 0x89ab_cdef_0123_4567);
 
-    let c_fsd = encode_c(&Instruction::CFsd { rs1: 9, rs2: 10, imm: 8 });
+    let c_fsd = encode_c(&Instruction::CFsd {
+        rs1: 9,
+        rs2: 10,
+        imm: 8,
+    });
     h.bus.write_bytes(BASE + 14, &c_fsd.to_le_bytes()).unwrap();
     h.cpu.pc = BASE + 14;
     h.step();
-    assert_eq!(h.bus.peek(BASE + 0x140, AccessSize::Word).unwrap(), 0x0123_4567);
-    assert_eq!(h.bus.peek(BASE + 0x144, AccessSize::Word).unwrap(), 0x89ab_cdef);
+    assert_eq!(
+        h.bus.peek(BASE + 0x140, AccessSize::Word).unwrap(),
+        0x0123_4567
+    );
+    assert_eq!(
+        h.bus.peek(BASE + 0x144, AccessSize::Word).unwrap(),
+        0x89ab_cdef
+    );
 }
 
 #[test]
@@ -206,8 +241,14 @@ fn fp_double_load_store_and_alignment() {
     h.cpu.x[3] = BASE + 0x150;
     h.load(BASE + 4, &[fp_store_enc(0b011, 3, 2, 0)]);
     h.step();
-    assert_eq!(h.bus.peek(BASE + 0x150, AccessSize::Word).unwrap(), 0x0123_4567);
-    assert_eq!(h.bus.peek(BASE + 0x154, AccessSize::Word).unwrap(), 0x89ab_cdef);
+    assert_eq!(
+        h.bus.peek(BASE + 0x150, AccessSize::Word).unwrap(),
+        0x0123_4567
+    );
+    assert_eq!(
+        h.bus.peek(BASE + 0x154, AccessSize::Word).unwrap(),
+        0x89ab_cdef
+    );
     assert_eq!(fs(&h), csr::MSTATUS_FS_CLEAN);
 
     // 8 字节访问必须自然对齐。
@@ -215,14 +256,24 @@ fn fp_double_load_store_and_alignment() {
     set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
     h.cpu.x[2] = BASE + 0x142;
     h.load(BASE, &[fp_load_enc(0b011, 2, 2, 0)]);
-    assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::LOAD_MISALIGNED });
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped {
+            cause: cause::LOAD_MISALIGNED
+        }
+    );
     assert_eq!(h.cpu.csr_state().mtval, BASE + 0x142);
 
     let mut h = Harness::new();
     set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
     h.cpu.x[2] = BASE + 0x146;
     h.load(BASE, &[fp_store_enc(0b011, 2, 1, 0)]);
-    assert_eq!(h.step(), StepOutcome::Trapped { cause: cause::STORE_MISALIGNED });
+    assert_eq!(
+        h.step(),
+        StepOutcome::Trapped {
+            cause: cause::STORE_MISALIGNED
+        }
+    );
     assert_eq!(h.cpu.csr_state().mtval, BASE + 0x146);
 }
 
@@ -263,8 +314,10 @@ fn fp_move_nan_box_and_sign_injection() {
     assert_eq!(h.cpu.reg(12), 0x7fc0_1234);
 
     // .d 的符号注入保留完整 64 位 payload。
-    h.cpu.write_fpr_d(13, Fp64::from_bits(0x7ff8_1234_5678_9abc));
-    h.cpu.write_fpr_d(14, Fp64::from_bits(0x8000_0000_0000_0000));
+    h.cpu
+        .write_fpr_d(13, Fp64::from_bits(0x7ff8_1234_5678_9abc));
+    h.cpu
+        .write_fpr_d(14, Fp64::from_bits(0x8000_0000_0000_0000));
     h.load(BASE + 20, &[fp_r_enc(15, 0b000, 13, 14, 0b0010001)]);
     h.step();
     assert_eq!(h.cpu.fpr_d(15).to_bits(), 0xfff8_1234_5678_9abc);
@@ -404,7 +457,9 @@ fn fp_dynamic_rounding_mode_and_reserved_modes() {
     h.load(BASE + 4, &[raw]);
     assert_eq!(
         h.step(),
-        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        StepOutcome::Trapped {
+            cause: cause::ILLEGAL_INSTR
+        }
     );
     assert_eq!(h.cpu.csr_state().mtval, raw);
     assert_eq!(h.cpu.fpr_s(11).to_bits(), 0x3f80_0000);
@@ -417,7 +472,9 @@ fn fp_dynamic_rounding_mode_and_reserved_modes() {
         h.load(BASE, &[raw]);
         assert_eq!(
             h.step(),
-            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+            StepOutcome::Trapped {
+                cause: cause::ILLEGAL_INSTR
+            }
         );
         assert_eq!(h.cpu.csr_state().mtval, raw);
     }
@@ -563,12 +620,15 @@ fn fp_fma_d_operations_and_rounding_modes() {
     // 动态 frm 为保留值时 FMA 在执行阶段 illegal。
     let raw = fp_fma_enc(0b1000011, 15, 1, 2, 3, 1, 7);
     h.cpu.csr.fcsr = 5 << csr::FCSR_FRM_SHIFT;
-    h.cpu.write_fpr_d(15, Fp64::from_bits(0x3ff0_0000_0000_0000));
+    h.cpu
+        .write_fpr_d(15, Fp64::from_bits(0x3ff0_0000_0000_0000));
     set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
     h.load(BASE + 20, &[raw]);
     assert_eq!(
         h.step(),
-        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        StepOutcome::Trapped {
+            cause: cause::ILLEGAL_INSTR
+        }
     );
     assert_eq!(h.cpu.csr_state().mtval, raw);
     assert_eq!(h.cpu.fpr_d(15).to_bits(), 0x3ff0_0000_0000_0000);
@@ -581,7 +641,9 @@ fn fp_fma_d_operations_and_rounding_modes() {
         h.load(BASE, &[raw]);
         assert_eq!(
             h.step(),
-            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+            StepOutcome::Trapped {
+                cause: cause::ILLEGAL_INSTR
+            }
         );
         assert_eq!(h.cpu.csr_state().mtval, raw);
     }
@@ -669,10 +731,10 @@ fn fp_convert_int_to_float_and_cross_precision() {
     h.load(
         BASE,
         &[
-            fp_r_enc(10, 0, 1, 0, 0b1101000), // fcvt.s.w rne
-            fp_r_enc(11, 0, 2, 1, 0b1101000), // fcvt.s.wu rne
-            fp_r_enc(12, 0, 3, 0, 0b1101001), // fcvt.d.w rne
-            fp_r_enc(13, 0, 2, 1, 0b1101001), // fcvt.d.wu rne
+            fp_r_enc(10, 0, 1, 0, 0b1101000),  // fcvt.s.w rne
+            fp_r_enc(11, 0, 2, 1, 0b1101000),  // fcvt.s.wu rne
+            fp_r_enc(12, 0, 3, 0, 0b1101001),  // fcvt.d.w rne
+            fp_r_enc(13, 0, 2, 1, 0b1101001),  // fcvt.d.wu rne
             fp_r_enc(14, 0, 12, 1, 0b0100000), // fcvt.s.d rne
             fp_r_enc(15, 0, 14, 0, 0b0100001), // fcvt.d.s
         ],
@@ -711,7 +773,9 @@ fn fp_convert_dynamic_rounding_and_reserved_modes() {
     h.load(BASE + 4, &[raw]);
     assert_eq!(
         h.step(),
-        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        StepOutcome::Trapped {
+            cause: cause::ILLEGAL_INSTR
+        }
     );
     assert_eq!(h.cpu.csr_state().mtval, raw);
     assert_eq!(h.cpu.reg(11), 0x1234_5678);
@@ -723,7 +787,9 @@ fn fp_convert_dynamic_rounding_and_reserved_modes() {
         h.load(BASE, &[raw]);
         assert_eq!(
             h.step(),
-            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+            StepOutcome::Trapped {
+                cause: cause::ILLEGAL_INSTR
+            }
         );
         assert_eq!(h.cpu.csr_state().mtval, raw);
     }
@@ -759,13 +825,19 @@ fn fp_instructions_are_illegal_when_fs_off() {
 
         assert_eq!(
             h.step(),
-            StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+            StepOutcome::Trapped {
+                cause: cause::ILLEGAL_INSTR
+            }
         );
         assert_eq!(h.cpu.csr_state().mtval, raw);
         assert_eq!(fs(&h), csr::MSTATUS_FS_OFF);
     }
 
-    let half = encode_c(&Instruction::CFlw { rd: 8, rs1: 8, imm: 0 });
+    let half = encode_c(&Instruction::CFlw {
+        rd: 8,
+        rs1: 8,
+        imm: 0,
+    });
     let mut h = Harness::new();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&half.to_le_bytes());
@@ -773,7 +845,9 @@ fn fp_instructions_are_illegal_when_fs_off() {
     h.bus.write_bytes(BASE, &bytes).unwrap();
     assert_eq!(
         h.step(),
-        StepOutcome::Trapped { cause: cause::ILLEGAL_INSTR }
+        StepOutcome::Trapped {
+            cause: cause::ILLEGAL_INSTR
+        }
     );
     assert_eq!(h.cpu.csr_state().mtval, u32::from(half));
 }

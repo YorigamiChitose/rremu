@@ -1,7 +1,7 @@
 //! Sv32 地址翻译与页表权限检查。
 
 use rremu_bus::{AccessSize, Bus, EventSink};
-use rremu_isa::{cause, csr, Priv};
+use rremu_isa::{Priv, cause, csr};
 
 use super::{Cpu, TrapErr};
 
@@ -64,7 +64,10 @@ impl Cpu {
         let pte_addr1 = root.wrapping_add(vpn1 << 2);
         let pte1 = self.read_pte(bus, sink, pte_addr1, va, access)?;
         if pte1 & PTE_V == 0 {
-            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            return Err(TrapErr {
+                cause: access.page_fault(),
+                mtval: va,
+            });
         }
 
         if pte1 & (PTE_R | PTE_W | PTE_X) == 0 {
@@ -74,7 +77,10 @@ impl Cpu {
             let pte_addr0 = (ppn << 12).wrapping_add(vpn0 << 2);
             let pte0 = self.read_pte(bus, sink, pte_addr0, va, access)?;
             if pte0 & PTE_V == 0 || pte0 & (PTE_R | PTE_W | PTE_X) == 0 {
-                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+                return Err(TrapErr {
+                    cause: access.page_fault(),
+                    mtval: va,
+                });
             }
             return self.translate_leaf(bus, sink, va, access, priv_, pte_addr0, pte0, false);
         }
@@ -107,7 +113,10 @@ impl Cpu {
         access: AccessType,
     ) -> Result<u32, TrapErr> {
         bus.data_read(addr, AccessSize::Word, sink)
-            .map_err(|_| TrapErr { cause: access.access_fault(), mtval: va })
+            .map_err(|_| TrapErr {
+                cause: access.access_fault(),
+                mtval: va,
+            })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -126,20 +135,32 @@ impl Cpu {
         let w = pte & PTE_W != 0;
         let x = pte & PTE_X != 0;
         if (w && !r) || (!r && !w && !x) {
-            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            return Err(TrapErr {
+                cause: access.page_fault(),
+                mtval: va,
+            });
         }
 
         let user = pte & PTE_U != 0;
         if priv_ == Priv::User && !user {
-            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            return Err(TrapErr {
+                cause: access.page_fault(),
+                mtval: va,
+            });
         }
         if priv_ == Priv::Supervisor && user {
             if access == AccessType::Fetch {
                 // S-mode 永不执行 U 页；SUM 只影响 load/store。
-                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+                return Err(TrapErr {
+                    cause: access.page_fault(),
+                    mtval: va,
+                });
             }
             if (self.csr.mstatus & csr::MSTATUS_SUM) == 0 {
-                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+                return Err(TrapErr {
+                    cause: access.page_fault(),
+                    mtval: va,
+                });
             }
         }
 
@@ -150,14 +171,20 @@ impl Cpu {
             AccessType::Store => w,
         };
         if !allowed {
-            return Err(TrapErr { cause: access.page_fault(), mtval: va });
+            return Err(TrapErr {
+                cause: access.page_fault(),
+                mtval: va,
+            });
         }
 
         let ppn = (pte >> 10) & csr::SATP_PPN_MASK;
         let pa = if superpage {
             // 4MiB 大页要求 PPN[0] 为零。
             if ppn & 0x3ff != 0 {
-                return Err(TrapErr { cause: access.page_fault(), mtval: va });
+                return Err(TrapErr {
+                    cause: access.page_fault(),
+                    mtval: va,
+                });
             }
             (ppn << 12) | (va & 0x3f_ffff)
         } else {
@@ -171,9 +198,11 @@ impl Cpu {
         }
         if new_pte != pte {
             bus.data_write(pte_addr, AccessSize::Word, new_pte, sink)
-                .map_err(|_| TrapErr { cause: access.page_fault(), mtval: va })?;
+                .map_err(|_| TrapErr {
+                    cause: access.page_fault(),
+                    mtval: va,
+                })?;
         }
         Ok(pa)
     }
-
 }

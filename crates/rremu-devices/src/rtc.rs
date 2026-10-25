@@ -38,7 +38,12 @@ pub struct Rtc {
 
 impl Rtc {
     pub fn new(base: u32) -> Self {
-        Self { base, alarm_low: 0, alarm_high: 0, irq_enabled: false }
+        Self {
+            base,
+            alarm_low: 0,
+            alarm_high: 0,
+            irq_enabled: false,
+        }
     }
 
     fn offset(&self, addr: u32) -> u32 {
@@ -54,7 +59,12 @@ impl Rtc {
 }
 
 impl BusDevice for Rtc {
-    fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         let off = self.offset(addr);
         let now = self.now();
         let word = match off & !3 {
@@ -74,7 +84,13 @@ impl BusDevice for Rtc {
         })
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        _sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         let off = self.offset(addr);
         // 仅支持对齐的 32 位寄存器写入；Linux 驱动使用 writel。
         if size != AccessSize::Word || off & 3 != 0 {
@@ -100,7 +116,10 @@ impl BusDevice for Rtc {
     }
 
     fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
-        Err(BusError::Device { addr: self.base, msg: "cannot bulk-write to rtc".to_owned() })
+        Err(BusError::Device {
+            addr: self.base,
+            msg: "cannot bulk-write to rtc".to_owned(),
+        })
     }
 
     fn device_name(&self) -> &str {
@@ -131,8 +150,12 @@ mod tests {
     fn time_registers_are_readable() {
         let mut rtc = Rtc::new(BASE);
         let mut sink = rremu_bus::NullSink;
-        let lo = rtc.read(BASE + TIME_LOW, AccessSize::Word, &mut sink).unwrap();
-        let hi = rtc.read(BASE + TIME_HIGH, AccessSize::Word, &mut sink).unwrap();
+        let lo = rtc
+            .read(BASE + TIME_LOW, AccessSize::Word, &mut sink)
+            .unwrap();
+        let hi = rtc
+            .read(BASE + TIME_HIGH, AccessSize::Word, &mut sink)
+            .unwrap();
         assert_ne!((u64::from(hi) << 32) | u64::from(lo), 0);
     }
 
@@ -140,11 +163,26 @@ mod tests {
     fn alarm_roundtrip_and_clear() {
         let mut rtc = Rtc::new(BASE);
         let mut sink = rremu_bus::NullSink;
-        rtc.write(BASE + ALARM_LOW, AccessSize::Word, 0x1234, &mut sink).unwrap();
-        rtc.write(BASE + ALARM_HIGH, AccessSize::Word, 0x56, &mut sink).unwrap();
-        assert_eq!(rtc.read(BASE + ALARM_LOW, AccessSize::Word, &mut sink).unwrap(), 0x1234);
-        assert_eq!(rtc.read(BASE + ALARM_HIGH, AccessSize::Word, &mut sink).unwrap(), 0x56);
-        rtc.write(BASE + CLEAR_ALARM, AccessSize::Word, 0, &mut sink).unwrap();
-        assert_eq!(rtc.read(BASE + ALARM_LOW, AccessSize::Word, &mut sink).unwrap(), 0);
+        rtc.write(BASE + ALARM_LOW, AccessSize::Word, 0x1234, &mut sink)
+            .unwrap();
+        rtc.write(BASE + ALARM_HIGH, AccessSize::Word, 0x56, &mut sink)
+            .unwrap();
+        assert_eq!(
+            rtc.read(BASE + ALARM_LOW, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0x1234
+        );
+        assert_eq!(
+            rtc.read(BASE + ALARM_HIGH, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0x56
+        );
+        rtc.write(BASE + CLEAR_ALARM, AccessSize::Word, 0, &mut sink)
+            .unwrap();
+        assert_eq!(
+            rtc.read(BASE + ALARM_LOW, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0
+        );
     }
 }

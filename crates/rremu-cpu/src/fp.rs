@@ -3,7 +3,7 @@
 //! FLEN=64，但 `.s` 值必须满足高 32 位全 1 的 NaN boxing 约定。
 //! 所有 boxing/unboxing 都集中在这里，执行器不得手写移位。
 
-use rremu_fp::{Fp32, Fp64, Flags};
+use rremu_fp::{Flags, Fp32, Fp64};
 use rremu_isa::csr;
 
 use super::Cpu;
@@ -54,8 +54,7 @@ impl Cpu {
         let current = Flags::from_bits((self.csr.fcsr & csr::FCSR_FFLAGS_MASK) as u8);
         let merged = current | flags;
         if merged != current {
-            self.csr.fcsr = (self.csr.fcsr & !csr::FCSR_FFLAGS_MASK)
-                | u32::from(merged.bits());
+            self.csr.fcsr = (self.csr.fcsr & !csr::FCSR_FFLAGS_MASK) | u32::from(merged.bits());
             self.mark_fp_dirty();
         }
     }

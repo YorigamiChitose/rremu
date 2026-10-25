@@ -47,4 +47,3 @@ pub const DEFAULT_EVENT_CAPACITY: usize = 64;
 /// 默认 UART 事件环容量（串口 scrollback，同时容纳输入/输出事件）。
 /// 需足够大，否则交互时最旧字节被挤出会导致控制台开头跳动。
 pub const DEFAULT_UART_EVENT_CAPACITY: usize = 32768;
-

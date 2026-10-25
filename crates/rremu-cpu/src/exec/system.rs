@@ -1,6 +1,6 @@
 //! System instruction helpers: SRET/MRET/ECALL/EBREAK.
 
-use rremu_isa::{cause, csr as isa_csr, Priv};
+use rremu_isa::{Priv, cause, csr as isa_csr};
 
 use super::{Cpu, TrapErr};
 
@@ -15,7 +15,11 @@ impl Cpu {
             | isa_csr::MSTATUS_MPRV);
         self.csr.mstatus |= (spie << isa_csr::MSTATUS_SIE.trailing_zeros())
             | (1 << isa_csr::MSTATUS_SPIE.trailing_zeros());
-        self.priv_ = if spp == 1 { Priv::Supervisor } else { Priv::User };
+        self.priv_ = if spp == 1 {
+            Priv::Supervisor
+        } else {
+            Priv::User
+        };
         self.csr.sepc
     }
 
@@ -45,6 +49,9 @@ impl Cpu {
     }
 
     pub(crate) fn breakpoint_trap() -> TrapErr {
-        TrapErr { cause: cause::BREAKPOINT, mtval: 0 }
+        TrapErr {
+            cause: cause::BREAKPOINT,
+            mtval: 0,
+        }
     }
 }

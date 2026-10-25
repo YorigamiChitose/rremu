@@ -22,11 +22,22 @@ impl Syscon {
 }
 
 impl BusDevice for Syscon {
-    fn read(&mut self, _addr: u32, _size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        _addr: u32,
+        _size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         Ok(0)
     }
 
-    fn write(&mut self, addr: u32, _size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        _size: AccessSize,
+        data: u32,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         if addr - self.base != 0 {
             return Ok(());
         }
@@ -43,7 +54,10 @@ impl BusDevice for Syscon {
     }
 
     fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
-        Err(BusError::Device { addr: self.base, msg: "cannot bulk-write to syscon".to_owned() })
+        Err(BusError::Device {
+            addr: self.base,
+            msg: "cannot bulk-write to syscon".to_owned(),
+        })
     }
 
     fn device_name(&self) -> &str {
@@ -69,10 +83,14 @@ mod tests {
         }
         let mut syscon = Syscon::new(BASE);
         let mut sink = Sink(Vec::new());
-        syscon.write(BASE, AccessSize::Word, POWEROFF, &mut sink).unwrap();
+        syscon
+            .write(BASE, AccessSize::Word, POWEROFF, &mut sink)
+            .unwrap();
         assert_eq!(sink.0, vec![EmuEvent::PowerOff]);
         let mut null = NullSink;
-        syscon.write(BASE, AccessSize::Word, 0x1234, &mut null).unwrap();
+        syscon
+            .write(BASE, AccessSize::Word, 0x1234, &mut null)
+            .unwrap();
         assert_eq!(sink.0.len(), 1);
     }
 
@@ -86,7 +104,9 @@ mod tests {
         }
         let mut syscon = Syscon::new(BASE);
         let mut sink = Sink(Vec::new());
-        syscon.write(BASE, AccessSize::Word, REBOOT, &mut sink).unwrap();
+        syscon
+            .write(BASE, AccessSize::Word, REBOOT, &mut sink)
+            .unwrap();
         assert_eq!(sink.0, vec![EmuEvent::Reboot]);
     }
 }

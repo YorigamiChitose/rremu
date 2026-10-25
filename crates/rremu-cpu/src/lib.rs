@@ -1,33 +1,41 @@
 //! rremu-cpu：CPU 状态与单周期执行内核。只依赖 bus trait，不感知具体设备。
 
 use rremu_bus::{Bus, EventSink};
-use rremu_decode::{decode16, decode32, instr_len, DecodeError};
-use rremu_isa::{cause, Instruction, Priv};
+use rremu_decode::{DecodeError, decode16, decode32, instr_len};
+use rremu_isa::{Instruction, Priv, cause};
 use thiserror::Error;
 
 mod csr;
 mod exec;
-mod fp;
 mod fetch;
+mod fp;
 mod interrupt;
-mod trap;
 mod mmu;
 mod pmp;
+mod trap;
 
 pub use csr::CsrState;
-pub(crate) use trap::TrapErr;
 pub(crate) use mmu::AccessType;
 #[cfg(test)]
 pub(crate) use mmu::{PTE_A, PTE_D, PTE_R, PTE_U, PTE_V, PTE_W, PTE_X};
+pub(crate) use trap::TrapErr;
 
 /// 单步结果：正常执行一条、陷入，或 ecall+a7=EXIT_MAGIC 触发宿主退出。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepOutcome {
     /// `bits` 为该指令的原始编码（len==2 时低 16 位，len==4 时全 32 位），供 trace/dump。
-    Executed { instr: Instruction, len: u8, bits: u32 },
-    Trapped { cause: u32 },
+    Executed {
+        instr: Instruction,
+        len: u8,
+        bits: u32,
+    },
+    Trapped {
+        cause: u32,
+    },
     /// 执行 ecall 且 a7==EXIT_MAGIC：以 a0（x10）为退出码终止模拟（宿主陷阱协议）。
-    Exited { code: i32 },
+    Exited {
+        code: i32,
+    },
 }
 
 /// 宿主陷阱协议魔术数：M-mode ecall 且 `a7 == EXIT_MAGIC` 时模拟器以 `a0` 为退出码退出。
@@ -126,7 +134,11 @@ impl Cpu {
     /// 设备侧 `check_interrupt()` 返回全部 pending cause（不裁剪优先级）；
     /// CPU 按 spec 序 MEI>MSI>MTI 遍历，跳过未使能者，取第一个已使能的中断。
     /// 中断命中时 mepc = 当前 pc（未执行的下一条指令），mret 后重新执行。
-    pub fn step<B: Bus, E: EventSink>(&mut self, bus: &mut B, sink: &mut E) -> Result<StepOutcome, CpuError> {
+    pub fn step<B: Bus, E: EventSink>(
+        &mut self,
+        bus: &mut B,
+        sink: &mut E,
+    ) -> Result<StepOutcome, CpuError> {
         bus.set_cycle(self.cycle);
         let pc = self.pc;
 
@@ -155,7 +167,7 @@ impl Cpu {
             match decode16(lo, pc) {
                 Ok(i) => (i, 2u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                    return self.trap(sink, cause::ILLEGAL_INSTR, u32::from(lo))
+                    return self.trap(sink, cause::ILLEGAL_INSTR, u32::from(lo));
                 }
             }
         } else {
@@ -163,12 +175,19 @@ impl Cpu {
             match decode32(word, pc) {
                 Ok(i) => (i, 4u8),
                 Err(DecodeError::Illegal { .. } | DecodeError::Unimplemented { .. }) => {
-                    return self.trap(sink, cause::ILLEGAL_INSTR, word)
+                    return self.trap(sink, cause::ILLEGAL_INSTR, word);
                 }
             }
         };
 
-        match self.exec(bus, sink, pc, instr, len, if len == 2 { word & 0xffff } else { word }) {
+        match self.exec(
+            bus,
+            sink,
+            pc,
+            instr,
+            len,
+            if len == 2 { word & 0xffff } else { word },
+        ) {
             Ok(next_pc) => {
                 self.pc = next_pc;
                 self.cycle += 1;
@@ -189,8 +208,6 @@ impl Cpu {
             }
         }
     }
-
-
 }
 
 #[cfg(test)]

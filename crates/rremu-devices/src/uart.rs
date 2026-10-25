@@ -9,7 +9,7 @@
 //! | 5      | LSR         | 恒 `0x60`；输入 FIFO 非空置 bit0 |
 //! | 其余   | —           | 读 0，写忽略 |
 
-use rremu_bus::{AccessSize, BusDevice, BusError, EventSink, EmuEvent, InputSink, Resetable};
+use rremu_bus::{AccessSize, BusDevice, BusError, EmuEvent, EventSink, InputSink, Resetable};
 
 const REG_THR_RDR: u32 = 0;
 const REG_IER: u32 = 1;
@@ -70,7 +70,12 @@ impl Uart {
 }
 
 impl BusDevice for Uart {
-    fn read(&mut self, addr: u32, _size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        _size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         match self.offset(addr) {
             REG_THR_RDR => {
                 // 读 RDR：弹出输入 FIFO（副作用读）
@@ -87,15 +92,28 @@ impl BusDevice for Uart {
                 Ok(iir)
             }
             REG_LCR => Ok(self.lcr),
-            REG_LSR => Ok(LSR_THR_EMPTY | if self.input.is_empty() { 0 } else { LSR_DATA_READY }),
+            REG_LSR => Ok(LSR_THR_EMPTY
+                | if self.input.is_empty() {
+                    0
+                } else {
+                    LSR_DATA_READY
+                }),
             _ => Ok(0),
         }
     }
 
-    fn write(&mut self, addr: u32, _size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        _size: AccessSize,
+        data: u32,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         match self.offset(addr) {
             REG_THR_RDR => {
-                sink.emit(EmuEvent::UartOutput { byte: (data & 0xff) as u8 });
+                sink.emit(EmuEvent::UartOutput {
+                    byte: (data & 0xff) as u8,
+                });
                 // THR 再次为空，若 TX 中断使能则触发下一次 THRE。
                 self.thre_pending = true;
             }
@@ -126,13 +144,21 @@ impl BusDevice for Uart {
                 Ok(iir)
             }
             REG_LCR => Ok(self.lcr),
-            REG_LSR => Ok(LSR_THR_EMPTY | if self.input.is_empty() { 0 } else { LSR_DATA_READY }),
+            REG_LSR => Ok(LSR_THR_EMPTY
+                | if self.input.is_empty() {
+                    0
+                } else {
+                    LSR_DATA_READY
+                }),
             _ => Ok(0),
         }
     }
 
     fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
-        Err(BusError::Device { addr: self.base, msg: "cannot bulk-write to uart".to_owned() })
+        Err(BusError::Device {
+            addr: self.base,
+            msg: "cannot bulk-write to uart".to_owned(),
+        })
     }
 
     fn device_name(&self) -> &str {
@@ -192,8 +218,10 @@ mod tests {
     fn thr_write_emits_uart_output() {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
-        uart.write(BASE, AccessSize::Byte, b'h' as u32, &mut sink).unwrap();
-        uart.write(BASE, AccessSize::Word, b'i' as u32, &mut sink).unwrap();
+        uart.write(BASE, AccessSize::Byte, b'h' as u32, &mut sink)
+            .unwrap();
+        uart.write(BASE, AccessSize::Word, b'i' as u32, &mut sink)
+            .unwrap();
         assert_eq!(sink.0.len(), 2);
         assert!(matches!(sink.0[0], EmuEvent::UartOutput { byte: b'h' }));
         assert!(matches!(sink.0[1], EmuEvent::UartOutput { byte: b'i' }));
@@ -204,19 +232,34 @@ mod tests {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
         // 空闲：LSR = 0x60
-        assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
+        assert_eq!(
+            uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(),
+            0x60
+        );
         // 空读 RDR 返回 0，且无事件
         assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), 0);
         assert!(sink.0.is_empty());
         // 注入输入：LSR bit0 置位
         uart.push_input(b'A');
         uart.push_input(b'B');
-        assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x61);
+        assert_eq!(
+            uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(),
+            0x61
+        );
         // 读 RDR 按序弹出
-        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'A' as u32);
-        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'B' as u32);
+        assert_eq!(
+            uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(),
+            b'A' as u32
+        );
+        assert_eq!(
+            uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(),
+            b'B' as u32
+        );
         // 弹空后 LSR 回 0x60
-        assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
+        assert_eq!(
+            uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(),
+            0x60
+        );
     }
 
     #[test]
@@ -228,7 +271,10 @@ mod tests {
         assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), b'X' as u32);
         assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), b'X' as u32);
         // 真读弹出一个
-        assert_eq!(uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(), b'X' as u32);
+        assert_eq!(
+            uart.read(BASE, AccessSize::Byte, &mut sink).unwrap(),
+            b'X' as u32
+        );
         assert_eq!(uart.peek_read(BASE, AccessSize::Byte).unwrap(), 0);
     }
 
@@ -236,13 +282,21 @@ mod tests {
     fn thre_interrupt_drives_tx_and_clears_on_iir_read() {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
-        uart.write(BASE + 1, AccessSize::Byte, IER_TX_ENABLE, &mut sink).unwrap();
+        uart.write(BASE + 1, AccessSize::Byte, IER_TX_ENABLE, &mut sink)
+            .unwrap();
         assert_eq!(uart.irq_line(), Some(UART_IRQ));
-        assert_eq!(uart.read(BASE + 2, AccessSize::Byte, &mut sink).unwrap(), 0x02);
+        assert_eq!(
+            uart.read(BASE + 2, AccessSize::Byte, &mut sink).unwrap(),
+            0x02
+        );
         assert_eq!(uart.irq_line(), None);
-        uart.write(BASE, AccessSize::Byte, b'X' as u32, &mut sink).unwrap();
+        uart.write(BASE, AccessSize::Byte, b'X' as u32, &mut sink)
+            .unwrap();
         assert_eq!(uart.irq_line(), Some(UART_IRQ));
-        assert!(matches!(sink.0.last(), Some(EmuEvent::UartOutput { byte: b'X' })));
+        assert!(matches!(
+            sink.0.last(),
+            Some(EmuEvent::UartOutput { byte: b'X' })
+        ));
     }
 
     #[test]
@@ -250,11 +304,16 @@ mod tests {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
         uart.push_input(b'A');
-        uart.write(BASE + 1, AccessSize::Byte, 0x07, &mut sink).unwrap(); // IER
-        uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink).unwrap(); // LCR
+        uart.write(BASE + 1, AccessSize::Byte, 0x07, &mut sink)
+            .unwrap(); // IER
+        uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink)
+            .unwrap(); // LCR
         Resetable::reset(&mut uart);
         // FIFO 空 → LSR 回 0x60
-        assert_eq!(uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x60);
+        assert_eq!(
+            uart.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(),
+            0x60
+        );
         assert_eq!(uart.peek_read(BASE + 1, AccessSize::Byte).unwrap(), 0); // IER 清零
         assert_eq!(uart.peek_read(BASE + 3, AccessSize::Byte).unwrap(), 0); // LCR 清零
     }
@@ -263,14 +322,18 @@ mod tests {
     fn config_registers_store_read() {
         let mut uart = Uart::new(BASE);
         let mut sink = Collector::default();
-        uart.write(BASE + 1, AccessSize::Byte, 0x07, &mut sink).unwrap(); // IER
-        uart.write(BASE + 2, AccessSize::Byte, 0xC1, &mut sink).unwrap(); // FCR
-        uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink).unwrap(); // LCR
+        uart.write(BASE + 1, AccessSize::Byte, 0x07, &mut sink)
+            .unwrap(); // IER
+        uart.write(BASE + 2, AccessSize::Byte, 0xC1, &mut sink)
+            .unwrap(); // FCR
+        uart.write(BASE + 3, AccessSize::Byte, 0x03, &mut sink)
+            .unwrap(); // LCR
         assert_eq!(uart.peek_read(BASE + 1, AccessSize::Byte).unwrap(), 0x07);
         assert_eq!(uart.peek_read(BASE + 2, AccessSize::Byte).unwrap(), 0x02); // THRE pending
         assert_eq!(uart.peek_read(BASE + 3, AccessSize::Byte).unwrap(), 0x03);
         // 未知寄存器读 0 写忽略
-        uart.write(BASE + 4, AccessSize::Byte, 0xff, &mut sink).unwrap();
+        uart.write(BASE + 4, AccessSize::Byte, 0xff, &mut sink)
+            .unwrap();
         assert_eq!(uart.read(BASE + 4, AccessSize::Byte, &mut sink).unwrap(), 0);
         assert_eq!(uart.read(BASE + 6, AccessSize::Byte, &mut sink).unwrap(), 0);
     }

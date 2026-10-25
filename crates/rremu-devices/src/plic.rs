@@ -131,7 +131,12 @@ impl Plic {
 }
 
 impl BusDevice for Plic {
-    fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         let off = self.offset(addr);
         // claim（读）有副作用
         if off >= CONTEXT_BASE {
@@ -145,7 +150,13 @@ impl BusDevice for Plic {
         Ok(extract(off, word, size))
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        _sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         let off = self.offset(addr);
         let word_mask = match size {
             AccessSize::Byte => 0xff,
@@ -186,7 +197,10 @@ impl BusDevice for Plic {
     }
 
     fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
-        Err(BusError::Device { addr: self.base, msg: "cannot bulk-write to plic".to_owned() })
+        Err(BusError::Device {
+            addr: self.base,
+            msg: "cannot bulk-write to plic".to_owned(),
+        })
     }
 
     fn device_name(&self) -> &str {
@@ -232,11 +246,20 @@ mod tests {
         let mut p = Plic::new(BASE);
         let mut sink = rremu_bus::NullSink;
         // priority[10] = 5
-        p.write(BASE + 10 * 4, AccessSize::Word, 5, &mut sink).unwrap();
-        assert_eq!(p.read(BASE + 10 * 4, AccessSize::Word, &mut sink).unwrap(), 5);
+        p.write(BASE + 10 * 4, AccessSize::Word, 5, &mut sink)
+            .unwrap();
+        assert_eq!(
+            p.read(BASE + 10 * 4, AccessSize::Word, &mut sink).unwrap(),
+            5
+        );
         // threshold ctx0
-        p.write(BASE + CONTEXT_BASE, AccessSize::Word, 1, &mut sink).unwrap();
-        assert_eq!(p.read(BASE + CONTEXT_BASE, AccessSize::Word, &mut sink).unwrap(), 1);
+        p.write(BASE + CONTEXT_BASE, AccessSize::Word, 1, &mut sink)
+            .unwrap();
+        assert_eq!(
+            p.read(BASE + CONTEXT_BASE, AccessSize::Word, &mut sink)
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -244,13 +267,17 @@ mod tests {
         let mut p = Plic::new(BASE);
         let mut sink = rremu_bus::NullSink;
         // enable source 10 for ctx0（source 10 位于 enable 位图 word 0）
-        p.write(BASE + ENABLE_BASE, AccessSize::Word, 1 << 10, &mut sink).unwrap();
+        p.write(BASE + ENABLE_BASE, AccessSize::Word, 1 << 10, &mut sink)
+            .unwrap();
         // priority[10]=7, threshold=0
-        p.write(BASE + 10 * 4, AccessSize::Word, 7, &mut sink).unwrap();
+        p.write(BASE + 10 * 4, AccessSize::Word, 7, &mut sink)
+            .unwrap();
         // raise pending, then claim
         p.set_pending(10, true);
         assert_eq!(p.check_interrupt(), vec![CAUSE_M_EI]);
-        let claim = p.read(BASE + CONTEXT_BASE + 4, AccessSize::Word, &mut sink).unwrap();
+        let claim = p
+            .read(BASE + CONTEXT_BASE + 4, AccessSize::Word, &mut sink)
+            .unwrap();
         assert_eq!(claim, 10);
         // 已被清除
         assert!(p.check_interrupt().is_empty());
@@ -260,23 +287,37 @@ mod tests {
     fn unknown_offset_no_panic() {
         let mut p = Plic::new(BASE);
         let mut sink = rremu_bus::NullSink;
-        assert_eq!(p.read(BASE + 0x3000, AccessSize::Word, &mut sink).unwrap(), 0);
-        p.write(BASE + 0x3000, AccessSize::Word, 0xDEAD, &mut sink).unwrap();
+        assert_eq!(
+            p.read(BASE + 0x3000, AccessSize::Word, &mut sink).unwrap(),
+            0
+        );
+        p.write(BASE + 0x3000, AccessSize::Word, 0xDEAD, &mut sink)
+            .unwrap();
     }
     #[test]
     fn s_context_claim_returns_s_ei() {
         let mut p = Plic::new(BASE);
         let mut sink = rremu_bus::NullSink;
         // 只 enable S context(1) 的 source 10
-        p.write(BASE + ENABLE_BASE + ENABLE_STRIDE, AccessSize::Word, 1 << 10, &mut sink).unwrap();
-        p.write(BASE + 10 * 4, AccessSize::Word, 7, &mut sink).unwrap();
+        p.write(
+            BASE + ENABLE_BASE + ENABLE_STRIDE,
+            AccessSize::Word,
+            1 << 10,
+            &mut sink,
+        )
+        .unwrap();
+        p.write(BASE + 10 * 4, AccessSize::Word, 7, &mut sink)
+            .unwrap();
         p.set_pending(10, true);
         assert_eq!(p.check_interrupt(), vec![CAUSE_S_EI]);
         let claim = p
-            .read(BASE + CONTEXT_BASE + CONTEXT_STRIDE + 4, AccessSize::Word, &mut sink)
+            .read(
+                BASE + CONTEXT_BASE + CONTEXT_STRIDE + 4,
+                AccessSize::Word,
+                &mut sink,
+            )
             .unwrap();
         assert_eq!(claim, 10);
         assert!(p.check_interrupt().is_empty());
     }
-
 }

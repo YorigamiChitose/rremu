@@ -14,7 +14,12 @@ impl Cpu {
     /// 指令不会误触发下一页的 page fault。
     ///
     /// 调用前 `pc` 已保证偶数；返回 Err 为取指异常 cause。
-    pub(crate) fn fetch_word<B: Bus, E: EventSink>(&self, bus: &mut B, pc: u32, sink: &mut E) -> Result<u32, u32> {
+    pub(crate) fn fetch_word<B: Bus, E: EventSink>(
+        &self,
+        bus: &mut B,
+        pc: u32,
+        sink: &mut E,
+    ) -> Result<u32, u32> {
         // 取指总线错误 → 异常 cause：对齐违例 INSTR_MISALIGNED，其余 INSTR_ACCESS_FAULT
         fn map(e: rremu_bus::BusError) -> u32 {
             Cpu::cause_of(&e, cause::INSTR_MISALIGNED, cause::INSTR_ACCESS_FAULT)
@@ -53,5 +58,4 @@ impl Cpu {
         let hi = bus.inst_read(hi_pa, AccessSize::Half, sink).map_err(map)?;
         Ok(lo | (hi << 16))
     }
-
 }

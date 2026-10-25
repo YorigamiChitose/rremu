@@ -2,16 +2,16 @@
 //!
 //! 面板：顶栏 / 左栏寄存器 / 右上反汇编 / 右下存储访问 / 底部串口 / 状态栏。
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use rremu_machine::term::{Cell as TermCell, Color as TermColor, Style as TermStyle, Terminal};
 use rremu_machine::{
-    reg_name, AccessSize, DisasmLine, EmuEvent, FramebufferFrame, MachineSnapshot, MemKind,
-    RunState,
+    AccessSize, DisasmLine, EmuEvent, FramebufferFrame, MachineSnapshot, MemKind, RunState,
+    reg_name,
 };
 
 use crate::speed::SpeedTier;
@@ -46,7 +46,14 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
                 Constraint::Length(1), // status bar
             ])
             .split(area);
-        draw_top_bar(f, main[0], data.snap, data.speed, data.actual_ips, data.running);
+        draw_top_bar(
+            f,
+            main[0],
+            data.snap,
+            data.speed,
+            data.actual_ips,
+            data.running,
+        );
         draw_uart(f, main[1], data.terminal, data.input_mode);
         draw_status_bar(f, main[2], data.input_mode, data.panel_level);
         return;
@@ -62,9 +69,24 @@ pub fn draw(f: &mut Frame, data: &RenderData) {
         ])
         .split(area);
 
-    draw_top_bar(f, main[0], data.snap, data.speed, data.actual_ips, data.running);
+    draw_top_bar(
+        f,
+        main[0],
+        data.snap,
+        data.speed,
+        data.actual_ips,
+        data.running,
+    );
     let panels = Panels::from_level(data.panel_level);
-    draw_middle(f, main[1], data.snap, data.disasm, data.fb, data.fb_view, panels);
+    draw_middle(
+        f,
+        main[1],
+        data.snap,
+        data.disasm,
+        data.fb,
+        data.fb_view,
+        panels,
+    );
     draw_uart(f, main[2], data.terminal, data.input_mode);
     draw_status_bar(f, main[3], data.input_mode, data.panel_level);
 }
@@ -80,7 +102,11 @@ struct Panels {
 impl Panels {
     /// 档位 → 开关：0 全开，1 关指令，2 再关读写，3 全关。
     fn from_level(level: u8) -> Self {
-        Self { disasm: level < 1, events: level < 2, registers: level < 3 }
+        Self {
+            disasm: level < 1,
+            events: level < 2,
+            registers: level < 3,
+        }
     }
 }
 
@@ -99,32 +125,42 @@ fn draw_top_bar(
             RunState::Idle => "idle",
             RunState::Running => "running",
             RunState::Paused => "paused",
-            RunState::Exited(c) => return draw_bar(f, area, vec![
-                span(
-                    format!(
-                        " rremu │ cycle={} │ speed={} │ ips={} │ EXITED({c})",
-                        snap.cycle,
-                        speed.label(),
-                        format_rate(actual_ips)
-                    ),
-                    Color::Yellow,
-                ),
-            ]),
-            RunState::Faulted(reason) => return draw_bar(f, area, vec![
-                span(
-                    format!(
-                        " rremu │ cycle={} │ speed={} │ ips={} │ FAULTED: {reason}",
-                        snap.cycle,
-                        speed.label(),
-                        format_rate(actual_ips)
-                    ),
-                    Color::Red,
-                ),
-            ]),
+            RunState::Exited(c) => {
+                return draw_bar(
+                    f,
+                    area,
+                    vec![span(
+                        format!(
+                            " rremu │ cycle={} │ speed={} │ ips={} │ EXITED({c})",
+                            snap.cycle,
+                            speed.label(),
+                            format_rate(actual_ips)
+                        ),
+                        Color::Yellow,
+                    )],
+                );
+            }
+            RunState::Faulted(reason) => {
+                return draw_bar(
+                    f,
+                    area,
+                    vec![span(
+                        format!(
+                            " rremu │ cycle={} │ speed={} │ ips={} │ FAULTED: {reason}",
+                            snap.cycle,
+                            speed.label(),
+                            format_rate(actual_ips)
+                        ),
+                        Color::Red,
+                    )],
+                );
+            }
         }
     };
-    draw_bar(f, area, vec![
-        span(
+    draw_bar(
+        f,
+        area,
+        vec![span(
             format!(
                 " rremu │ cycle={} │ speed={} │ ips={} │ {} │ pc={:#010x}",
                 snap.cycle,
@@ -134,8 +170,8 @@ fn draw_top_bar(
                 snap.pc
             ),
             Color::Cyan,
-        ),
-    ]);
+        )],
+    );
 }
 
 fn draw_middle(
@@ -175,7 +211,10 @@ fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
         Span::styled(" pc ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{:#010x}", snap.pc), Style::default().fg(Color::Green)),
+        Span::styled(
+            format!("{:#010x}", snap.pc),
+            Style::default().fg(Color::Green),
+        ),
     ]));
     let priv_label = match snap.priv_ {
         rremu_machine::Priv::Machine => "M",
@@ -199,7 +238,7 @@ fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     ];
     for (name, val) in csr_lines {
         lines.push(Line::from(vec![
-            Span::styled(format!("{name:>8}", ), Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{name:>8}",), Style::default().fg(Color::DarkGray)),
             Span::raw(" = "),
             Span::styled(format!("{val:#010x}"), Style::default().fg(Color::Cyan)),
         ]));
@@ -207,15 +246,22 @@ fn draw_registers(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
     lines.push(Line::from(vec![
         Span::styled("  mcycle", Style::default().fg(Color::DarkGray)),
         Span::raw(" = "),
-        Span::styled(snap.csrs.mcycle.to_string(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            snap.csrs.mcycle.to_string(),
+            Style::default().fg(Color::Cyan),
+        ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("minstret", Style::default().fg(Color::DarkGray)),
         Span::raw(" = "),
-        Span::styled(snap.csrs.minstret.to_string(), Style::default().fg(Color::Cyan)),
+        Span::styled(
+            snap.csrs.minstret.to_string(),
+            Style::default().fg(Color::Cyan),
+        ),
     ]));
 
-    let para = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Registers "));
+    let para =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Registers "));
     f.render_widget(para, area);
 }
 
@@ -267,7 +313,10 @@ fn draw_disasm(f: &mut Frame, area: Rect, disasm: &[DisasmLine]) {
             let prefix = if line.is_current { "▶ " } else { "  " };
             let text = format!("{}{:#010x}  {}", prefix, line.addr, line.text);
             let style = if line.is_current {
-                Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -275,7 +324,11 @@ fn draw_disasm(f: &mut Frame, area: Rect, disasm: &[DisasmLine]) {
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Disassembly "));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Disassembly "),
+    );
     f.render_widget(list, area);
 }
 
@@ -285,7 +338,14 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
         .iter()
         .rev()
         .map(|ev| match ev {
-            EmuEvent::MemAccess { cycle, kind, size, addr, value, device } => {
+            EmuEvent::MemAccess {
+                cycle,
+                kind,
+                size,
+                addr,
+                value,
+                device,
+            } => {
                 let kind_str = match kind {
                     MemKind::Inst => "IF",
                     MemKind::DataRead => "DR",
@@ -308,7 +368,10 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("#{cycle:<6}"), Style::default().fg(Color::DarkGray)),
                     Span::raw(" "),
-                    Span::styled(format!("{kind_str} {size_str}"), Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        format!("{kind_str} {size_str}"),
+                        Style::default().fg(Color::Yellow),
+                    ),
                     Span::raw(" "),
                     Span::styled(format!("{addr:#010x}"), Style::default().fg(Color::Cyan)),
                     Span::raw(" "),
@@ -321,12 +384,20 @@ fn draw_mem_ring(f: &mut Frame, area: Rect, snap: &MachineSnapshot) {
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(" Memory Access "));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Memory Access "),
+    );
     f.render_widget(list, area);
 }
 
 fn draw_uart(f: &mut Frame, area: Rect, term: &Terminal, input_mode: bool) {
-    let title = if input_mode { " UART [INPUT MODE - Esc to exit] " } else { " UART " };
+    let title = if input_mode {
+        " UART [INPUT MODE - Esc to exit] "
+    } else {
+        " UART "
+    };
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
 
@@ -398,7 +469,10 @@ fn to_style(s: TermStyle) -> Style {
     if s.reverse {
         m |= Modifier::REVERSED;
     }
-    Style::default().fg(to_color(s.fg)).bg(to_color(s.bg)).add_modifier(m)
+    Style::default()
+        .fg(to_color(s.fg))
+        .bg(to_color(s.bg))
+        .add_modifier(m)
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8) {
@@ -415,16 +489,30 @@ fn draw_status_bar(f: &mut Frame, area: Rect, input_mode: bool, panel_level: u8)
             " Space:run/pause  s:step  ←→:speed  f:full  i:input  p:panels[{level_label}]  r:reset  b:fb  q:quit "
         )
     };
-    draw_bar(f, area, vec![Span::styled(hint, Style::default().fg(Color::Black).bg(Color::White))]);
+    draw_bar(
+        f,
+        area,
+        vec![Span::styled(
+            hint,
+            Style::default().fg(Color::Black).bg(Color::White),
+        )],
+    );
 }
 
 /// 帧缓冲内嵌渲染：下采样到面板尺寸，每格背景色 = 对应像素。
 fn draw_framebuffer(f: &mut Frame, area: Rect, fb: &FramebufferFrame) {
-    let block = Block::default().borders(Borders::ALL).title(" Framebuffer ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Framebuffer ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    if fb.width == 0 || fb.height == 0 || fb.pixels.is_empty() || inner.width == 0 || inner.height == 0 {
+    if fb.width == 0
+        || fb.height == 0
+        || fb.pixels.is_empty()
+        || inner.width == 0
+        || inner.height == 0
+    {
         return;
     }
 
@@ -458,8 +546,6 @@ fn draw_bar(f: &mut Frame, area: Rect, spans: Vec<Span>) {
 fn span(text: String, color: Color) -> Span<'static> {
     Span::styled(text, Style::default().fg(color))
 }
-
-
 
 /// 实测速率的人类可读格式。
 fn format_rate(ips: f64) -> String {

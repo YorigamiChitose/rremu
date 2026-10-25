@@ -56,7 +56,11 @@ pub struct Cell {
 }
 
 impl Cell {
-    pub const BLANK: Cell = Cell { ch: ' ', style: Style::DEFAULT, wide_cont: false };
+    pub const BLANK: Cell = Cell {
+        ch: ' ',
+        style: Style::DEFAULT,
+        wide_cont: false,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -145,7 +149,11 @@ impl Terminal {
                 }
             }
             State::OscEsc => {
-                self.state = if b == b'\\' { State::Ground } else { State::Osc };
+                self.state = if b == b'\\' {
+                    State::Ground
+                } else {
+                    State::Osc
+                };
             }
             State::Charset => self.state = State::Ground,
         }
@@ -199,7 +207,9 @@ impl Terminal {
                         self.params.push(0);
                     }
                     let i = self.params.len() - 1;
-                    self.params[i] = self.params[i].saturating_mul(10).saturating_add(u32::from(b - b'0'));
+                    self.params[i] = self.params[i]
+                        .saturating_mul(10)
+                        .saturating_add(u32::from(b - b'0'));
                 } else {
                     // ';' ':' 等：开新参数
                     self.params.push(0);
@@ -324,7 +334,11 @@ impl Terminal {
         if self.col > line.len() {
             line.resize(self.col, Cell::BLANK);
         }
-        let cell = Cell { ch: c, style: self.style, wide_cont: false };
+        let cell = Cell {
+            ch: c,
+            style: self.style,
+            wide_cont: false,
+        };
         if self.col < line.len() {
             line[self.col] = cell;
         } else {
@@ -334,7 +348,11 @@ impl Terminal {
         if w == 2 {
             // 宽字符次格占位
             let line = &mut self.lines[self.row];
-            let cont = Cell { ch: ' ', style: self.style, wide_cont: true };
+            let cont = Cell {
+                ch: ' ',
+                style: self.style,
+                wide_cont: true,
+            };
             if self.col < line.len() {
                 line[self.col] = cont;
             } else {
@@ -447,7 +465,11 @@ impl Terminal {
             Some(5) => {
                 if let Some(&n) = ps.get(start + 1) {
                     let c = Color::Indexed(n as u8);
-                    if fg { self.style.fg = c } else { self.style.bg = c }
+                    if fg {
+                        self.style.fg = c
+                    } else {
+                        self.style.bg = c
+                    }
                     return 2;
                 }
                 0
@@ -457,7 +479,11 @@ impl Terminal {
                     (ps.get(start + 1), ps.get(start + 2), ps.get(start + 3))
                 {
                     let c = Color::Rgb(r as u8, g as u8, b as u8);
-                    if fg { self.style.fg = c } else { self.style.bg = c }
+                    if fg {
+                        self.style.fg = c
+                    } else {
+                        self.style.bg = c
+                    }
                     return 4;
                 }
                 0

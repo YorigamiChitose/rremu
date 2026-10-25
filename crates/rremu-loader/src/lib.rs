@@ -1,6 +1,6 @@
 //! rremu-loader：ELF32 内存镜像解析（零 IO，读文件在 bin 层）。
 
-use goblin::elf::{header, program_header, Elf};
+use goblin::elf::{Elf, header, program_header};
 use thiserror::Error;
 
 /// 一段可写入内存的镜像片段。
@@ -45,7 +45,9 @@ pub fn load_elf(bytes: &[u8]) -> Result<Image, LoaderError> {
     let elf = Elf::parse(bytes).map_err(|e| LoaderError::Parse(e.to_string()))?;
 
     if elf.header.e_machine != header::EM_RISCV {
-        return Err(LoaderError::NotRiscv { machine: elf.header.e_machine });
+        return Err(LoaderError::NotRiscv {
+            machine: elf.header.e_machine,
+        });
     }
     if elf.is_64 {
         return Err(LoaderError::NotElf32);
@@ -61,14 +63,25 @@ pub fn load_elf(bytes: &[u8]) -> Result<Image, LoaderError> {
         let end = off
             .checked_add(filesz)
             .filter(|&e| e <= bytes.len())
-            .ok_or_else(|| LoaderError::Parse(format!("PT_LOAD range {}+{} out of file", ph.p_offset, ph.p_filesz)))?;
-        segments.push(Segment { addr: ph.p_vaddr as u32, data: bytes[off..end].to_vec() });
+            .ok_or_else(|| {
+                LoaderError::Parse(format!(
+                    "PT_LOAD range {}+{} out of file",
+                    ph.p_offset, ph.p_filesz
+                ))
+            })?;
+        segments.push(Segment {
+            addr: ph.p_vaddr as u32,
+            data: bytes[off..end].to_vec(),
+        });
     }
     if segments.is_empty() {
         return Err(LoaderError::NoSegments);
     }
 
-    Ok(Image { segments, entry: elf.entry as u32 })
+    Ok(Image {
+        segments,
+        entry: elf.entry as u32,
+    })
 }
 
 #[cfg(test)]
@@ -135,12 +148,17 @@ mod tests {
         let mut bytes = minimal_elf(0, 0, &[0; 4]);
         // e_machine 位于 offset 18
         bytes[18..20].copy_from_slice(&0x3eu16.to_le_bytes()); // x86-64
-        assert!(matches!(load_elf(&bytes), Err(LoaderError::NotRiscv { machine: 0x3e })));
+        assert!(matches!(
+            load_elf(&bytes),
+            Err(LoaderError::NotRiscv { machine: 0x3e })
+        ));
     }
 
     #[test]
     fn rejects_garbage() {
-        assert!(matches!(load_elf(b"not an elf at all"), Err(LoaderError::Parse(_))));
+        assert!(matches!(
+            load_elf(b"not an elf at all"),
+            Err(LoaderError::Parse(_))
+        ));
     }
-
 }

@@ -54,7 +54,12 @@ impl Window {
         };
         let inner = minifb::Window::new(title, width, height, opts)
             .map_err(|e| WindowError::Create(e.to_string()))?;
-        Ok(Self { inner, width, height, closed: false })
+        Ok(Self {
+            inner,
+            width,
+            height,
+            closed: false,
+        })
     }
 
     pub fn width(&self) -> usize {
@@ -110,7 +115,9 @@ impl Window {
         }
         // update_with_buffer 在某些后端要求 buffer 长度精确匹配；
         // 我们已在上面断言。错误时不算关窗，仅跳过本次刷新。
-        let _ = self.inner.update_with_buffer(buffer, self.width, self.height);
+        let _ = self
+            .inner
+            .update_with_buffer(buffer, self.width, self.height);
         // update() 必须调用以处理 OS 事件（包括关闭按钮）
         self.inner.update();
         if !self.inner.is_open() {

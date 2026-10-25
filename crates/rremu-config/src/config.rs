@@ -20,11 +20,21 @@ pub struct Config {
 pub type ResolvedConfig = Config;
 
 impl Config {
-    pub fn layout(&self) -> &Layout { &self.layout }
-    pub fn diag(&self) -> &Diag { &self.diag }
-    pub fn paths(&self) -> &Paths { &self.paths }
-    pub fn boot(&self) -> &Boot { &self.boot }
-    pub fn entry(&self) -> Option<u32> { self.entry }
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+    pub fn diag(&self) -> &Diag {
+        &self.diag
+    }
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+    pub fn boot(&self) -> &Boot {
+        &self.boot
+    }
+    pub fn entry(&self) -> Option<u32> {
+        self.entry
+    }
 
     pub fn with_layout(mut self, layout: Layout) -> Self {
         self.layout = layout;
@@ -98,11 +108,17 @@ impl Config {
             return Err(ConfigError::ZeroRamSize);
         }
         if l.ram_base.checked_add(l.ram_size).is_none() {
-            return Err(ConfigError::RamOverflow { base: l.ram_base, size: l.ram_size });
+            return Err(ConfigError::RamOverflow {
+                base: l.ram_base,
+                size: l.ram_size,
+            });
         }
         if let Some(fb) = &l.fb {
             if fb.width == 0 || fb.height == 0 {
-                return Err(ConfigError::FbZeroDim { width: fb.width, height: fb.height });
+                return Err(ConfigError::FbZeroDim {
+                    width: fb.width,
+                    height: fb.height,
+                });
             }
             if fb
                 .width
@@ -132,7 +148,9 @@ impl Config {
                 size: self.layout.ram_size,
             })?;
         if self.layout.ram_size < DTB_RESERVE {
-            return Err(ConfigError::DtbReserveTooLarge { ram_size: self.layout.ram_size });
+            return Err(ConfigError::DtbReserveTooLarge {
+                ram_size: self.layout.ram_size,
+            });
         }
         Ok((ram_end - DTB_RESERVE) & !7)
     }
@@ -151,4 +169,3 @@ impl Config {
         Ok(cfg)
     }
 }
-

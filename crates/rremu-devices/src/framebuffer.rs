@@ -34,7 +34,8 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     pub fn new(base: u32, width: u32, height: u32) -> Self {
-        let pixel_count = usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
+        let pixel_count =
+            usize::try_from(width).unwrap_or(0) * usize::try_from(height).unwrap_or(0);
         Self {
             base,
             width,
@@ -94,7 +95,12 @@ impl Framebuffer {
 }
 
 impl BusDevice for Framebuffer {
-    fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         let off = self.offset(addr) as usize;
         let n = size.bytes() as usize;
         if off + n > self.pixels.len() {
@@ -107,7 +113,13 @@ impl BusDevice for Framebuffer {
         Ok(v)
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        _sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         let off = self.offset(addr) as usize;
         let n = size.bytes() as usize;
         if off + n > self.pixels.len() {
@@ -204,7 +216,8 @@ mod tests {
         let mut sink = rremu_bus::NullSink;
         // 逐字节写像素 0：低字节 0x00, 高字节 0xF8 → RGB565 = 0xF800
         fb.write(BASE, AccessSize::Byte, 0x00, &mut sink).unwrap();
-        fb.write(BASE + 1, AccessSize::Byte, 0xF8, &mut sink).unwrap();
+        fb.write(BASE + 1, AccessSize::Byte, 0xF8, &mut sink)
+            .unwrap();
         assert!(fb.is_dirty());
         assert_eq!(fb.frame()[0], 0x00FF_0000);
     }
@@ -242,12 +255,19 @@ mod tests {
     fn read_returns_written_value() {
         let mut fb = fb();
         let mut sink = rremu_bus::NullSink;
-        fb.write(BASE + 4, AccessSize::Half, 0x1234, &mut sink).unwrap();
+        fb.write(BASE + 4, AccessSize::Half, 0x1234, &mut sink)
+            .unwrap();
         let v = fb.read(BASE + 4, AccessSize::Half, &mut sink).unwrap();
         assert_eq!(v, 0x1234);
         // byte 读
-        assert_eq!(fb.read(BASE + 4, AccessSize::Byte, &mut sink).unwrap(), 0x34);
-        assert_eq!(fb.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(), 0x12);
+        assert_eq!(
+            fb.read(BASE + 4, AccessSize::Byte, &mut sink).unwrap(),
+            0x34
+        );
+        assert_eq!(
+            fb.read(BASE + 5, AccessSize::Byte, &mut sink).unwrap(),
+            0x12
+        );
     }
 
     #[test]
@@ -269,7 +289,8 @@ mod tests {
         let mut fb = fb();
         let mut sink = rremu_bus::NullSink;
         // 总共 4*2*2 = 16 字节；越界写
-        fb.write(BASE + 16, AccessSize::Word, 0xDEAD, &mut sink).unwrap();
+        fb.write(BASE + 16, AccessSize::Word, 0xDEAD, &mut sink)
+            .unwrap();
         // 不 panic 即可
     }
 

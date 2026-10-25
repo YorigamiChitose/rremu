@@ -11,7 +11,11 @@ pub(crate) struct FramebufferAccessor {
 
 impl FramebufferAccessor {
     pub(crate) fn new(base: Option<u32>, width: u32, height: u32) -> Self {
-        Self { base, width, height }
+        Self {
+            base,
+            width,
+            height,
+        }
     }
 
     pub(crate) fn dimensions(&self) -> Option<(u32, u32)> {
@@ -58,4 +62,3 @@ pub struct FramebufferFrame<'a> {
     pub height: u32,
     pub pixels: &'a [u32],
 }
-

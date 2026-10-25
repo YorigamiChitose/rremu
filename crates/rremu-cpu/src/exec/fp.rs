@@ -28,7 +28,10 @@ impl Cpu {
             return Ok(None);
         }
         if !self.fp_enabled() {
-            return Err(TrapErr { cause: cause::ILLEGAL_INSTR, mtval: raw });
+            return Err(TrapErr {
+                cause: cause::ILLEGAL_INSTR,
+                mtval: raw,
+            });
         }
 
         let next_pc = pc.wrapping_add(len as u32);
@@ -216,91 +219,107 @@ impl Cpu {
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
-            Instruction::FmaddS { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FmaddS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fmadd32(
-                    self.fpr_s(rs1),
-                    self.fpr_s(rs2),
-                    self.fpr_s(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fmadd32(self.fpr_s(rs1), self.fpr_s(rs2), self.fpr_s(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_s(rd, value);
             }
-            Instruction::FmsubS { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FmsubS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fmsub32(
-                    self.fpr_s(rs1),
-                    self.fpr_s(rs2),
-                    self.fpr_s(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fmsub32(self.fpr_s(rs1), self.fpr_s(rs2), self.fpr_s(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_s(rd, value);
             }
-            Instruction::FnmaddS { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FnmaddS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fnmadd32(
-                    self.fpr_s(rs1),
-                    self.fpr_s(rs2),
-                    self.fpr_s(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fnmadd32(self.fpr_s(rs1), self.fpr_s(rs2), self.fpr_s(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_s(rd, value);
             }
-            Instruction::FnmsubS { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FnmsubS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fnmsub32(
-                    self.fpr_s(rs1),
-                    self.fpr_s(rs2),
-                    self.fpr_s(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fnmsub32(self.fpr_s(rs1), self.fpr_s(rs2), self.fpr_s(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_s(rd, value);
             }
-            Instruction::FmaddD { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FmaddD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fmadd64(
-                    self.fpr_d(rs1),
-                    self.fpr_d(rs2),
-                    self.fpr_d(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fmadd64(self.fpr_d(rs1), self.fpr_d(rs2), self.fpr_d(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
-            Instruction::FmsubD { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FmsubD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fmsub64(
-                    self.fpr_d(rs1),
-                    self.fpr_d(rs2),
-                    self.fpr_d(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fmsub64(self.fpr_d(rs1), self.fpr_d(rs2), self.fpr_d(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
-            Instruction::FnmaddD { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FnmaddD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fnmadd64(
-                    self.fpr_d(rs1),
-                    self.fpr_d(rs2),
-                    self.fpr_d(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fnmadd64(self.fpr_d(rs1), self.fpr_d(rs2), self.fpr_d(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
-            Instruction::FnmsubD { rd, rs1, rs2, rs3, rm } => {
+            Instruction::FnmsubD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            } => {
                 let mode = self.fp_rounding_mode(rm, raw)?;
-                let (value, flags) = fnmsub64(
-                    self.fpr_d(rs1),
-                    self.fpr_d(rs2),
-                    self.fpr_d(rs3),
-                    mode,
-                );
+                let (value, flags) =
+                    fnmsub64(self.fpr_d(rs1), self.fpr_d(rs2), self.fpr_d(rs3), mode);
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
@@ -437,7 +456,10 @@ impl Cpu {
         addr: u32,
     ) -> Result<u64, TrapErr> {
         if addr & 0x7 != 0 {
-            return Err(TrapErr { cause: cause::LOAD_MISALIGNED, mtval: addr });
+            return Err(TrapErr {
+                cause: cause::LOAD_MISALIGNED,
+                mtval: addr,
+            });
         }
         let lo = self.load(bus, sink, addr, AccessSize::Word)?;
         let hi = self.load(bus, sink, addr.wrapping_add(4), AccessSize::Word)?;
@@ -452,19 +474,22 @@ impl Cpu {
         value: u64,
     ) -> Result<(), TrapErr> {
         if addr & 0x7 != 0 {
-            return Err(TrapErr { cause: cause::STORE_MISALIGNED, mtval: addr });
+            return Err(TrapErr {
+                cause: cause::STORE_MISALIGNED,
+                mtval: addr,
+            });
         }
         self.store(bus, sink, addr, AccessSize::Word, value as u32)?;
-        self.store(bus, sink, addr.wrapping_add(4), AccessSize::Word, (value >> 32) as u32)
+        self.store(
+            bus,
+            sink,
+            addr.wrapping_add(4),
+            AccessSize::Word,
+            (value >> 32) as u32,
+        )
     }
 
-    fn compare_s<F: FnOnce(Ordering) -> bool>(
-        &mut self,
-        rd: u8,
-        a: Fp32,
-        b: Fp32,
-        pred: F,
-    ) {
+    fn compare_s<F: FnOnce(Ordering) -> bool>(&mut self, rd: u8, a: Fp32, b: Fp32, pred: F) {
         let result = if a.is_signaling_nan() || b.is_signaling_nan() {
             self.raise_fp_flags(Flags::INVALID);
             0
@@ -479,13 +504,7 @@ impl Cpu {
         }
     }
 
-    fn compare_d<F: FnOnce(Ordering) -> bool>(
-        &mut self,
-        rd: u8,
-        a: Fp64,
-        b: Fp64,
-        pred: F,
-    ) {
+    fn compare_d<F: FnOnce(Ordering) -> bool>(&mut self, rd: u8, a: Fp64, b: Fp64, pred: F) {
         let result = if a.is_signaling_nan() || b.is_signaling_nan() {
             self.raise_fp_flags(Flags::INVALID);
             0

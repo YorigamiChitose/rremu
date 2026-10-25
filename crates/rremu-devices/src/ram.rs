@@ -9,7 +9,10 @@ pub struct Ram {
 
 impl Ram {
     pub fn new(base: u32, size: u32) -> Self {
-        Self { base, mem: vec![0; size as usize] }
+        Self {
+            base,
+            mem: vec![0; size as usize],
+        }
     }
 
     /// 复位：清零全部存储（machine reset 用）。
@@ -29,7 +32,12 @@ impl Resetable for Ram {
 }
 
 impl BusDevice for Ram {
-    fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         let o = self.offset(addr);
         let mut v: u32 = 0;
         for i in 0..size.bytes() {
@@ -38,7 +46,13 @@ impl BusDevice for Ram {
         Ok(v)
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        _sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         let o = self.offset(addr);
         for i in 0..size.bytes() {
             self.mem[o + i as usize] = (data >> (8 * i)) as u8;
@@ -72,7 +86,11 @@ impl BusDevice for Ram {
 mod tests {
     use super::*;
 
-    fn w(addr: u32, size: AccessSize, data: u32) -> impl FnOnce(&mut Ram, &mut dyn EventSink) -> Result<(), BusError> {
+    fn w(
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+    ) -> impl FnOnce(&mut Ram, &mut dyn EventSink) -> Result<(), BusError> {
         move |ram, sink| ram.write(addr, size, data, sink)
     }
 
@@ -82,14 +100,29 @@ mod tests {
         let mut sink = rremu_bus::NullSink;
         w(0x8000_0000, AccessSize::Word, 0x1122_3344)(&mut ram, &mut sink).unwrap();
         // 字节视图：小端
-        assert_eq!(ram.read(0x8000_0000, AccessSize::Byte, &mut sink).unwrap(), 0x44);
-        assert_eq!(ram.read(0x8000_0001, AccessSize::Byte, &mut sink).unwrap(), 0x33);
-        assert_eq!(ram.read(0x8000_0000, AccessSize::Half, &mut sink).unwrap(), 0x3344);
+        assert_eq!(
+            ram.read(0x8000_0000, AccessSize::Byte, &mut sink).unwrap(),
+            0x44
+        );
+        assert_eq!(
+            ram.read(0x8000_0001, AccessSize::Byte, &mut sink).unwrap(),
+            0x33
+        );
+        assert_eq!(
+            ram.read(0x8000_0000, AccessSize::Half, &mut sink).unwrap(),
+            0x3344
+        );
         // 子宽度写只影响低位
         w(0x8000_0000, AccessSize::Byte, 0xAA)(&mut ram, &mut sink).unwrap();
-        assert_eq!(ram.read(0x8000_0000, AccessSize::Word, &mut sink).unwrap(), 0x1122_33AA);
+        assert_eq!(
+            ram.read(0x8000_0000, AccessSize::Word, &mut sink).unwrap(),
+            0x1122_33AA
+        );
         w(0x8000_0000, AccessSize::Half, 0xBEEF)(&mut ram, &mut sink).unwrap();
-        assert_eq!(ram.read(0x8000_0000, AccessSize::Word, &mut sink).unwrap(), 0x1122_BEEF);
+        assert_eq!(
+            ram.read(0x8000_0000, AccessSize::Word, &mut sink).unwrap(),
+            0x1122_BEEF
+        );
     }
 
     #[test]
@@ -97,7 +130,10 @@ mod tests {
         let mut ram = Ram::new(0x8000_0000, 0x1000);
         let mut sink = rremu_bus::NullSink;
         w(0x8000_0010, AccessSize::Word, 0xdead_beef)(&mut ram, &mut sink).unwrap();
-        assert_eq!(ram.peek_read(0x8000_0010, AccessSize::Word).unwrap(), 0xdead_beef);
+        assert_eq!(
+            ram.peek_read(0x8000_0010, AccessSize::Word).unwrap(),
+            0xdead_beef
+        );
     }
 
     #[test]
@@ -105,7 +141,10 @@ mod tests {
         let mut ram = Ram::new(0x8000_0000, 0x1000);
         ram.write_bytes(0x8000_0004, b"hello").unwrap();
         let mut sink = rremu_bus::NullSink;
-        assert_eq!(ram.read(0x8000_0004, AccessSize::Word, &mut sink).unwrap(), u32::from_le_bytes(*b"hell"));
+        assert_eq!(
+            ram.read(0x8000_0004, AccessSize::Word, &mut sink).unwrap(),
+            u32::from_le_bytes(*b"hell")
+        );
         ram.reset();
         assert_eq!(ram.peek_read(0x8000_0004, AccessSize::Word).unwrap(), 0);
     }

@@ -18,7 +18,13 @@ pub struct RingCollector {
 
 impl RingCollector {
     pub fn new() -> Self {
-        Self { mem: VecDeque::new(), uart: VecDeque::new(), halt: None, mem_cap: 16, uart_cap: 1024 }
+        Self {
+            mem: VecDeque::new(),
+            uart: VecDeque::new(),
+            halt: None,
+            mem_cap: 16,
+            uart_cap: 1024,
+        }
     }
 
     pub fn set_capacity(&mut self, mem: usize, uart: usize) {
@@ -108,7 +114,11 @@ impl<'a> MachineSink<'a> {
         terminal: &'a mut Terminal,
         uart_sink: &'a mut Option<Box<dyn FnMut(u8)>>,
     ) -> Self {
-        Self { collector, terminal, uart_sink }
+        Self {
+            collector,
+            terminal,
+            uart_sink,
+        }
     }
 }
 
@@ -123,4 +133,3 @@ impl EventSink for MachineSink<'_> {
         self.collector.emit(ev);
     }
 }
-

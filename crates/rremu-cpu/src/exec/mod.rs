@@ -47,35 +47,72 @@ impl Cpu {
 
         match instr {
             Instruction::Lb { rd, rs1, imm } => {
-                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Byte)?;
+                let v = self.load(
+                    bus,
+                    sink,
+                    x(self, rs1).wrapping_add(imm as u32),
+                    AccessSize::Byte,
+                )?;
                 set!(rd, (v as u8) as i8 as i32 as u32)
             }
             Instruction::Lh { rd, rs1, imm } => {
-                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Half)?;
+                let v = self.load(
+                    bus,
+                    sink,
+                    x(self, rs1).wrapping_add(imm as u32),
+                    AccessSize::Half,
+                )?;
                 set!(rd, (v as u16) as i16 as i32 as u32)
             }
             Instruction::Lw { rd, rs1, imm } => {
-                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Word)?;
+                let v = self.load(
+                    bus,
+                    sink,
+                    x(self, rs1).wrapping_add(imm as u32),
+                    AccessSize::Word,
+                )?;
                 set!(rd, v)
             }
             Instruction::Lbu { rd, rs1, imm } => {
-                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Byte)?;
+                let v = self.load(
+                    bus,
+                    sink,
+                    x(self, rs1).wrapping_add(imm as u32),
+                    AccessSize::Byte,
+                )?;
                 set!(rd, v & 0xff)
             }
             Instruction::Lhu { rd, rs1, imm } => {
-                let v = self.load(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Half)?;
+                let v = self.load(
+                    bus,
+                    sink,
+                    x(self, rs1).wrapping_add(imm as u32),
+                    AccessSize::Half,
+                )?;
                 set!(rd, v & 0xffff)
             }
 
-            Instruction::Sb { rs1, rs2, imm } => {
-                self.store(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Byte, x(self, rs2))?
-            }
-            Instruction::Sh { rs1, rs2, imm } => {
-                self.store(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Half, x(self, rs2))?
-            }
-            Instruction::Sw { rs1, rs2, imm } => {
-                self.store(bus, sink, x(self, rs1).wrapping_add(imm as u32), AccessSize::Word, x(self, rs2))?
-            }
+            Instruction::Sb { rs1, rs2, imm } => self.store(
+                bus,
+                sink,
+                x(self, rs1).wrapping_add(imm as u32),
+                AccessSize::Byte,
+                x(self, rs2),
+            )?,
+            Instruction::Sh { rs1, rs2, imm } => self.store(
+                bus,
+                sink,
+                x(self, rs1).wrapping_add(imm as u32),
+                AccessSize::Half,
+                x(self, rs2),
+            )?,
+            Instruction::Sw { rs1, rs2, imm } => self.store(
+                bus,
+                sink,
+                x(self, rs1).wrapping_add(imm as u32),
+                AccessSize::Word,
+                x(self, rs2),
+            )?,
 
             // ---- A extension (RV32A) ----
             Instruction::LrW { rd, rs1 } => {
@@ -110,10 +147,14 @@ impl Cpu {
                 self.amo(bus, sink, rd, rs1, rs2, |a, b| a | b)?;
             }
             Instruction::AmominW { rd, rs1, rs2 } => {
-                self.amo(bus, sink, rd, rs1, rs2, |a, b| (a as i32).min(b as i32) as u32)?;
+                self.amo(bus, sink, rd, rs1, rs2, |a, b| {
+                    (a as i32).min(b as i32) as u32
+                })?;
             }
             Instruction::AmomaxW { rd, rs1, rs2 } => {
-                self.amo(bus, sink, rd, rs1, rs2, |a, b| (a as i32).max(b as i32) as u32)?;
+                self.amo(bus, sink, rd, rs1, rs2, |a, b| {
+                    (a as i32).max(b as i32) as u32
+                })?;
             }
             Instruction::AmominuW { rd, rs1, rs2 } => {
                 self.amo(bus, sink, rd, rs1, rs2, |a, b| a.min(b))?;
@@ -123,7 +164,7 @@ impl Cpu {
             }
 
             Instruction::Sret => next_pc = self.exec_sret(),
-            Instruction::Wfi => {} // 无等待实现：NOP
+            Instruction::Wfi => {}       // 无等待实现：NOP
             Instruction::SfenceVma => {} // 无 TLB：NOP
 
             Instruction::Fence => {}
@@ -141,6 +182,4 @@ impl Cpu {
         }
         Ok(next_pc)
     }
-
-
 }

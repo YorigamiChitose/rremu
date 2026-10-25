@@ -7,17 +7,17 @@
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use rremu_config::Config;
-use rremu_expr::{parse as parse_expr, Expr};
-use rremu_machine::{freg_name, reg_name, EmuEvent, Machine, MachineSnapshot, RunResult, RunState};
-use rustyline::error::ReadlineError;
+use rremu_expr::{Expr, parse as parse_expr};
+use rremu_machine::{EmuEvent, Machine, MachineSnapshot, RunResult, RunState, freg_name, reg_name};
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 
 /// 帧缓冲显示后端（具体实现由 bin 提供，如 minifb 窗口）。
 ///
@@ -209,7 +209,12 @@ impl Repl {
 
     /// 将当前机器状态序列化为 JSON 并写入 `path`；失败仅告警。
     fn write_dump(&self, path: &str) {
-        let elf = self.cfg.paths().elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self
+            .cfg
+            .paths()
+            .elf
+            .as_deref()
+            .map(rremu_machine::dump::ElfRef::from_path);
         match self.machine.dump(elf).to_json() {
             Ok(json) => match std::fs::write(path, json) {
                 Ok(()) => println!("Dump written to {path}."),
@@ -232,7 +237,7 @@ impl Repl {
             let line = match rl.readline("rremu> ") {
                 Ok(l) => l,
                 Err(ReadlineError::Interrupted) => continue, // 提示符态 Ctrl+C：清行重来
-                Err(ReadlineError::Eof) => break 0,           // Ctrl+D：等同 q
+                Err(ReadlineError::Eof) => break 0,          // Ctrl+D：等同 q
                 Err(e) => {
                     eprintln!("rremu: readline error: {e}");
                     break 1;
@@ -330,7 +335,9 @@ impl Repl {
         println!("  x N ADDR      Examine N words at ADDR (peek, no side effects)");
         println!("  p EXPR        Evaluate and print expression");
         println!("  b EXPR        Set breakpoint at address EXPR");
-        println!("  w EXPR        Watch value of EXPR, stops on change (*ADDR for memory, x5 for reg)");
+        println!(
+            "  w EXPR        Watch value of EXPR, stops on change (*ADDR for memory, x5 for reg)"
+        );
         println!("  d N           Delete watchpoint N, or breakpoint N (index from 'info w')");
         println!("  info r        Show GPRs, FPRs and CSRs");
         println!("  info w        List breakpoints and watchpoints");
@@ -351,9 +358,8 @@ impl Repl {
         // step_n 循环：每批注入输入、ensure_window（fb 首次写入时拉起窗口），
         // 再泵后端；否则走 machine.run 全速循环（仅靠 pause_flag 停机）。
         let mut display_closed = false;
-        let need_batch = self.display.is_some()
-            || self.window_factory.is_some()
-            || self.uart_in.is_some();
+        let need_batch =
+            self.display.is_some() || self.window_factory.is_some() || self.uart_in.is_some();
         let result = if need_batch {
             loop {
                 if self.pause_flag.load(Ordering::Relaxed) {
@@ -521,7 +527,10 @@ impl Repl {
                 Expr::Num(v) => format!("0x{v:08x}"),
                 e => format!("{e:?}"),
             };
-            println!("watchpoint {}: expr={} value=0x{:08x} hits={}", wp.id, desc, wp.last_value, wp.hit_count);
+            println!(
+                "watchpoint {}: expr={} value=0x{:08x} hits={}",
+                wp.id, desc, wp.last_value, wp.hit_count
+            );
         }
     }
 
@@ -597,7 +606,9 @@ impl Repl {
         if self.machine.framebuffer_dirty_frame().is_none() {
             return;
         }
-        let Some(factory) = self.window_factory.as_mut() else { return };
+        let Some(factory) = self.window_factory.as_mut() else {
+            return;
+        };
         match factory() {
             Some(mut window) => {
                 // 推送触发创建的这一帧（全帧读取，不清 dirty）
@@ -660,7 +671,10 @@ impl Repl {
     }
 
     fn is_dead(&self) -> bool {
-        matches!(self.machine.state(), RunState::Exited(_) | RunState::Faulted(_))
+        matches!(
+            self.machine.state(),
+            RunState::Exited(_) | RunState::Faulted(_)
+        )
     }
 }
 
@@ -668,7 +682,10 @@ enum Command {
     Help,
     Continue,
     Step(u64),
-    Examine { count: u64, addr: Expr },
+    Examine {
+        count: u64,
+        addr: Expr,
+    },
     Print(Expr),
     InfoRegs,
     Breakpoint(Expr),
@@ -722,7 +739,9 @@ fn parse_command(line: &str) -> Result<Command, String> {
             "r" | "reg" | "registers" => Ok(Command::InfoRegs),
             "w" | "wp" | "watchpoints" => Ok(Command::InfoWatchpoints),
             "" => Err("usage: info r|w".into()),
-            _ => Err(format!("unknown info subcommand: {rest} (try 'info r' or 'info w')")),
+            _ => Err(format!(
+                "unknown info subcommand: {rest} (try 'info r' or 'info w')"
+            )),
         },
         "b" | "break" => {
             if rest.is_empty() {
@@ -808,7 +827,10 @@ mod tests {
         assert!(matches!(parse_command("si").unwrap(), Command::Step(1)));
         assert!(matches!(parse_command("si 5").unwrap(), Command::Step(5)));
         assert!(matches!(parse_command("q").unwrap(), Command::Quit));
-        assert!(matches!(parse_command("info r").unwrap(), Command::InfoRegs));
+        assert!(matches!(
+            parse_command("info r").unwrap(),
+            Command::InfoRegs
+        ));
     }
 
     #[test]
@@ -819,7 +841,10 @@ mod tests {
         };
         assert_eq!(count, 4);
         assert!(matches!(parse_command("p pc").unwrap(), Command::Print(_)));
-        assert!(matches!(parse_command("p x1 + x2").unwrap(), Command::Print(_)));
+        assert!(matches!(
+            parse_command("p x1 + x2").unwrap(),
+            Command::Print(_)
+        ));
     }
 
     #[test]
@@ -880,25 +905,55 @@ mod tests {
     fn key_to_byte_printable_ascii() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let nm = KeyModifiers::NONE;
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), nm)), Some(b'a'));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)), Some(b'A'));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char(' '), nm)), Some(b' '));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('~'), nm)), Some(b'~'));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('/'), nm)), Some(b'/'));
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('a'), nm)),
+            Some(b'a')
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+            Some(b'A')
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char(' '), nm)),
+            Some(b' ')
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('~'), nm)),
+            Some(b'~')
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('/'), nm)),
+            Some(b'/')
+        );
     }
 
     #[test]
     fn key_to_byte_control_letters() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(0x03));
         assert_eq!(
-            key_to_byte(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
+            key_to_byte(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(0x03)
         );
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)), Some(0x01));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)), Some(0x1A));
+        assert_eq!(
+            key_to_byte(KeyEvent::new(
+                KeyCode::Char('C'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            Some(0x03)
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            Some(0x01)
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            Some(0x1A)
+        );
         // Ctrl+1 等非字母不做映射
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL)), None);
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL)),
+            None
+        );
     }
 
     #[test]
@@ -907,7 +962,10 @@ mod tests {
         let nm = KeyModifiers::NONE;
         assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Enter, nm)), Some(b'\n'));
         assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Tab, nm)), Some(b'\t'));
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Backspace, nm)), Some(0x7F));
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Backspace, nm)),
+            Some(0x7F)
+        );
         assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Esc, nm)), None);
         assert_eq!(key_to_byte(KeyEvent::new(KeyCode::F(1), nm)), None);
         assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Left, nm)), None);
@@ -916,9 +974,15 @@ mod tests {
     #[test]
     fn key_to_byte_alt_suppresses() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)), None);
         assert_eq!(
-            key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT | KeyModifiers::CONTROL)),
+            key_to_byte(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)),
+            None
+        );
+        assert_eq!(
+            key_to_byte(KeyEvent::new(
+                KeyCode::Char('a'),
+                KeyModifiers::ALT | KeyModifiers::CONTROL
+            )),
             None
         );
     }
@@ -927,6 +991,9 @@ mod tests {
     fn key_to_byte_non_ascii_dropped() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         // CJK 等 Unicode 字符暂不支持
-        assert_eq!(key_to_byte(KeyEvent::new(KeyCode::Char('中'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            key_to_byte(KeyEvent::new(KeyCode::Char('中'), KeyModifiers::NONE)),
+            None
+        );
     }
 }

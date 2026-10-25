@@ -1,13 +1,15 @@
 //! TuiApp：TUI 主循环 + 终端管理 + 事件分发。
 
-use std::io::{self, stdout, Stdout};
+use std::io::{self, Stdout, stdout};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
-use ratatui::backend::CrosstermBackend;
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use rremu_machine::{FramebufferFrame, Machine, RunResult};
 
@@ -72,7 +74,12 @@ impl TuiApp {
         let Some(path) = self.cfg.paths().dump_on_exit.as_deref() else {
             return;
         };
-        let elf = self.cfg.paths().elf.as_deref().map(rremu_machine::dump::ElfRef::from_path);
+        let elf = self
+            .cfg
+            .paths()
+            .elf
+            .as_deref()
+            .map(rremu_machine::dump::ElfRef::from_path);
         if let Ok(json) = self.machine.dump(elf).to_json() {
             let _ = std::fs::write(path, json);
         }
@@ -93,8 +100,11 @@ impl TuiApp {
 
             // 非运行时：poll 到帧预算（30fps 节奏，按键即时响应）；
             // 运行时：poll(ZERO) 取走已排队按键，首个按键后即回到执行。
-            let poll_timeout =
-                if self.running { Duration::ZERO } else { FRAME_BUDGET.saturating_sub(frame_start.elapsed()) };
+            let poll_timeout = if self.running {
+                Duration::ZERO
+            } else {
+                FRAME_BUDGET.saturating_sub(frame_start.elapsed())
+            };
             while event::poll(poll_timeout)? {
                 if let Event::Key(k) = event::read()? {
                     self.handle_key(k);
@@ -129,7 +139,11 @@ impl TuiApp {
                 self.machine.snapshot()
             };
             // 档位 ≥1（关指令面板）时不做反汇编采集（省去内存 peek 与格式化）
-            let disasm = if self.panel_level < 1 { self.collect_disasm(snap.pc) } else { Vec::new() };
+            let disasm = if self.panel_level < 1 {
+                self.collect_disasm(snap.pc)
+            } else {
+                Vec::new()
+            };
             self.update_actual_speed(Instant::now(), snap.csrs.minstret);
             let fb = if self.fb_view {
                 Some(FramebufferFrame {

@@ -15,7 +15,6 @@ pub struct TraceEntry {
     pub len: u8,
 }
 
-
 /// CSR 快照（TUI/CLI 显示所需的 M-mode + FP 集合）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CsrSnapshot {
@@ -45,4 +44,3 @@ pub struct MachineSnapshot {
     pub state: RunState,
     pub mem_ring: VecDeque<EmuEvent>,
 }
-

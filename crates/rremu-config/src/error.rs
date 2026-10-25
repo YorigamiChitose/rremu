@@ -22,17 +22,22 @@ impl fmt::Display for ConfigError {
                 write!(f, "ram range {base:#x}+{size:#x} overflows address space")
             }
             ConfigError::FbZeroDim { width, height } => {
-                write!(f, "framebuffer dimensions must be non-zero ({width}x{height})")
+                write!(
+                    f,
+                    "framebuffer dimensions must be non-zero ({width}x{height})"
+                )
             }
             ConfigError::FbSizeOverflow { width, height, bpp } => {
                 write!(f, "framebuffer size overflow ({width}x{height}x{bpp})")
             }
             ConfigError::DtbReserveTooLarge { ram_size } => {
-                write!(f, "ram size {ram_size:#x} smaller than DTB reserve {DTB_RESERVE:#x}")
+                write!(
+                    f,
+                    "ram size {ram_size:#x} smaller than DTB reserve {DTB_RESERVE:#x}"
+                )
             }
         }
     }
 }
 
 impl std::error::Error for ConfigError {}
-

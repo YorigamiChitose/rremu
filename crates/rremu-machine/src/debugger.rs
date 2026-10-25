@@ -66,7 +66,10 @@ impl DebugController {
 
     /// 所有监视点的 (id, expr) 快照：调用方求值后再回调 update_if_changed。
     pub(crate) fn watchpoint_entries(&self) -> Vec<(usize, Expr)> {
-        self.watchpoints.iter().map(|w| (w.id, w.expr.clone())).collect()
+        self.watchpoints
+            .iter()
+            .map(|w| (w.id, w.expr.clone()))
+            .collect()
     }
 
     pub(crate) fn add_breakpoint(&mut self, addr: u32) -> bool {
@@ -84,7 +87,12 @@ impl DebugController {
     pub(crate) fn add_watchpoint(&mut self, expr: Expr, initial: u32) -> usize {
         let id = self.next_wp_id;
         self.next_wp_id += 1;
-        self.watchpoints.push(Watchpoint { id, expr, last_value: initial, hit_count: 0 });
+        self.watchpoints.push(Watchpoint {
+            id,
+            expr,
+            last_value: initial,
+            hit_count: 0,
+        });
         id
     }
 
@@ -102,4 +110,3 @@ impl DebugController {
         self.bp_suppress = None;
     }
 }
-

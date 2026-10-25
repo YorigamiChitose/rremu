@@ -33,7 +33,10 @@ mod tests {
 
         let mut small = Config::default();
         small.layout.ram_size = 0x1000;
-        assert!(matches!(small.dtb_address(), Err(ConfigError::DtbReserveTooLarge { .. })));
+        assert!(matches!(
+            small.dtb_address(),
+            Err(ConfigError::DtbReserveTooLarge { .. })
+        ));
     }
 
     #[test]
@@ -41,11 +44,41 @@ mod tests {
         let c = Config::default();
         assert_eq!(c.layout.ram_base, DEFAULT_RAM_BASE);
         assert_eq!(c.layout.ram_size, DEFAULT_RAM_SIZE);
-        assert_eq!(c.layout.uart, Some(Device { base: DEFAULT_UART_BASE, size: UART_SIZE }));
-        assert_eq!(c.layout.clint, Some(Device { base: DEFAULT_CLINT_BASE, size: CLINT_SIZE }));
-        assert_eq!(c.layout.plic, Some(Device { base: DEFAULT_PLIC_BASE, size: PLIC_SIZE }));
-        assert_eq!(c.layout.syscon, Some(Device { base: DEFAULT_SYSCON_BASE, size: SYSCON_SIZE }));
-        assert_eq!(c.layout.rtc, Some(Device { base: DEFAULT_RTC_BASE, size: RTC_SIZE }));
+        assert_eq!(
+            c.layout.uart,
+            Some(Device {
+                base: DEFAULT_UART_BASE,
+                size: UART_SIZE
+            })
+        );
+        assert_eq!(
+            c.layout.clint,
+            Some(Device {
+                base: DEFAULT_CLINT_BASE,
+                size: CLINT_SIZE
+            })
+        );
+        assert_eq!(
+            c.layout.plic,
+            Some(Device {
+                base: DEFAULT_PLIC_BASE,
+                size: PLIC_SIZE
+            })
+        );
+        assert_eq!(
+            c.layout.syscon,
+            Some(Device {
+                base: DEFAULT_SYSCON_BASE,
+                size: SYSCON_SIZE
+            })
+        );
+        assert_eq!(
+            c.layout.rtc,
+            Some(Device {
+                base: DEFAULT_RTC_BASE,
+                size: RTC_SIZE
+            })
+        );
         assert_eq!(
             c.layout.fb,
             Some(FbLayout {
@@ -92,11 +125,24 @@ mod tests {
         assert!(matches!(c.validate(), Err(ConfigError::RamOverflow { .. })));
 
         let mut c = Config::default();
-        c.layout.fb = Some(FbLayout { base: 0, width: 0, height: 480, bpp: 2 });
+        c.layout.fb = Some(FbLayout {
+            base: 0,
+            width: 0,
+            height: 480,
+            bpp: 2,
+        });
         assert!(matches!(c.validate(), Err(ConfigError::FbZeroDim { .. })));
 
         let mut c = Config::default();
-        c.layout.fb = Some(FbLayout { base: 0, width: u32::MAX, height: u32::MAX, bpp: 2 });
-        assert!(matches!(c.validate(), Err(ConfigError::FbSizeOverflow { .. })));
+        c.layout.fb = Some(FbLayout {
+            base: 0,
+            width: u32::MAX,
+            height: u32::MAX,
+            bpp: 2,
+        });
+        assert!(matches!(
+            c.validate(),
+            Err(ConfigError::FbSizeOverflow { .. })
+        ));
     }
 }

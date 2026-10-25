@@ -24,7 +24,11 @@ impl Cpu {
             let (start, end) = match a {
                 1 => {
                     // TOR
-                    let start = if i == 0 { 0 } else { u64::from(self.csr.pmpaddr[i - 1]) << 2 };
+                    let start = if i == 0 {
+                        0
+                    } else {
+                        u64::from(self.csr.pmpaddr[i - 1]) << 2
+                    };
                     (start, u64::from(self.csr.pmpaddr[i]) << 2)
                 }
                 2 => {
@@ -57,7 +61,10 @@ impl Cpu {
                 AccessType::Store => cfg & 0x02 != 0,
             };
         }
-        if self.priv_ == Priv::Machine { !any_locked } else { false }
+        if self.priv_ == Priv::Machine {
+            !any_locked
+        } else {
+            false
+        }
     }
-
 }

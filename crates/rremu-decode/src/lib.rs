@@ -36,12 +36,25 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
     let illegal = DecodeError::Illegal { bits: word, pc };
 
     match opcode {
-        0b0110111 => Ok(Instruction::Lui { rd, imm: word & 0xffff_f000 }),
-        0b0010111 => Ok(Instruction::Auipc { rd, imm: word & 0xffff_f000 }),
-        0b1101111 => Ok(Instruction::Jal { rd, imm: imm_j(word) }),
+        0b0110111 => Ok(Instruction::Lui {
+            rd,
+            imm: word & 0xffff_f000,
+        }),
+        0b0010111 => Ok(Instruction::Auipc {
+            rd,
+            imm: word & 0xffff_f000,
+        }),
+        0b1101111 => Ok(Instruction::Jal {
+            rd,
+            imm: imm_j(word),
+        }),
         0b1100111 => {
             if funct3 == 0b000 {
-                Ok(Instruction::Jalr { rd, rs1, imm: imm_i(word) })
+                Ok(Instruction::Jalr {
+                    rd,
+                    rs1,
+                    imm: imm_i(word),
+                })
             } else {
                 Err(illegal)
             }
@@ -105,14 +118,26 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 0b111 => Ok(Instruction::Andi { rd, rs1, imm }),
                 0b001 => {
                     if funct7 == 0 {
-                        Ok(Instruction::Slli { rd, rs1, shamt: rs2 })
+                        Ok(Instruction::Slli {
+                            rd,
+                            rs1,
+                            shamt: rs2,
+                        })
                     } else {
                         Err(illegal)
                     }
                 }
                 0b101 => match funct7 {
-                    0b0000000 => Ok(Instruction::Srli { rd, rs1, shamt: rs2 }),
-                    0b0100000 => Ok(Instruction::Srai { rd, rs1, shamt: rs2 }),
+                    0b0000000 => Ok(Instruction::Srli {
+                        rd,
+                        rs1,
+                        shamt: rs2,
+                    }),
+                    0b0100000 => Ok(Instruction::Srai {
+                        rd,
+                        rs1,
+                        shamt: rs2,
+                    }),
                     _ => Err(illegal),
                 },
                 _ => Err(illegal),
@@ -149,26 +174,50 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 (0b0000100, rm) if valid_fp_rm(rm) => Ok(Instruction::FsubS { rd, rs1, rs2, rm }),
                 (0b0001000, rm) if valid_fp_rm(rm) => Ok(Instruction::FmulS { rd, rs1, rs2, rm }),
                 (0b0001100, rm) if valid_fp_rm(rm) => Ok(Instruction::FdivS { rd, rs1, rs2, rm }),
-                (0b0101100, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FsqrtS { rd, rs1, rm }),
+                (0b0101100, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FsqrtS { rd, rs1, rm })
+                }
                 (0b0000001, rm) if valid_fp_rm(rm) => Ok(Instruction::FaddD { rd, rs1, rs2, rm }),
                 (0b0000101, rm) if valid_fp_rm(rm) => Ok(Instruction::FsubD { rd, rs1, rs2, rm }),
                 (0b0001001, rm) if valid_fp_rm(rm) => Ok(Instruction::FmulD { rd, rs1, rs2, rm }),
                 (0b0001101, rm) if valid_fp_rm(rm) => Ok(Instruction::FdivD { rd, rs1, rs2, rm }),
-                (0b0101101, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FsqrtD { rd, rs1, rm }),
+                (0b0101101, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FsqrtD { rd, rs1, rm })
+                }
                 (0b0010100, 0b000) => Ok(Instruction::FminS { rd, rs1, rs2 }),
                 (0b0010100, 0b001) => Ok(Instruction::FmaxS { rd, rs1, rs2 }),
                 (0b0010101, 0b000) => Ok(Instruction::FminD { rd, rs1, rs2 }),
                 (0b0010101, 0b001) => Ok(Instruction::FmaxD { rd, rs1, rs2 }),
-                (0b1100000, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtWS { rd, rs1, rm }),
-                (0b1100000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtWuS { rd, rs1, rm }),
-                (0b1100001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtWD { rd, rs1, rm }),
-                (0b1100001, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtWuD { rd, rs1, rm }),
-                (0b1101000, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtSW { rd, rs1, rm }),
-                (0b1101000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtSWu { rd, rs1, rm }),
-                (0b1101001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtDW { rd, rs1, rm }),
-                (0b1101001, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtDWu { rd, rs1, rm }),
-                (0b0100000, rm) if rs2 == 1 && valid_fp_rm(rm) => Ok(Instruction::FcvtSD { rd, rs1, rm }),
-                (0b0100001, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FcvtDS { rd, rs1, rm }),
+                (0b1100000, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtWS { rd, rs1, rm })
+                }
+                (0b1100000, rm) if rs2 == 1 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtWuS { rd, rs1, rm })
+                }
+                (0b1100001, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtWD { rd, rs1, rm })
+                }
+                (0b1100001, rm) if rs2 == 1 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtWuD { rd, rs1, rm })
+                }
+                (0b1101000, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtSW { rd, rs1, rm })
+                }
+                (0b1101000, rm) if rs2 == 1 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtSWu { rd, rs1, rm })
+                }
+                (0b1101001, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtDW { rd, rs1, rm })
+                }
+                (0b1101001, rm) if rs2 == 1 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtDWu { rd, rs1, rm })
+                }
+                (0b0100000, rm) if rs2 == 1 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtSD { rd, rs1, rm })
+                }
+                (0b0100001, rm) if rs2 == 0 && valid_fp_rm(rm) => {
+                    Ok(Instruction::FcvtDS { rd, rs1, rm })
+                }
                 (0b0010000, 0b000) => Ok(Instruction::FsgnjS { rd, rs1, rs2 }),
                 (0b0010000, 0b001) => Ok(Instruction::FsgnjnS { rd, rs1, rs2 }),
                 (0b0010000, 0b010) => Ok(Instruction::FsgnjxS { rd, rs1, rs2 }),
@@ -206,31 +255,77 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 _ => Err(illegal),
             }
         }
-        0b0001111 => {
-            match funct3 {
-                0b000 => Ok(Instruction::Fence),
-                0b001 => Ok(Instruction::FenceI),
-                _ => Err(illegal),
-            }
-        }
+        0b0001111 => match funct3 {
+            0b000 => Ok(Instruction::Fence),
+            0b001 => Ok(Instruction::FenceI),
+            _ => Err(illegal),
+        },
         0b1000011 => match (fmt, funct3) {
-            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddS { rd, rs1, rs2, rs3, rm }),
-            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddD { rd, rs1, rs2, rs3, rm }),
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmaddD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
             _ => Err(illegal),
         },
         0b1000111 => match (fmt, funct3) {
-            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubS { rd, rs1, rs2, rs3, rm }),
-            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubD { rd, rs1, rs2, rs3, rm }),
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FmsubD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
             _ => Err(illegal),
         },
         0b1001011 => match (fmt, funct3) {
-            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubS { rd, rs1, rs2, rs3, rm }),
-            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubD { rd, rs1, rs2, rs3, rm }),
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmsubD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
             _ => Err(illegal),
         },
         0b1001111 => match (fmt, funct3) {
-            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddS { rd, rs1, rs2, rs3, rm }),
-            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddD { rd, rs1, rs2, rs3, rm }),
+            (0, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddS {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
+            (1, rm) if valid_fp_rm(rm) => Ok(Instruction::FnmaddD {
+                rd,
+                rs1,
+                rs2,
+                rs3,
+                rm,
+            }),
             _ => Err(illegal),
         },
         0b1110011 => {
@@ -247,12 +342,36 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                     0x302 => Ok(Instruction::Mret),
                     _ => Err(illegal),
                 },
-                0b001 => Ok(Instruction::Csrrw { rd, csr: csr_addr, rs1 }),
-                0b010 => Ok(Instruction::Csrrs { rd, csr: csr_addr, rs1 }),
-                0b011 => Ok(Instruction::Csrrc { rd, csr: csr_addr, rs1 }),
-                0b101 => Ok(Instruction::Csrrwi { rd, csr: csr_addr, zimm: rs1 }),
-                0b110 => Ok(Instruction::Csrrsi { rd, csr: csr_addr, zimm: rs1 }),
-                0b111 => Ok(Instruction::Csrrci { rd, csr: csr_addr, zimm: rs1 }),
+                0b001 => Ok(Instruction::Csrrw {
+                    rd,
+                    csr: csr_addr,
+                    rs1,
+                }),
+                0b010 => Ok(Instruction::Csrrs {
+                    rd,
+                    csr: csr_addr,
+                    rs1,
+                }),
+                0b011 => Ok(Instruction::Csrrc {
+                    rd,
+                    csr: csr_addr,
+                    rs1,
+                }),
+                0b101 => Ok(Instruction::Csrrwi {
+                    rd,
+                    csr: csr_addr,
+                    zimm: rs1,
+                }),
+                0b110 => Ok(Instruction::Csrrsi {
+                    rd,
+                    csr: csr_addr,
+                    zimm: rs1,
+                }),
+                0b111 => Ok(Instruction::Csrrci {
+                    rd,
+                    csr: csr_addr,
+                    zimm: rs1,
+                }),
                 _ => Err(illegal),
             }
         }
@@ -278,7 +397,7 @@ fn imm_b(word: Word) -> i32 {
     ((word & 0x8000_0000) as i32 >> 19)        // bit12
         | (((word >> 7) as i32 & 1) << 11)     // bit11
         | (((word >> 25) as i32 & 0x3f) << 5)  // bits10:5
-        | (((word >> 8) as i32 & 0xf) << 1)    // bits4:1
+        | (((word >> 8) as i32 & 0xf) << 1) // bits4:1
 }
 
 /// J 型立即数 bit[31]|bits[19:12]|bit[20]|bits[30:21]<<1。
@@ -287,7 +406,7 @@ fn imm_j(word: Word) -> i32 {
     ((word & 0x8000_0000) as i32 >> 11)         // bit20
         | (((word >> 12) as i32 & 0xff) << 12)  // bits19:12
         | (((word >> 20) as i32 & 1) << 11)     // bit11
-        | (((word >> 21) as i32 & 0x3ff) << 1)  // bits10:1
+        | (((word >> 21) as i32 & 0x3ff) << 1) // bits10:1
 }
 
 // =====================================================================
@@ -322,7 +441,6 @@ fn c_shamt(h: u16) -> u8 {
     (((h >> 12) & 0x1) << 5 | ((h >> 2) & 0x1f)) as u8
 }
 
-
 /// c.fld/c.fsd 的 uimm（8 位无符号，bits[2:0]=0）。
 #[inline]
 fn c_imm_fld(h: u16) -> i32 {
@@ -333,9 +451,8 @@ fn c_imm_fld(h: u16) -> i32 {
 /// c.fldsp 的 uimm（9 位无符号，bits[2:0]=0）。
 #[inline]
 fn c_imm_fldsp(h: u16) -> i32 {
-    let uimm = ((h as u32 >> 12) & 0x1) << 5
-        | ((h as u32 >> 5) & 0x3) << 3
-        | ((h as u32 >> 2) & 0x7) << 6;
+    let uimm =
+        ((h as u32 >> 12) & 0x1) << 5 | ((h as u32 >> 5) & 0x3) << 3 | ((h as u32 >> 2) & 0x7) << 6;
     uimm as i32
 }
 
@@ -349,9 +466,8 @@ fn c_imm_fsdsp(h: u16) -> i32 {
 /// c.lw/c.sw 的 uimm（7 位无符号，bits[1:0]=0）。
 #[inline]
 fn c_imm_lw(h: u16) -> i32 {
-    let uimm = ((h as u32 >> 10) & 0x7) << 3
-        | ((h as u32 >> 6) & 0x1) << 2
-        | ((h as u32 >> 5) & 0x1) << 6;
+    let uimm =
+        ((h as u32 >> 10) & 0x7) << 3 | ((h as u32 >> 6) & 0x1) << 2 | ((h as u32 >> 5) & 0x1) << 6;
     uimm as i32
 }
 
@@ -414,17 +530,15 @@ fn c_imm_b(h: u16) -> i32 {
 /// spec: uimm[5]=bit12, uimm[4:2]=bits[6:4], uimm[7:6]=bits[3:2]
 #[inline]
 fn c_imm_lwsp(h: u16) -> i32 {
-    let uimm = ((h as u32 >> 12) & 0x1) << 5
-        | ((h as u32 >> 4) & 0x7) << 2
-        | ((h as u32 >> 2) & 0x3) << 6;
+    let uimm =
+        ((h as u32 >> 12) & 0x1) << 5 | ((h as u32 >> 4) & 0x7) << 2 | ((h as u32 >> 2) & 0x3) << 6;
     uimm as i32
 }
 
 /// c.swsp 的 uimm（8 位无符号，bits[1:0]=0）。
 #[inline]
 fn c_imm_swsp(h: u16) -> i32 {
-    let uimm = ((h as u32 >> 9) & 0xf) << 2
-        | ((h as u32 >> 7) & 0x3) << 6;
+    let uimm = ((h as u32 >> 9) & 0xf) << 2 | ((h as u32 >> 7) & 0x3) << 6;
     uimm as i32
 }
 
@@ -432,7 +546,10 @@ fn c_imm_swsp(h: u16) -> i32 {
 ///
 /// 调用方需保证 `instr_len(half) == 2`（即 bits[1:0] != 11）。
 pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
-    let illegal = DecodeError::Illegal { bits: half as Word, pc };
+    let illegal = DecodeError::Illegal {
+        bits: half as Word,
+        pc,
+    };
     let op = (half & 0b11) as u8;
     let funct3 = ((half >> 13) & 0b111) as u8;
 
@@ -466,25 +583,41 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             // c.fld: rd'=bits[4:2], rs1'=bits[9:7]
             let rd = creg(((half >> 2) & 0x7) as u8);
             let rs1 = creg(((half >> 7) & 0x7) as u8);
-            Ok(Instruction::CFld { rd, rs1, imm: c_imm_fld(half) })
+            Ok(Instruction::CFld {
+                rd,
+                rs1,
+                imm: c_imm_fld(half),
+            })
         }
         (0b00, 0b011) => {
             // c.flw (RV32): 与 c.lw 相同的 uimm
             let rd = creg(((half >> 2) & 0x7) as u8);
             let rs1 = creg(((half >> 7) & 0x7) as u8);
-            Ok(Instruction::CFlw { rd, rs1, imm: c_imm_lw(half) })
+            Ok(Instruction::CFlw {
+                rd,
+                rs1,
+                imm: c_imm_lw(half),
+            })
         }
         (0b00, 0b101) => {
             // c.fsd
             let rs1 = creg(((half >> 7) & 0x7) as u8);
             let rs2 = creg(((half >> 2) & 0x7) as u8);
-            Ok(Instruction::CFsd { rs1, rs2, imm: c_imm_fld(half) })
+            Ok(Instruction::CFsd {
+                rs1,
+                rs2,
+                imm: c_imm_fld(half),
+            })
         }
         (0b00, 0b111) => {
             // c.fsw (RV32)
             let rs1 = creg(((half >> 7) & 0x7) as u8);
             let rs2 = creg(((half >> 2) & 0x7) as u8);
-            Ok(Instruction::CFsw { rs1, rs2, imm: c_imm_lw(half) })
+            Ok(Instruction::CFsw {
+                rs1,
+                rs2,
+                imm: c_imm_lw(half),
+            })
         }
         (0b00, _) => Err(illegal),
 
@@ -533,11 +666,17 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
             match funct2 {
                 0b00 => {
                     // c.srli: 6 位 shamt
-                    Ok(Instruction::CSrli { rd, shamt: c_shamt(half) })
+                    Ok(Instruction::CSrli {
+                        rd,
+                        shamt: c_shamt(half),
+                    })
                 }
                 0b01 => {
                     // c.srai
-                    Ok(Instruction::CSrai { rd, shamt: c_shamt(half) })
+                    Ok(Instruction::CSrai {
+                        rd,
+                        shamt: c_shamt(half),
+                    })
                 }
                 0b10 => {
                     // c.andi
@@ -581,7 +720,10 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
         (0b10, 0b000) => {
             // c.slli: rd=bits[11:7], 6 位 shamt
             let rd = ((half >> 7) & 0x1f) as u8;
-            Ok(Instruction::CSlli { rd, shamt: c_shamt(half) })
+            Ok(Instruction::CSlli {
+                rd,
+                shamt: c_shamt(half),
+            })
         }
         (0b10, 0b010) => {
             // c.lwsp: rd=bits[11:7], uimm from bits[12|6:4|3:2]
@@ -629,22 +771,34 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
         (0b10, 0b001) => {
             // c.fldsp
             let rd = ((half >> 7) & 0x1f) as u8;
-            Ok(Instruction::CFldsp { rd, imm: c_imm_fldsp(half) })
+            Ok(Instruction::CFldsp {
+                rd,
+                imm: c_imm_fldsp(half),
+            })
         }
         (0b10, 0b011) => {
             // c.flwsp (RV32)
             let rd = ((half >> 7) & 0x1f) as u8;
-            Ok(Instruction::CFlwsp { rd, imm: c_imm_lwsp(half) })
+            Ok(Instruction::CFlwsp {
+                rd,
+                imm: c_imm_lwsp(half),
+            })
         }
         (0b10, 0b101) => {
             // c.fsdsp
             let rs2 = ((half >> 2) & 0x1f) as u8;
-            Ok(Instruction::CFsdsp { rs2, imm: c_imm_fsdsp(half) })
+            Ok(Instruction::CFsdsp {
+                rs2,
+                imm: c_imm_fsdsp(half),
+            })
         }
         (0b10, 0b111) => {
             // c.fswsp (RV32)
             let rs2 = ((half >> 2) & 0x1f) as u8;
-            Ok(Instruction::CFswsp { rs2, imm: c_imm_swsp(half) })
+            Ok(Instruction::CFswsp {
+                rs2,
+                imm: c_imm_swsp(half),
+            })
         }
         (0b10, _) => Err(illegal),
 
@@ -659,7 +813,9 @@ pub fn decode16(half: u16, pc: Address) -> Result<Instruction, DecodeError> {
 // C extension encoder (与 decode16 互为逆运算，供测试 round-trip 使用)
 // ---------------------------------------------------------------------------
 
-fn creg_inv(r: u8) -> u16 { (r - 8) as u16 }
+fn creg_inv(r: u8) -> u16 {
+    (r - 8) as u16
+}
 
 pub fn encode_c(instr: &Instruction) -> u16 {
     match *instr {
@@ -703,16 +859,25 @@ pub fn encode_c(instr: &Instruction) -> u16 {
             (0b010u16 << 13) | (b12 << 12) | ((rd as u16) << 7) | (lo << 2) | 0b01
         }
         Instruction::CAddi16sp { imm } => {
-                let raw = imm as u32;
-                let b9 = ((raw >> 9) & 1) as u16;
-                let b4 = ((raw >> 4) & 1) as u16;
-                let b6 = ((raw >> 6) & 1) as u16;
-                let b8_7 = ((raw >> 7) & 0x3) as u16;
-                let b5 = ((raw >> 5) & 1) as u16;
-                let b3 = ((raw >> 3) & 1) as u16;
-                let b2 = ((raw >> 2) & 1) as u16;
-                (0b011u16 << 13) | (b9 << 12) | (2u16 << 7) | (b4 << 6) | (b6 << 5) | (b8_7 << 3) | (b5 << 2) | (b3 << 11) | (b2 << 10) | 0b01
-            }
+            let raw = imm as u32;
+            let b9 = ((raw >> 9) & 1) as u16;
+            let b4 = ((raw >> 4) & 1) as u16;
+            let b6 = ((raw >> 6) & 1) as u16;
+            let b8_7 = ((raw >> 7) & 0x3) as u16;
+            let b5 = ((raw >> 5) & 1) as u16;
+            let b3 = ((raw >> 3) & 1) as u16;
+            let b2 = ((raw >> 2) & 1) as u16;
+            (0b011u16 << 13)
+                | (b9 << 12)
+                | (2u16 << 7)
+                | (b4 << 6)
+                | (b6 << 5)
+                | (b8_7 << 3)
+                | (b5 << 2)
+                | (b3 << 11)
+                | (b2 << 10)
+                | 0b01
+        }
         Instruction::CLui { rd, imm } => {
             let v = imm >> 12;
             let b12 = ((v >> 5) & 1) as u16;
@@ -749,10 +914,14 @@ pub fn encode_c(instr: &Instruction) -> u16 {
             (0b010u16 << 13) | (b5 << 12) | ((rd as u16) << 7) | (b4_2 << 4) | (b7_6 << 2) | 0b10
         }
         Instruction::CJr { rs1 } => (0b100u16 << 13) | ((rs1 as u16) << 7) | 0b10,
-        Instruction::CMv { rd, rs2 } => (0b100u16 << 13) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10,
+        Instruction::CMv { rd, rs2 } => {
+            (0b100u16 << 13) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10
+        }
         Instruction::CEbreak => (0b100u16 << 13) | (1 << 12) | 0b10,
         Instruction::CJalr { rs1 } => (0b100u16 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10,
-        Instruction::CAdd { rd, rs2 } => (0b100u16 << 13) | (1 << 12) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10,
+        Instruction::CAdd { rd, rs2 } => {
+            (0b100u16 << 13) | (1 << 12) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10
+        }
         Instruction::CSwsp { rs2, imm } => {
             let uimm = imm as u32;
             let b5_2 = ((uimm >> 2) & 0xf) as u16;
@@ -833,7 +1002,16 @@ fn encode_cj(imm: i32, funct3: u16) -> u16 {
     let b7 = ((raw >> 7) & 1) as u16;
     let b3_1 = ((raw >> 1) & 0x7) as u16;
     let b5 = ((raw >> 5) & 1) as u16;
-    (funct3 << 13) | (b11 << 12) | (b4 << 11) | (b9_8 << 9) | (b10 << 8) | (b6 << 7) | (b7 << 6) | (b3_1 << 3) | (b5 << 2) | 0b01
+    (funct3 << 13)
+        | (b11 << 12)
+        | (b4 << 11)
+        | (b9_8 << 9)
+        | (b10 << 8)
+        | (b6 << 7)
+        | (b7 << 6)
+        | (b3_1 << 3)
+        | (b5 << 2)
+        | 0b01
 }
 
 fn encode_cb_shift(rd: u8, shamt: u8, funct2: u16) -> u16 {
@@ -858,7 +1036,14 @@ fn encode_cb_branch(rs1: u8, imm: i32, funct3: u16) -> u16 {
     let b7_6 = ((raw >> 6) & 0x3) as u16;
     let b2_1 = ((raw >> 1) & 0x3) as u16;
     let b5 = ((raw >> 5) & 1) as u16;
-    (funct3 << 13) | (b8 << 12) | (b4_3 << 10) | (rs1_p << 7) | (b7_6 << 5) | (b2_1 << 3) | (b5 << 2) | 0b01
+    (funct3 << 13)
+        | (b8 << 12)
+        | (b4_3 << 10)
+        | (rs1_p << 7)
+        | (b7_6 << 5)
+        | (b2_1 << 3)
+        | (b5 << 2)
+        | 0b01
 }
 
 #[cfg(test)]
@@ -868,17 +1053,36 @@ mod tests {
 
     // ---- 编码辅助 ----
     fn i_enc(op: u32, rd: u8, f3: u32, rs1: u8, imm: i32) -> Word {
-        ((imm as u32 & 0xfff) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | op
+        ((imm as u32 & 0xfff) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | (u32::from(rd) << 7)
+            | op
     }
     fn r_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
-        (f7 << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b0110011
+        (f7 << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | (u32::from(rd) << 7)
+            | 0b0110011
     }
     fn s_enc(f3: u32, rs1: u8, rs2: u8, imm: i32) -> Word {
         let i = imm as u32;
-        (((i >> 5) & 0x7f) << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | ((i & 0x1f) << 7) | 0b0100011
+        (((i >> 5) & 0x7f) << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | ((i & 0x1f) << 7)
+            | 0b0100011
     }
     fn fp_enc(rd: u8, f3: u32, rs1: u8, rs2: u8, f7: u32) -> Word {
-        (f7 << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b1010011
+        (f7 << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | (u32::from(rd) << 7)
+            | 0b1010011
     }
     fn fp_fma_enc(op: u32, rd: u8, rs1: u8, rs2: u8, rs3: u8, fmt: u32, rm: u32) -> Word {
         (u32::from(rs3) << 27)
@@ -907,7 +1111,14 @@ mod tests {
         let b11 = (o >> 11) & 1;
         let b10_5 = (o >> 5) & 0x3f;
         let b4_1 = (o >> 1) & 0xf;
-        (b12 << 31) | (b10_5 << 25) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (b4_1 << 8) | (b11 << 7) | 0b1100011
+        (b12 << 31)
+            | (b10_5 << 25)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | (b4_1 << 8)
+            | (b11 << 7)
+            | 0b1100011
     }
     fn u_enc(op: u32, rd: u8, imm20: u32) -> Word {
         (imm20 << 12) | (u32::from(rd) << 7) | op
@@ -918,7 +1129,12 @@ mod tests {
         let b19_12 = (o >> 12) & 0xff;
         let b11 = (o >> 11) & 1;
         let b10_1 = (o >> 1) & 0x3ff;
-        (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12) | (u32::from(rd) << 7) | 0b1101111
+        (b20 << 31)
+            | (b10_1 << 21)
+            | (b11 << 20)
+            | (b19_12 << 12)
+            | (u32::from(rd) << 7)
+            | 0b1101111
     }
 
     const PC: Address = 0x8000_0000;
@@ -933,71 +1149,231 @@ mod tests {
 
     #[test]
     fn decode_u_type() {
-        assert_eq!(decode32(u_enc(0b0110111, 10, 0x12345), PC), Ok(Instruction::Lui { rd: 10, imm: 0x1234_5000 }));
-        assert_eq!(decode32(u_enc(0b0010111, 2, 0xfffff), PC), Ok(Instruction::Auipc { rd: 2, imm: 0xffff_f000 }));
+        assert_eq!(
+            decode32(u_enc(0b0110111, 10, 0x12345), PC),
+            Ok(Instruction::Lui {
+                rd: 10,
+                imm: 0x1234_5000
+            })
+        );
+        assert_eq!(
+            decode32(u_enc(0b0010111, 2, 0xfffff), PC),
+            Ok(Instruction::Auipc {
+                rd: 2,
+                imm: 0xffff_f000
+            })
+        );
     }
 
     #[test]
     fn decode_jal_jalr() {
-        assert_eq!(decode32(j_enc(1, 2048), PC), Ok(Instruction::Jal { rd: 1, imm: 2048 }));
-        assert_eq!(decode32(j_enc(1, -4096), PC), Ok(Instruction::Jal { rd: 1, imm: -4096 }));
-        assert_eq!(decode32(i_enc(0b1100111, 1, 0, 5, -8), PC), Ok(Instruction::Jalr { rd: 1, rs1: 5, imm: -8 }));
+        assert_eq!(
+            decode32(j_enc(1, 2048), PC),
+            Ok(Instruction::Jal { rd: 1, imm: 2048 })
+        );
+        assert_eq!(
+            decode32(j_enc(1, -4096), PC),
+            Ok(Instruction::Jal { rd: 1, imm: -4096 })
+        );
+        assert_eq!(
+            decode32(i_enc(0b1100111, 1, 0, 5, -8), PC),
+            Ok(Instruction::Jalr {
+                rd: 1,
+                rs1: 5,
+                imm: -8
+            })
+        );
         // jalr funct3 != 0 非法
         assert!(decode32(i_enc(0b1100111, 1, 1, 5, 0), PC).is_err());
     }
 
     #[test]
     fn decode_i_imm_ops() {
-        assert_eq!(decode32(i_enc(0b0010011, 2, 0b000, 2, 16), PC), Ok(Instruction::Addi { rd: 2, rs1: 2, imm: 16 }));
-        assert_eq!(decode32(i_enc(0b0010011, 3, 0b010, 4, -1), PC), Ok(Instruction::Slti { rd: 3, rs1: 4, imm: -1 }));
-        assert_eq!(decode32(i_enc(0b0010011, 3, 0b011, 4, -1), PC), Ok(Instruction::Sltiu { rd: 3, rs1: 4, imm: -1 }));
-        assert_eq!(decode32(i_enc(0b0010011, 5, 0b100, 6, 0x7ff), PC), Ok(Instruction::Xori { rd: 5, rs1: 6, imm: 0x7ff }));
-        assert_eq!(decode32(i_enc(0b0010011, 5, 0b110, 6, -16), PC), Ok(Instruction::Ori { rd: 5, rs1: 6, imm: -16 }));
-        assert_eq!(decode32(i_enc(0b0010011, 5, 0b111, 6, 0x0f), PC), Ok(Instruction::Andi { rd: 5, rs1: 6, imm: 0x0f }));
+        assert_eq!(
+            decode32(i_enc(0b0010011, 2, 0b000, 2, 16), PC),
+            Ok(Instruction::Addi {
+                rd: 2,
+                rs1: 2,
+                imm: 16
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 3, 0b010, 4, -1), PC),
+            Ok(Instruction::Slti {
+                rd: 3,
+                rs1: 4,
+                imm: -1
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 3, 0b011, 4, -1), PC),
+            Ok(Instruction::Sltiu {
+                rd: 3,
+                rs1: 4,
+                imm: -1
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 5, 0b100, 6, 0x7ff), PC),
+            Ok(Instruction::Xori {
+                rd: 5,
+                rs1: 6,
+                imm: 0x7ff
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 5, 0b110, 6, -16), PC),
+            Ok(Instruction::Ori {
+                rd: 5,
+                rs1: 6,
+                imm: -16
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 5, 0b111, 6, 0x0f), PC),
+            Ok(Instruction::Andi {
+                rd: 5,
+                rs1: 6,
+                imm: 0x0f
+            })
+        );
     }
 
     #[test]
     fn decode_i_shifts() {
-        assert_eq!(decode32(i_enc(0b0010011, 1, 0b001, 2, 3), PC), Ok(Instruction::Slli { rd: 1, rs1: 2, shamt: 3 }));
-        assert_eq!(decode32(i_enc(0b0010011, 1, 0b101, 2, 5), PC), Ok(Instruction::Srli { rd: 1, rs1: 2, shamt: 5 }));
-        assert_eq!(decode32(i_enc(0b0010011, 1, 0b101, 2, 31) | (0b0100000 << 25), PC), Ok(Instruction::Srai { rd: 1, rs1: 2, shamt: 31 }));
+        assert_eq!(
+            decode32(i_enc(0b0010011, 1, 0b001, 2, 3), PC),
+            Ok(Instruction::Slli {
+                rd: 1,
+                rs1: 2,
+                shamt: 3
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 1, 0b101, 2, 5), PC),
+            Ok(Instruction::Srli {
+                rd: 1,
+                rs1: 2,
+                shamt: 5
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0010011, 1, 0b101, 2, 31) | (0b0100000 << 25), PC),
+            Ok(Instruction::Srai {
+                rd: 1,
+                rs1: 2,
+                shamt: 31
+            })
+        );
         // slli funct7 != 0 非法
         assert!(decode32(i_enc(0b0010011, 1, 0b001, 2, 3) | (1 << 25), PC).is_err());
     }
 
     #[test]
     fn decode_loads() {
-        assert_eq!(decode32(i_enc(0b0000011, 10, 0b000, 2, -1), PC), Ok(Instruction::Lb { rd: 10, rs1: 2, imm: -1 }));
-        assert_eq!(decode32(i_enc(0b0000011, 10, 0b001, 2, 2), PC), Ok(Instruction::Lh { rd: 10, rs1: 2, imm: 2 }));
-        assert_eq!(decode32(i_enc(0b0000011, 10, 0b010, 2, 4), PC), Ok(Instruction::Lw { rd: 10, rs1: 2, imm: 4 }));
-        assert_eq!(decode32(i_enc(0b0000011, 10, 0b100, 2, 0), PC), Ok(Instruction::Lbu { rd: 10, rs1: 2, imm: 0 }));
-        assert_eq!(decode32(i_enc(0b0000011, 10, 0b101, 2, 6), PC), Ok(Instruction::Lhu { rd: 10, rs1: 2, imm: 6 }));
+        assert_eq!(
+            decode32(i_enc(0b0000011, 10, 0b000, 2, -1), PC),
+            Ok(Instruction::Lb {
+                rd: 10,
+                rs1: 2,
+                imm: -1
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0000011, 10, 0b001, 2, 2), PC),
+            Ok(Instruction::Lh {
+                rd: 10,
+                rs1: 2,
+                imm: 2
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0000011, 10, 0b010, 2, 4), PC),
+            Ok(Instruction::Lw {
+                rd: 10,
+                rs1: 2,
+                imm: 4
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0000011, 10, 0b100, 2, 0), PC),
+            Ok(Instruction::Lbu {
+                rd: 10,
+                rs1: 2,
+                imm: 0
+            })
+        );
+        assert_eq!(
+            decode32(i_enc(0b0000011, 10, 0b101, 2, 6), PC),
+            Ok(Instruction::Lhu {
+                rd: 10,
+                rs1: 2,
+                imm: 6
+            })
+        );
     }
 
     #[test]
     fn decode_stores() {
-        assert_eq!(decode32(s_enc(0b000, 2, 11, -8), PC), Ok(Instruction::Sb { rs1: 2, rs2: 11, imm: -8 }));
-        assert_eq!(decode32(s_enc(0b001, 2, 11, 4), PC), Ok(Instruction::Sh { rs1: 2, rs2: 11, imm: 4 }));
-        assert_eq!(decode32(s_enc(0b010, 2, 11, 2047), PC), Ok(Instruction::Sw { rs1: 2, rs2: 11, imm: 2047 }));
+        assert_eq!(
+            decode32(s_enc(0b000, 2, 11, -8), PC),
+            Ok(Instruction::Sb {
+                rs1: 2,
+                rs2: 11,
+                imm: -8
+            })
+        );
+        assert_eq!(
+            decode32(s_enc(0b001, 2, 11, 4), PC),
+            Ok(Instruction::Sh {
+                rs1: 2,
+                rs2: 11,
+                imm: 4
+            })
+        );
+        assert_eq!(
+            decode32(s_enc(0b010, 2, 11, 2047), PC),
+            Ok(Instruction::Sw {
+                rs1: 2,
+                rs2: 11,
+                imm: 2047
+            })
+        );
     }
 
     #[test]
     fn decode_fp_load_store() {
         assert_eq!(
             decode32(fp_load_enc(0b010, 10, 2, -4), PC),
-            Ok(Instruction::Flw { rd: 10, rs1: 2, imm: -4 })
+            Ok(Instruction::Flw {
+                rd: 10,
+                rs1: 2,
+                imm: -4
+            })
         );
         assert_eq!(
             decode32(fp_load_enc(0b011, 11, 3, 8), PC),
-            Ok(Instruction::Fld { rd: 11, rs1: 3, imm: 8 })
+            Ok(Instruction::Fld {
+                rd: 11,
+                rs1: 3,
+                imm: 8
+            })
         );
         assert_eq!(
             decode32(fp_store_enc(0b010, 4, 12, 16), PC),
-            Ok(Instruction::Fsw { rs1: 4, rs2: 12, imm: 16 })
+            Ok(Instruction::Fsw {
+                rs1: 4,
+                rs2: 12,
+                imm: 16
+            })
         );
         assert_eq!(
             decode32(fp_store_enc(0b011, 5, 13, -8), PC),
-            Ok(Instruction::Fsd { rs1: 5, rs2: 13, imm: -8 })
+            Ok(Instruction::Fsd {
+                rs1: 5,
+                rs2: 13,
+                imm: -8
+            })
         );
         assert!(matches!(
             decode32(fp_load_enc(0b001, 1, 2, 0), PC),
@@ -1013,35 +1389,67 @@ mod tests {
     fn decode_fp_move_sign_compare() {
         assert_eq!(
             decode32(fp_enc(1, 0b000, 2, 3, 0b0010000), PC),
-            Ok(Instruction::FsgnjS { rd: 1, rs1: 2, rs2: 3 })
+            Ok(Instruction::FsgnjS {
+                rd: 1,
+                rs1: 2,
+                rs2: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(1, 0b001, 2, 3, 0b0010000), PC),
-            Ok(Instruction::FsgnjnS { rd: 1, rs1: 2, rs2: 3 })
+            Ok(Instruction::FsgnjnS {
+                rd: 1,
+                rs1: 2,
+                rs2: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(1, 0b010, 2, 3, 0b0010000), PC),
-            Ok(Instruction::FsgnjxS { rd: 1, rs1: 2, rs2: 3 })
+            Ok(Instruction::FsgnjxS {
+                rd: 1,
+                rs1: 2,
+                rs2: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(1, 0b000, 2, 3, 0b0010001), PC),
-            Ok(Instruction::FsgnjD { rd: 1, rs1: 2, rs2: 3 })
+            Ok(Instruction::FsgnjD {
+                rd: 1,
+                rs1: 2,
+                rs2: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 0b000, 5, 6, 0b1010000), PC),
-            Ok(Instruction::FleS { rd: 4, rs1: 5, rs2: 6 })
+            Ok(Instruction::FleS {
+                rd: 4,
+                rs1: 5,
+                rs2: 6
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 0b001, 5, 6, 0b1010000), PC),
-            Ok(Instruction::FltS { rd: 4, rs1: 5, rs2: 6 })
+            Ok(Instruction::FltS {
+                rd: 4,
+                rs1: 5,
+                rs2: 6
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 0b010, 5, 6, 0b1010000), PC),
-            Ok(Instruction::FeqS { rd: 4, rs1: 5, rs2: 6 })
+            Ok(Instruction::FeqS {
+                rd: 4,
+                rs1: 5,
+                rs2: 6
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 0b010, 5, 6, 0b1010001), PC),
-            Ok(Instruction::FeqD { rd: 4, rs1: 5, rs2: 6 })
+            Ok(Instruction::FeqD {
+                rd: 4,
+                rs1: 5,
+                rs2: 6
+            })
         );
         assert_eq!(
             decode32(fp_enc(7, 0b000, 8, 0, 0b1110000), PC),
@@ -1078,44 +1486,92 @@ mod tests {
     fn decode_fp_arithmetic() {
         assert_eq!(
             decode32(fp_enc(3, 0, 1, 2, 0b0000000), PC),
-            Ok(Instruction::FaddS { rd: 3, rs1: 1, rs2: 2, rm: 0 })
+            Ok(Instruction::FaddS {
+                rd: 3,
+                rs1: 1,
+                rs2: 2,
+                rm: 0
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 1, 2, 3, 0b0000100), PC),
-            Ok(Instruction::FsubS { rd: 4, rs1: 2, rs2: 3, rm: 1 })
+            Ok(Instruction::FsubS {
+                rd: 4,
+                rs1: 2,
+                rs2: 3,
+                rm: 1
+            })
         );
         assert_eq!(
             decode32(fp_enc(5, 4, 3, 4, 0b0001000), PC),
-            Ok(Instruction::FmulS { rd: 5, rs1: 3, rs2: 4, rm: 4 })
+            Ok(Instruction::FmulS {
+                rd: 5,
+                rs1: 3,
+                rs2: 4,
+                rm: 4
+            })
         );
         assert_eq!(
             decode32(fp_enc(6, 7, 4, 5, 0b0001100), PC),
-            Ok(Instruction::FdivS { rd: 6, rs1: 4, rs2: 5, rm: 7 })
+            Ok(Instruction::FdivS {
+                rd: 6,
+                rs1: 4,
+                rs2: 5,
+                rm: 7
+            })
         );
         assert_eq!(
             decode32(fp_enc(7, 2, 5, 0, 0b0101100), PC),
-            Ok(Instruction::FsqrtS { rd: 7, rs1: 5, rm: 2 })
+            Ok(Instruction::FsqrtS {
+                rd: 7,
+                rs1: 5,
+                rm: 2
+            })
         );
 
         assert_eq!(
             decode32(fp_enc(8, 0, 6, 7, 0b0000001), PC),
-            Ok(Instruction::FaddD { rd: 8, rs1: 6, rs2: 7, rm: 0 })
+            Ok(Instruction::FaddD {
+                rd: 8,
+                rs1: 6,
+                rs2: 7,
+                rm: 0
+            })
         );
         assert_eq!(
             decode32(fp_enc(9, 2, 7, 8, 0b0000101), PC),
-            Ok(Instruction::FsubD { rd: 9, rs1: 7, rs2: 8, rm: 2 })
+            Ok(Instruction::FsubD {
+                rd: 9,
+                rs1: 7,
+                rs2: 8,
+                rm: 2
+            })
         );
         assert_eq!(
             decode32(fp_enc(10, 3, 8, 9, 0b0001001), PC),
-            Ok(Instruction::FmulD { rd: 10, rs1: 8, rs2: 9, rm: 3 })
+            Ok(Instruction::FmulD {
+                rd: 10,
+                rs1: 8,
+                rs2: 9,
+                rm: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(11, 4, 9, 10, 0b0001101), PC),
-            Ok(Instruction::FdivD { rd: 11, rs1: 9, rs2: 10, rm: 4 })
+            Ok(Instruction::FdivD {
+                rd: 11,
+                rs1: 9,
+                rs2: 10,
+                rm: 4
+            })
         );
         assert_eq!(
             decode32(fp_enc(12, 7, 10, 0, 0b0101101), PC),
-            Ok(Instruction::FsqrtD { rd: 12, rs1: 10, rm: 7 })
+            Ok(Instruction::FsqrtD {
+                rd: 12,
+                rs1: 10,
+                rm: 7
+            })
         );
 
         // rm=5/6 是保留编码；fsqrt 的 rs2 必须为 0。
@@ -1143,19 +1599,35 @@ mod tests {
     fn decode_fp_minmax() {
         assert_eq!(
             decode32(fp_enc(3, 0, 1, 2, 0b0010100), PC),
-            Ok(Instruction::FminS { rd: 3, rs1: 1, rs2: 2 })
+            Ok(Instruction::FminS {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 1, 2, 3, 0b0010100), PC),
-            Ok(Instruction::FmaxS { rd: 4, rs1: 2, rs2: 3 })
+            Ok(Instruction::FmaxS {
+                rd: 4,
+                rs1: 2,
+                rs2: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(5, 0, 3, 4, 0b0010101), PC),
-            Ok(Instruction::FminD { rd: 5, rs1: 3, rs2: 4 })
+            Ok(Instruction::FminD {
+                rd: 5,
+                rs1: 3,
+                rs2: 4
+            })
         );
         assert_eq!(
             decode32(fp_enc(6, 1, 4, 5, 0b0010101), PC),
-            Ok(Instruction::FmaxD { rd: 6, rs1: 4, rs2: 5 })
+            Ok(Instruction::FmaxD {
+                rd: 6,
+                rs1: 4,
+                rs2: 5
+            })
         );
 
         for funct3 in [2, 3, 4, 7] {
@@ -1170,35 +1642,83 @@ mod tests {
     fn decode_fp_fma() {
         assert_eq!(
             decode32(fp_fma_enc(0b1000011, 3, 1, 2, 5, 0, 0), PC),
-            Ok(Instruction::FmaddS { rd: 3, rs1: 1, rs2: 2, rs3: 5, rm: 0 })
+            Ok(Instruction::FmaddS {
+                rd: 3,
+                rs1: 1,
+                rs2: 2,
+                rs3: 5,
+                rm: 0
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1000011, 4, 2, 3, 6, 1, 7), PC),
-            Ok(Instruction::FmaddD { rd: 4, rs1: 2, rs2: 3, rs3: 6, rm: 7 })
+            Ok(Instruction::FmaddD {
+                rd: 4,
+                rs1: 2,
+                rs2: 3,
+                rs3: 6,
+                rm: 7
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1000111, 5, 3, 4, 7, 0, 1), PC),
-            Ok(Instruction::FmsubS { rd: 5, rs1: 3, rs2: 4, rs3: 7, rm: 1 })
+            Ok(Instruction::FmsubS {
+                rd: 5,
+                rs1: 3,
+                rs2: 4,
+                rs3: 7,
+                rm: 1
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1000111, 6, 4, 5, 8, 1, 2), PC),
-            Ok(Instruction::FmsubD { rd: 6, rs1: 4, rs2: 5, rs3: 8, rm: 2 })
+            Ok(Instruction::FmsubD {
+                rd: 6,
+                rs1: 4,
+                rs2: 5,
+                rs3: 8,
+                rm: 2
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1001011, 7, 5, 6, 9, 0, 3), PC),
-            Ok(Instruction::FnmsubS { rd: 7, rs1: 5, rs2: 6, rs3: 9, rm: 3 })
+            Ok(Instruction::FnmsubS {
+                rd: 7,
+                rs1: 5,
+                rs2: 6,
+                rs3: 9,
+                rm: 3
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1001011, 8, 6, 7, 10, 1, 4), PC),
-            Ok(Instruction::FnmsubD { rd: 8, rs1: 6, rs2: 7, rs3: 10, rm: 4 })
+            Ok(Instruction::FnmsubD {
+                rd: 8,
+                rs1: 6,
+                rs2: 7,
+                rs3: 10,
+                rm: 4
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1001111, 9, 7, 8, 11, 0, 7), PC),
-            Ok(Instruction::FnmaddS { rd: 9, rs1: 7, rs2: 8, rs3: 11, rm: 7 })
+            Ok(Instruction::FnmaddS {
+                rd: 9,
+                rs1: 7,
+                rs2: 8,
+                rs3: 11,
+                rm: 7
+            })
         );
         assert_eq!(
             decode32(fp_fma_enc(0b1001111, 10, 8, 9, 12, 1, 0), PC),
-            Ok(Instruction::FnmaddD { rd: 10, rs1: 8, rs2: 9, rs3: 12, rm: 0 })
+            Ok(Instruction::FnmaddD {
+                rd: 10,
+                rs1: 8,
+                rs2: 9,
+                rs3: 12,
+                rm: 0
+            })
         );
 
         for fmt in [2, 3] {
@@ -1219,43 +1739,83 @@ mod tests {
     fn decode_fp_conversions() {
         assert_eq!(
             decode32(fp_enc(3, 0, 1, 0, 0b1100000), PC),
-            Ok(Instruction::FcvtWS { rd: 3, rs1: 1, rm: 0 })
+            Ok(Instruction::FcvtWS {
+                rd: 3,
+                rs1: 1,
+                rm: 0
+            })
         );
         assert_eq!(
             decode32(fp_enc(4, 1, 2, 1, 0b1100000), PC),
-            Ok(Instruction::FcvtWuS { rd: 4, rs1: 2, rm: 1 })
+            Ok(Instruction::FcvtWuS {
+                rd: 4,
+                rs1: 2,
+                rm: 1
+            })
         );
         assert_eq!(
             decode32(fp_enc(5, 2, 3, 0, 0b1100001), PC),
-            Ok(Instruction::FcvtWD { rd: 5, rs1: 3, rm: 2 })
+            Ok(Instruction::FcvtWD {
+                rd: 5,
+                rs1: 3,
+                rm: 2
+            })
         );
         assert_eq!(
             decode32(fp_enc(6, 3, 4, 1, 0b1100001), PC),
-            Ok(Instruction::FcvtWuD { rd: 6, rs1: 4, rm: 3 })
+            Ok(Instruction::FcvtWuD {
+                rd: 6,
+                rs1: 4,
+                rm: 3
+            })
         );
         assert_eq!(
             decode32(fp_enc(7, 4, 5, 0, 0b1101000), PC),
-            Ok(Instruction::FcvtSW { rd: 7, rs1: 5, rm: 4 })
+            Ok(Instruction::FcvtSW {
+                rd: 7,
+                rs1: 5,
+                rm: 4
+            })
         );
         assert_eq!(
             decode32(fp_enc(8, 7, 6, 1, 0b1101000), PC),
-            Ok(Instruction::FcvtSWu { rd: 8, rs1: 6, rm: 7 })
+            Ok(Instruction::FcvtSWu {
+                rd: 8,
+                rs1: 6,
+                rm: 7
+            })
         );
         assert_eq!(
             decode32(fp_enc(9, 0, 7, 0, 0b1101001), PC),
-            Ok(Instruction::FcvtDW { rd: 9, rs1: 7, rm: 0 })
+            Ok(Instruction::FcvtDW {
+                rd: 9,
+                rs1: 7,
+                rm: 0
+            })
         );
         assert_eq!(
             decode32(fp_enc(10, 1, 8, 1, 0b1101001), PC),
-            Ok(Instruction::FcvtDWu { rd: 10, rs1: 8, rm: 1 })
+            Ok(Instruction::FcvtDWu {
+                rd: 10,
+                rs1: 8,
+                rm: 1
+            })
         );
         assert_eq!(
             decode32(fp_enc(11, 2, 9, 1, 0b0100000), PC),
-            Ok(Instruction::FcvtSD { rd: 11, rs1: 9, rm: 2 })
+            Ok(Instruction::FcvtSD {
+                rd: 11,
+                rs1: 9,
+                rm: 2
+            })
         );
         assert_eq!(
             decode32(fp_enc(12, 3, 10, 0, 0b0100001), PC),
-            Ok(Instruction::FcvtDS { rd: 12, rs1: 10, rm: 3 })
+            Ok(Instruction::FcvtDS {
+                rd: 12,
+                rs1: 10,
+                rm: 3
+            })
         );
 
         // rs2 选择子不合法。
@@ -1283,31 +1843,146 @@ mod tests {
 
     #[test]
     fn decode_branches() {
-        assert_eq!(decode32(b_enc(0b000, 1, 2, -4096), PC), Ok(Instruction::Beq { rs1: 1, rs2: 2, imm: -4096 }));
-        assert_eq!(decode32(b_enc(0b001, 1, 2, 4094), PC), Ok(Instruction::Bne { rs1: 1, rs2: 2, imm: 4094 }));
-        assert_eq!(decode32(b_enc(0b100, 1, 2, -2), PC), Ok(Instruction::Blt { rs1: 1, rs2: 2, imm: -2 }));
-        assert_eq!(decode32(b_enc(0b101, 1, 2, 8), PC), Ok(Instruction::Bge { rs1: 1, rs2: 2, imm: 8 }));
-        assert_eq!(decode32(b_enc(0b110, 1, 2, 16), PC), Ok(Instruction::Bltu { rs1: 1, rs2: 2, imm: 16 }));
-        assert_eq!(decode32(b_enc(0b111, 1, 2, -16), PC), Ok(Instruction::Bgeu { rs1: 1, rs2: 2, imm: -16 }));
+        assert_eq!(
+            decode32(b_enc(0b000, 1, 2, -4096), PC),
+            Ok(Instruction::Beq {
+                rs1: 1,
+                rs2: 2,
+                imm: -4096
+            })
+        );
+        assert_eq!(
+            decode32(b_enc(0b001, 1, 2, 4094), PC),
+            Ok(Instruction::Bne {
+                rs1: 1,
+                rs2: 2,
+                imm: 4094
+            })
+        );
+        assert_eq!(
+            decode32(b_enc(0b100, 1, 2, -2), PC),
+            Ok(Instruction::Blt {
+                rs1: 1,
+                rs2: 2,
+                imm: -2
+            })
+        );
+        assert_eq!(
+            decode32(b_enc(0b101, 1, 2, 8), PC),
+            Ok(Instruction::Bge {
+                rs1: 1,
+                rs2: 2,
+                imm: 8
+            })
+        );
+        assert_eq!(
+            decode32(b_enc(0b110, 1, 2, 16), PC),
+            Ok(Instruction::Bltu {
+                rs1: 1,
+                rs2: 2,
+                imm: 16
+            })
+        );
+        assert_eq!(
+            decode32(b_enc(0b111, 1, 2, -16), PC),
+            Ok(Instruction::Bgeu {
+                rs1: 1,
+                rs2: 2,
+                imm: -16
+            })
+        );
     }
 
     #[test]
     fn decode_r_type_all_10() {
-        assert_eq!(decode32(r_enc(3, 0b000, 1, 2, 0b0000000), PC), Ok(Instruction::Add { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b000, 1, 2, 0b0100000), PC), Ok(Instruction::Sub { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b001, 1, 2, 0b0000000), PC), Ok(Instruction::Sll { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b010, 1, 2, 0b0000000), PC), Ok(Instruction::Slt { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b011, 1, 2, 0b0000000), PC), Ok(Instruction::Sltu { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b100, 1, 2, 0b0000000), PC), Ok(Instruction::Xor { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b101, 1, 2, 0b0000000), PC), Ok(Instruction::Srl { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b101, 1, 2, 0b0100000), PC), Ok(Instruction::Sra { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b110, 1, 2, 0b0000000), PC), Ok(Instruction::Or { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(r_enc(3, 0b111, 1, 2, 0b0000000), PC), Ok(Instruction::And { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(
+            decode32(r_enc(3, 0b000, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Add {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b000, 1, 2, 0b0100000), PC),
+            Ok(Instruction::Sub {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b001, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Sll {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b010, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Slt {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b011, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Sltu {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b100, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Xor {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b101, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Srl {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b101, 1, 2, 0b0100000), PC),
+            Ok(Instruction::Sra {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b110, 1, 2, 0b0000000), PC),
+            Ok(Instruction::Or {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(r_enc(3, 0b111, 1, 2, 0b0000000), PC),
+            Ok(Instruction::And {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
     }
 
     #[test]
     fn decode_misc_system() {
-        assert_eq!(decode32(i_enc(0b0001111, 0, 0b000, 0, 0), PC), Ok(Instruction::Fence));
+        assert_eq!(
+            decode32(i_enc(0b0001111, 0, 0b000, 0, 0), PC),
+            Ok(Instruction::Fence)
+        );
         // ecall: imm=0
         let ecall = i_enc(0b1110011, 0, 0b000, 0, 0);
         assert_eq!(decode32(ecall, PC), Ok(Instruction::Ecall));
@@ -1316,11 +1991,32 @@ mod tests {
         assert_eq!(decode32(ebreak, PC), Ok(Instruction::Ebreak));
         // CSR 指令解码
         let csrrw = i_enc(0b1110011, 5, 0b001, 6, 0x300);
-        assert_eq!(decode32(csrrw, PC), Ok(Instruction::Csrrw { rd: 5, csr: 0x300, rs1: 6 }));
+        assert_eq!(
+            decode32(csrrw, PC),
+            Ok(Instruction::Csrrw {
+                rd: 5,
+                csr: 0x300,
+                rs1: 6
+            })
+        );
         let csrrs = i_enc(0b1110011, 7, 0b010, 8, 0x305);
-        assert_eq!(decode32(csrrs, PC), Ok(Instruction::Csrrs { rd: 7, csr: 0x305, rs1: 8 }));
+        assert_eq!(
+            decode32(csrrs, PC),
+            Ok(Instruction::Csrrs {
+                rd: 7,
+                csr: 0x305,
+                rs1: 8
+            })
+        );
         let csrwi = i_enc(0b1110011, 0, 0b101, 3, 0x304);
-        assert_eq!(decode32(csrwi, PC), Ok(Instruction::Csrrwi { rd: 0, csr: 0x304, zimm: 3 }));
+        assert_eq!(
+            decode32(csrwi, PC),
+            Ok(Instruction::Csrrwi {
+                rd: 0,
+                csr: 0x304,
+                zimm: 3
+            })
+        );
         // mret = 0x30200073
         assert_eq!(decode32(0x3020_0073, PC), Ok(Instruction::Mret));
     }
@@ -1329,7 +2025,10 @@ mod tests {
     fn decode_illegal() {
         // 未定义 opcode
         let w = 0b1111111 | (1 << 7);
-        assert_eq!(decode32(w, PC), Err(DecodeError::Illegal { bits: w, pc: PC }));
+        assert_eq!(
+            decode32(w, PC),
+            Err(DecodeError::Illegal { bits: w, pc: PC })
+        );
         // load funct3=011 非法
         assert!(decode32(i_enc(0b0000011, 1, 0b011, 2, 0), PC).is_err());
         // branch funct3=010 非法
@@ -1343,34 +2042,168 @@ mod tests {
     #[test]
     fn decode_m_extension() {
         let m = |f3: u32| r_enc(3, f3, 1, 2, 0b0000001);
-        assert_eq!(decode32(m(0b000), PC), Ok(Instruction::Mul { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b001), PC), Ok(Instruction::Mulh { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b010), PC), Ok(Instruction::Mulhsu { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b011), PC), Ok(Instruction::Mulhu { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b100), PC), Ok(Instruction::Div { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b101), PC), Ok(Instruction::Divu { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b110), PC), Ok(Instruction::Rem { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(m(0b111), PC), Ok(Instruction::Remu { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(
+            decode32(m(0b000), PC),
+            Ok(Instruction::Mul {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b001), PC),
+            Ok(Instruction::Mulh {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b010), PC),
+            Ok(Instruction::Mulhsu {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b011), PC),
+            Ok(Instruction::Mulhu {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b100), PC),
+            Ok(Instruction::Div {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b101), PC),
+            Ok(Instruction::Divu {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b110), PC),
+            Ok(Instruction::Rem {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(m(0b111), PC),
+            Ok(Instruction::Remu {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
     }
 
     fn amo_enc(f5: u32, f3: u32, rs1: u8, rs2: u8, rd: u8) -> Word {
-        (f5 << 27) | (u32::from(rs2) << 20) | (u32::from(rs1) << 15) | (f3 << 12) | (u32::from(rd) << 7) | 0b0101111
+        (f5 << 27)
+            | (u32::from(rs2) << 20)
+            | (u32::from(rs1) << 15)
+            | (f3 << 12)
+            | (u32::from(rd) << 7)
+            | 0b0101111
     }
 
     #[test]
     fn decode_a_extension() {
         let amo = |f5, f3| amo_enc(f5, f3, 1, 2, 3);
-        assert_eq!(decode32(amo(0b00010, 0b010), PC), Ok(Instruction::LrW { rd: 3, rs1: 1 }));
-        assert_eq!(decode32(amo(0b00011, 0b010), PC), Ok(Instruction::ScW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b00001, 0b010), PC), Ok(Instruction::AmoswapW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b00000, 0b010), PC), Ok(Instruction::AmoaddW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b00100, 0b010), PC), Ok(Instruction::AmoxorW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b01100, 0b010), PC), Ok(Instruction::AmoandW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b01000, 0b010), PC), Ok(Instruction::AmoorW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b10000, 0b010), PC), Ok(Instruction::AmominW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b10100, 0b010), PC), Ok(Instruction::AmomaxW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b11000, 0b010), PC), Ok(Instruction::AmominuW { rd: 3, rs1: 1, rs2: 2 }));
-        assert_eq!(decode32(amo(0b11100, 0b010), PC), Ok(Instruction::AmomaxuW { rd: 3, rs1: 1, rs2: 2 }));
+        assert_eq!(
+            decode32(amo(0b00010, 0b010), PC),
+            Ok(Instruction::LrW { rd: 3, rs1: 1 })
+        );
+        assert_eq!(
+            decode32(amo(0b00011, 0b010), PC),
+            Ok(Instruction::ScW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b00001, 0b010), PC),
+            Ok(Instruction::AmoswapW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b00000, 0b010), PC),
+            Ok(Instruction::AmoaddW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b00100, 0b010), PC),
+            Ok(Instruction::AmoxorW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b01100, 0b010), PC),
+            Ok(Instruction::AmoandW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b01000, 0b010), PC),
+            Ok(Instruction::AmoorW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b10000, 0b010), PC),
+            Ok(Instruction::AmominW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b10100, 0b010), PC),
+            Ok(Instruction::AmomaxW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b11000, 0b010), PC),
+            Ok(Instruction::AmominuW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
+        assert_eq!(
+            decode32(amo(0b11100, 0b010), PC),
+            Ok(Instruction::AmomaxuW {
+                rd: 3,
+                rs1: 1,
+                rs2: 2
+            })
+        );
         // 非法 AMO：funct3=011（RV64 .d 变体）与未知 funct5
         assert!(decode32(amo(0b11000, 0b011), PC).is_err());
         assert!(decode32(amo(0b11111, 0b010), PC).is_err());
@@ -1399,14 +2232,21 @@ mod tests {
         let b10_7 = (nzuimm >> 6) & 0xf;
         let b6 = (nzuimm >> 2) & 0x1;
         let b5 = (nzuimm >> 3) & 0x1;
-        (b12_11 << 11) as u16 | (b10_7 << 7) as u16 | (b6 << 6) as u16 | (b5 << 5) as u16 | (u16::from(rd_prime) << 2)
+        (b12_11 << 11) as u16
+            | (b10_7 << 7) as u16
+            | (b6 << 6) as u16
+            | (b5 << 5) as u16
+            | (u16::from(rd_prime) << 2)
     }
 
     #[test]
     fn decode_c_addi4spn() {
         // c.addi4spn x8(x0'), 4  → rd'=0 → x8, nzuimm=4
         let h = ciw_enc(0, 4);
-        assert_eq!(decode16(h, PC), Ok(Instruction::CAddi4spn { rd: 8, imm: 4 }));
+        assert_eq!(
+            decode16(h, PC),
+            Ok(Instruction::CAddi4spn { rd: 8, imm: 4 })
+        );
         // nzuimm=0 非法
         assert!(decode16(ciw_enc(0, 0), PC).is_err());
     }
@@ -1415,28 +2255,72 @@ mod tests {
     fn decode_c_lw_sw() {
         // c.lw x8, 0(x8): rd'=0, rs1'=0, uimm=0
         let lw = 0b010u16 << 13; // funct3=010, op=00
-        assert_eq!(decode16(lw, PC), Ok(Instruction::CLw { rd: 8, rs1: 8, imm: 0 }));
+        assert_eq!(
+            decode16(lw, PC),
+            Ok(Instruction::CLw {
+                rd: 8,
+                rs1: 8,
+                imm: 0
+            })
+        );
         // c.sw x9, 4(x8): rs1'=0 (x8) at bits[9:7], rs2'=1 (x9) at bits[4:2], uimm=4
         // uimm[5:3]=bits[12:10]=0, uimm[2]=bit6=1, uimm[6]=bit5=0 → uimm=4
         let sw = (0b110u16 << 13) | (1 << 6) | (1 << 2); // funct3=110, bit6=1, rs2'=1 (bits[4:2])
-        assert_eq!(decode16(sw, PC), Ok(Instruction::CSw { rs1: 8, rs2: 9, imm: 4 }));
+        assert_eq!(
+            decode16(sw, PC),
+            Ok(Instruction::CSw {
+                rs1: 8,
+                rs2: 9,
+                imm: 4
+            })
+        );
     }
 
     #[test]
     fn decode_c_fp() {
         // c.flw x8, 4(x9): funct3=011, rd'=0, rs1'=1, uimm=4
         let flw = (0b011u16 << 13) | (1 << 7) | (1 << 6);
-        assert_eq!(decode16(flw, PC), Ok(Instruction::CFlw { rd: 8, rs1: 9, imm: 4 }));
+        assert_eq!(
+            decode16(flw, PC),
+            Ok(Instruction::CFlw {
+                rd: 8,
+                rs1: 9,
+                imm: 4
+            })
+        );
 
         // c.fld x10, 24(x9): funct3=001, rd'=2, rs1'=1, uimm=24
         let fld = (0b001u16 << 13) | (3 << 10) | (1 << 7) | (2 << 2);
-        assert_eq!(decode16(fld, PC), Ok(Instruction::CFld { rd: 10, rs1: 9, imm: 24 }));
+        assert_eq!(
+            decode16(fld, PC),
+            Ok(Instruction::CFld {
+                rd: 10,
+                rs1: 9,
+                imm: 24
+            })
+        );
 
         for instr in [
-            Instruction::CFlw { rd: 8, rs1: 9, imm: 4 },
-            Instruction::CFsw { rs1: 8, rs2: 9, imm: 8 },
-            Instruction::CFld { rd: 10, rs1: 11, imm: 16 },
-            Instruction::CFsd { rs1: 12, rs2: 13, imm: 24 },
+            Instruction::CFlw {
+                rd: 8,
+                rs1: 9,
+                imm: 4,
+            },
+            Instruction::CFsw {
+                rs1: 8,
+                rs2: 9,
+                imm: 8,
+            },
+            Instruction::CFld {
+                rd: 10,
+                rs1: 11,
+                imm: 16,
+            },
+            Instruction::CFsd {
+                rs1: 12,
+                rs2: 13,
+                imm: 24,
+            },
             Instruction::CFlwsp { rd: 4, imm: 32 },
             Instruction::CFswsp { rs2: 11, imm: 64 },
             Instruction::CFldsp { rd: 5, imm: 128 },
@@ -1507,7 +2391,10 @@ mod tests {
         assert_eq!(decode16(lwsp, PC), Ok(Instruction::CLwsp { rd: 1, imm: 0 }));
         // c.swsp x1, 0: rs2=1, funct3=110, op=10
         let swsp = (0b110u16 << 13) | (1 << 2) | 0b10;
-        assert_eq!(decode16(swsp, PC), Ok(Instruction::CSwsp { rs2: 1, imm: 0 }));
+        assert_eq!(
+            decode16(swsp, PC),
+            Ok(Instruction::CSwsp { rs2: 1, imm: 0 })
+        );
     }
 
     #[test]
@@ -1547,7 +2434,10 @@ mod tests {
     fn decode_c_alu() {
         // c.srli x8, 1: rd'=0(x8), shamt=1, funct3=100, funct2=00, op=01
         let srli = (0b100u16 << 13) | (1 << 2) | 0b01;
-        assert_eq!(decode16(srli, PC), Ok(Instruction::CSrli { rd: 8, shamt: 1 }));
+        assert_eq!(
+            decode16(srli, PC),
+            Ok(Instruction::CSrli { rd: 8, shamt: 1 })
+        );
         // c.sub x8, x9: rd'=0, rs2'=1, funct2=11, funct2_sub=00
         let sub = (0b100u16 << 13) | (0b11 << 10) | (1 << 2) | 0b01;
         assert_eq!(decode16(sub, PC), Ok(Instruction::CSub { rd: 8, rs2: 9 }));
@@ -1561,8 +2451,16 @@ mod tests {
         // 对每条 C 指令编码后解码，验证与原始指令一致
         let cases: Vec<Instruction> = vec![
             Instruction::CAddi4spn { rd: 8, imm: 4 },
-            Instruction::CLw { rd: 8, rs1: 9, imm: 4 },
-            Instruction::CSw { rs1: 8, rs2: 9, imm: 8 },
+            Instruction::CLw {
+                rd: 8,
+                rs1: 9,
+                imm: 4,
+            },
+            Instruction::CSw {
+                rs1: 8,
+                rs2: 9,
+                imm: 8,
+            },
             Instruction::CAddi { rd: 1, imm: 5 },
             Instruction::CAddi { rd: 3, imm: -7 },
             Instruction::CJal { imm: 42 },
@@ -1570,7 +2468,10 @@ mod tests {
             Instruction::CLi { rd: 5, imm: -1 },
             Instruction::CLi { rd: 2, imm: 31 },
             Instruction::CAddi16sp { imm: -16 },
-            Instruction::CLui { rd: 6, imm: 0x1f000 },
+            Instruction::CLui {
+                rd: 6,
+                imm: 0x1f000,
+            },
             Instruction::CSrli { rd: 8, shamt: 5 },
             Instruction::CSrai { rd: 9, shamt: 31 },
             Instruction::CAndi { rd: 10, imm: -16 },
@@ -1590,10 +2491,26 @@ mod tests {
             Instruction::CJalr { rs1: 8 },
             Instruction::CAdd { rd: 9, rs2: 10 },
             Instruction::CSwsp { rs2: 11, imm: 64 },
-            Instruction::CFlw { rd: 8, rs1: 9, imm: 4 },
-            Instruction::CFsw { rs1: 8, rs2: 9, imm: 8 },
-            Instruction::CFld { rd: 10, rs1: 11, imm: 16 },
-            Instruction::CFsd { rs1: 12, rs2: 13, imm: 24 },
+            Instruction::CFlw {
+                rd: 8,
+                rs1: 9,
+                imm: 4,
+            },
+            Instruction::CFsw {
+                rs1: 8,
+                rs2: 9,
+                imm: 8,
+            },
+            Instruction::CFld {
+                rd: 10,
+                rs1: 11,
+                imm: 16,
+            },
+            Instruction::CFsd {
+                rs1: 12,
+                rs2: 13,
+                imm: 24,
+            },
             Instruction::CFlwsp { rd: 4, imm: 32 },
             Instruction::CFswsp { rs2: 11, imm: 64 },
             Instruction::CFldsp { rd: 5, imm: 128 },
@@ -1601,8 +2518,12 @@ mod tests {
         ];
         for instr in &cases {
             let h = encode_c(instr);
-            let decoded = decode16(h, PC).unwrap_or_else(|e| panic!("decode failed for {instr:?}: {e}"));
-            assert_eq!(decoded, *instr, "round-trip failed for {instr:?}: encoded={h:#06x}, decoded={decoded:?}");
+            let decoded =
+                decode16(h, PC).unwrap_or_else(|e| panic!("decode failed for {instr:?}: {e}"));
+            assert_eq!(
+                decoded, *instr,
+                "round-trip failed for {instr:?}: encoded={h:#06x}, decoded={decoded:?}"
+            );
         }
     }
 
@@ -1620,7 +2541,10 @@ mod tests {
         assert_eq!(h, 0x6531);
         assert_eq!(
             decode16(h, PC),
-            Ok(Instruction::CLui { rd: 10, imm: 0xC000 }),
+            Ok(Instruction::CLui {
+                rd: 10,
+                imm: 0xC000
+            }),
             "c.lui a0 被误判为 c.addi16sp（rd 字段 bits[9:7] 比较缺陷）"
         );
     }
@@ -1630,13 +2554,22 @@ mod tests {
         // HINT 编码应解码为 NOP 等价物；保留编码应 illegal。
         // c.lui nzimm==0（rd=8）→ HINT（CLui{rd:0,imm:0}，执行时不写寄存器）
         let lui_hint: u16 = (0b011 << 13) | (8u16 << 7) | 0b01;
-        assert_eq!(decode16(lui_hint, PC), Ok(Instruction::CLui { rd: 0, imm: 0 }));
+        assert_eq!(
+            decode16(lui_hint, PC),
+            Ok(Instruction::CLui { rd: 0, imm: 0 })
+        );
         // c.addi16sp nzimm==0（rd=2）→ HINT（CAddi16sp{imm:0}，sp 不变）
         let addi16sp_hint: u16 = (0b011 << 13) | (2u16 << 7) | 0b01;
-        assert_eq!(decode16(addi16sp_hint, PC), Ok(Instruction::CAddi16sp { imm: 0 }));
+        assert_eq!(
+            decode16(addi16sp_hint, PC),
+            Ok(Instruction::CAddi16sp { imm: 0 })
+        );
         // c.slli rd==x0 → HINT（CSlli{rd:0}，写 x0 被忽略）
         let slli_hint: u16 = 0b10;
-        assert_eq!(decode16(slli_hint, PC), Ok(Instruction::CSlli { rd: 0, shamt: 0 }));
+        assert_eq!(
+            decode16(slli_hint, PC),
+            Ok(Instruction::CSlli { rd: 0, shamt: 0 })
+        );
         // c.jr x0 → 保留编码（illegal）
         let jr_x0: u16 = (0b100 << 13) | 0b10;
         assert!(decode16(jr_x0, PC).is_err());

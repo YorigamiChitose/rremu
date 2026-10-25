@@ -36,7 +36,12 @@ pub struct Clint {
 impl Clint {
     pub fn new(base: u32) -> Self {
         // mtimecmp 初始 u32::MAX，避免复位后 mtime(0) >= mtimecmp(0) 立即产生虚假 MTI
-        Self { base, msip: 0, mtimecmp: u32::MAX, mtime: 0 }
+        Self {
+            base,
+            msip: 0,
+            mtimecmp: u32::MAX,
+            mtime: 0,
+        }
     }
 
     fn offset(&self, addr: u32) -> u32 {
@@ -80,13 +85,24 @@ impl Clint {
 }
 
 impl BusDevice for Clint {
-    fn read(&mut self, addr: u32, size: AccessSize, _sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        _sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         let off = self.offset(addr);
         let (reg_off, val) = self.reg_at(off).unwrap_or((off, 0));
         Ok(Self::extract(off, reg_off, val, size))
     }
 
-    fn write(&mut self, addr: u32, size: AccessSize, data: u32, _sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        _sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         let off = self.offset(addr);
         if off < REG_MSIP_END {
             let byte_idx = (off - REG_MSIP) as usize;
@@ -105,7 +121,10 @@ impl BusDevice for Clint {
     }
 
     fn write_bytes(&mut self, _addr: u32, _data: &[u8]) -> Result<(), BusError> {
-        Err(BusError::Device { addr: self.base, msg: "cannot bulk-write to clint".to_owned() })
+        Err(BusError::Device {
+            addr: self.base,
+            msg: "cannot bulk-write to clint".to_owned(),
+        })
     }
 
     fn device_name(&self) -> &str {
@@ -209,11 +228,20 @@ mod tests {
         let mut clint = Clint::new(BASE);
         let mut sink = rremu_bus::NullSink;
         // 写 msip = 1
-        clint.write(BASE + REG_MSIP, AccessSize::Word, 1, &mut sink).unwrap();
+        clint
+            .write(BASE + REG_MSIP, AccessSize::Word, 1, &mut sink)
+            .unwrap();
         assert_eq!(clint.msip, 1);
-        assert_eq!(clint.read(BASE + REG_MSIP, AccessSize::Word, &mut sink).unwrap(), 1);
+        assert_eq!(
+            clint
+                .read(BASE + REG_MSIP, AccessSize::Word, &mut sink)
+                .unwrap(),
+            1
+        );
         // 写 msip = 0 清除
-        clint.write(BASE + REG_MSIP, AccessSize::Word, 0, &mut sink).unwrap();
+        clint
+            .write(BASE + REG_MSIP, AccessSize::Word, 0, &mut sink)
+            .unwrap();
         assert_eq!(clint.msip, 0);
     }
 
@@ -221,9 +249,21 @@ mod tests {
     fn read_write_mtimecmp_word() {
         let mut clint = Clint::new(BASE);
         let mut sink = rremu_bus::NullSink;
-        clint.write(BASE + REG_MTIMECMP, AccessSize::Word, 0x1234_5678, &mut sink).unwrap();
+        clint
+            .write(
+                BASE + REG_MTIMECMP,
+                AccessSize::Word,
+                0x1234_5678,
+                &mut sink,
+            )
+            .unwrap();
         assert_eq!(clint.mtimecmp, 0x1234_5678);
-        assert_eq!(clint.read(BASE + REG_MTIMECMP, AccessSize::Word, &mut sink).unwrap(), 0x1234_5678);
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIMECMP, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0x1234_5678
+        );
     }
 
     #[test]
@@ -231,7 +271,12 @@ mod tests {
         let mut clint = Clint::new(BASE);
         let mut sink = rremu_bus::NullSink;
         clint.tick(99);
-        assert_eq!(clint.read(BASE + REG_MTIME, AccessSize::Word, &mut sink).unwrap(), 99);
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIME, AccessSize::Word, &mut sink)
+                .unwrap(),
+            99
+        );
     }
 
     #[test]
@@ -240,7 +285,9 @@ mod tests {
         let mut sink = rremu_bus::NullSink;
         clint.tick(50);
         // 尝试写 mtime → 应被忽略
-        clint.write(BASE + REG_MTIME, AccessSize::Word, 0, &mut sink).unwrap();
+        clint
+            .write(BASE + REG_MTIME, AccessSize::Word, 0, &mut sink)
+            .unwrap();
         assert_eq!(clint.mtime, 50); // 未变
     }
 
@@ -249,23 +296,62 @@ mod tests {
         let mut clint = Clint::new(BASE);
         let mut sink = rremu_bus::NullSink;
         // 写 mtimecmp 的低字节
-        clint.write(BASE + REG_MTIMECMP, AccessSize::Word, 0x00FF_00AA, &mut sink).unwrap();
+        clint
+            .write(
+                BASE + REG_MTIMECMP,
+                AccessSize::Word,
+                0x00FF_00AA,
+                &mut sink,
+            )
+            .unwrap();
         assert_eq!(clint.mtimecmp, 0x00FF_00AA);
         // 读低字节
-        assert_eq!(clint.read(BASE + REG_MTIMECMP, AccessSize::Byte, &mut sink).unwrap(), 0xAA);
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIMECMP, AccessSize::Byte, &mut sink)
+                .unwrap(),
+            0xAA
+        );
         // 读第二字节
-        assert_eq!(clint.read(BASE + REG_MTIMECMP + 1, AccessSize::Byte, &mut sink).unwrap(), 0x00);
-        assert_eq!(clint.read(BASE + REG_MTIMECMP + 2, AccessSize::Byte, &mut sink).unwrap(), 0xFF);
-        assert_eq!(clint.read(BASE + REG_MTIMECMP + 3, AccessSize::Byte, &mut sink).unwrap(), 0x00);
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIMECMP + 1, AccessSize::Byte, &mut sink)
+                .unwrap(),
+            0x00
+        );
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIMECMP + 2, AccessSize::Byte, &mut sink)
+                .unwrap(),
+            0xFF
+        );
+        assert_eq!(
+            clint
+                .read(BASE + REG_MTIMECMP + 3, AccessSize::Byte, &mut sink)
+                .unwrap(),
+            0x00
+        );
     }
 
     #[test]
     fn unknown_register_reads_zero() {
         let mut clint = Clint::new(BASE);
         let mut sink = rremu_bus::NullSink;
-        assert_eq!(clint.read(BASE + 0x1000, AccessSize::Word, &mut sink).unwrap(), 0);
-        clint.write(BASE + 0x1000, AccessSize::Word, 0xDEAD, &mut sink).unwrap();
-        assert_eq!(clint.read(BASE + 0x1000, AccessSize::Word, &mut sink).unwrap(), 0);
+        assert_eq!(
+            clint
+                .read(BASE + 0x1000, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0
+        );
+        clint
+            .write(BASE + 0x1000, AccessSize::Word, 0xDEAD, &mut sink)
+            .unwrap();
+        assert_eq!(
+            clint
+                .read(BASE + 0x1000, AccessSize::Word, &mut sink)
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -273,7 +359,15 @@ mod tests {
         let mut clint = Clint::new(BASE);
         clint.mtimecmp = 0xBEEF;
         clint.tick(42);
-        assert_eq!(clint.peek_read(BASE + REG_MTIMECMP, AccessSize::Word).unwrap(), 0xBEEF);
-        assert_eq!(clint.peek_read(BASE + REG_MTIME, AccessSize::Word).unwrap(), 42);
+        assert_eq!(
+            clint
+                .peek_read(BASE + REG_MTIMECMP, AccessSize::Word)
+                .unwrap(),
+            0xBEEF
+        );
+        assert_eq!(
+            clint.peek_read(BASE + REG_MTIME, AccessSize::Word).unwrap(),
+            42
+        );
     }
 }

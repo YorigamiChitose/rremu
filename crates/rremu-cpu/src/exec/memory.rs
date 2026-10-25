@@ -3,8 +3,8 @@
 use rremu_bus::{AccessSize, Bus, EventSink};
 use rremu_isa::cause;
 
-use crate::AccessType;
 use super::{Cpu, TrapErr};
+use crate::AccessType;
 
 impl Cpu {
     #[inline]
@@ -17,7 +17,10 @@ impl Cpu {
     ) -> Result<u32, TrapErr> {
         let pa = self.translate(bus, sink, addr, AccessType::Load)?;
         if !self.pmp_check(pa, AccessType::Load) {
-            return Err(TrapErr { cause: cause::LOAD_ACCESS_FAULT, mtval: addr });
+            return Err(TrapErr {
+                cause: cause::LOAD_ACCESS_FAULT,
+                mtval: addr,
+            });
         }
         bus.data_read(pa, size, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::LOAD_MISALIGNED, cause::LOAD_ACCESS_FAULT),
@@ -37,7 +40,10 @@ impl Cpu {
         self.reservation = None; // 任何 store 都使 lr.w 保留失效
         let pa = self.translate(bus, sink, addr, AccessType::Store)?;
         if !self.pmp_check(pa, AccessType::Store) {
-            return Err(TrapErr { cause: cause::STORE_ACCESS_FAULT, mtval: addr });
+            return Err(TrapErr {
+                cause: cause::STORE_ACCESS_FAULT,
+                mtval: addr,
+            });
         }
         bus.data_write(pa, size, data, sink).map_err(|e| TrapErr {
             cause: Self::cause_of(&e, cause::STORE_MISALIGNED, cause::STORE_ACCESS_FAULT),
@@ -65,4 +71,5 @@ impl Cpu {
             self.x[usize::from(rd)] = old;
         }
         Ok(())
-    }}
+    }
+}

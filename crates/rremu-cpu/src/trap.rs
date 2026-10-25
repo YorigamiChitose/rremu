@@ -1,7 +1,7 @@
 //! Trap 入口、委派与 TrapErr。
 
 use rremu_bus::{EmuEvent, EventSink};
-use rremu_isa::{csr, Priv};
+use rremu_isa::{Priv, csr};
 
 use super::{Cpu, CpuError, StepOutcome};
 
@@ -14,7 +14,12 @@ pub(crate) struct TrapErr {
 
 impl Cpu {
     /// 陷入流程：mepc ← pc；mcause ← cause；mtval ← mtval；priv ← M；pc ← mtvec（仅 DIRECT）。
-    pub(crate) fn trap<E: EventSink>(&mut self, sink: &mut E, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
+    pub(crate) fn trap<E: EventSink>(
+        &mut self,
+        sink: &mut E,
+        cause: u32,
+        mtval: u32,
+    ) -> Result<StepOutcome, CpuError> {
         sink.emit(EmuEvent::Trap { cause, pc: self.pc });
 
         // 陷阱委派：非 M 特权下，已委派（medeleg/mideleg）的异常/中断交 S-mode
@@ -53,7 +58,11 @@ impl Cpu {
     }
 
     /// 陷入到 S-mode：sepc/scause/stval ← 当前；sstatus.SPP/SPIE/SIE；pc ← stvec（仅 DIRECT）。
-    pub(crate) fn trap_supervisor(&mut self, cause: u32, mtval: u32) -> Result<StepOutcome, CpuError> {
+    pub(crate) fn trap_supervisor(
+        &mut self,
+        cause: u32,
+        mtval: u32,
+    ) -> Result<StepOutcome, CpuError> {
         self.csr.sepc = self.pc;
         self.csr.scause = cause;
         self.csr.stval = mtval;
@@ -70,5 +79,4 @@ impl Cpu {
         self.pc = self.csr.stvec & !1;
         Ok(StepOutcome::Trapped { cause })
     }
-
 }

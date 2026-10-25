@@ -70,4 +70,3 @@ impl fmt::Display for MemKind {
         }
     }
 }
-

@@ -23,11 +23,27 @@ pub trait Bus {
     /// 拆分策略随 XLEN 留在 CPU 侧。
     ///
     /// 对齐违例返 `BusError::Misaligned { addr, size }`，CPU 映射为相应 trap。
-    fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    fn inst_read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError>;
     /// 数据读（事件 kind = `MemKind::DataRead`）。
-    fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError>;
+    fn data_read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError>;
     /// 数据写（事件 kind = `MemKind::DataWrite`）。
-    fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError>;
+    fn data_write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), BusError>;
     /// 无副作用、无事件读（调试 peek）。
     fn peek(&mut self, addr: u32, size: AccessSize) -> Result<u32, BusError>;
     /// 批量写入（镜像加载，无事件）。
@@ -60,16 +76,29 @@ pub struct BusRouter {
 
 impl BusRouter {
     pub fn new() -> Self {
-        Self { regions: Vec::new(), cycle: 0 }
+        Self {
+            regions: Vec::new(),
+            cycle: 0,
+        }
     }
 
     /// 注册设备区间（start..end，end 独占）。重叠返回 `BusError::Overlap`。
     pub fn map(&mut self, range: Range<u32>, device: Box<dyn BusDevice>) -> Result<(), BusError> {
         if range.start >= range.end {
-            return Err(BusError::Overlap { start: range.start, end: range.end });
+            return Err(BusError::Overlap {
+                start: range.start,
+                end: range.end,
+            });
         }
-        if self.regions.iter().any(|r| range.start < r.range.end && r.range.start < range.end) {
-            return Err(BusError::Overlap { start: range.start, end: range.end });
+        if self
+            .regions
+            .iter()
+            .any(|r| range.start < r.range.end && r.range.start < range.end)
+        {
+            return Err(BusError::Overlap {
+                start: range.start,
+                end: range.end,
+            });
         }
         self.regions.push(Region { range, device });
         Ok(())
@@ -102,7 +131,9 @@ impl BusRouter {
         let cycle = self.cycle;
         let idx = self.region_index(addr)?;
         // 访问不得跨出设备区间末尾（否则设备内部可能越界 panic）
-        let access_end = addr.checked_add(size.bytes()).ok_or(BusError::Unmapped { addr })?;
+        let access_end = addr
+            .checked_add(size.bytes())
+            .ok_or(BusError::Unmapped { addr })?;
         if access_end > self.regions[idx].range.end {
             return Err(BusError::Unmapped { addr: access_end });
         }
@@ -132,7 +163,9 @@ impl BusRouter {
         let cycle = self.cycle;
         let idx = self.region_index(addr)?;
         // 访问不得跨出设备区间末尾（否则设备内部可能越界 panic）
-        let access_end = addr.checked_add(size.bytes()).ok_or(BusError::Unmapped { addr })?;
+        let access_end = addr
+            .checked_add(size.bytes())
+            .ok_or(BusError::Unmapped { addr })?;
         if access_end > self.regions[idx].range.end {
             return Err(BusError::Unmapped { addr: access_end });
         }
@@ -157,16 +190,32 @@ impl Default for BusRouter {
 }
 
 impl Bus for BusRouter {
-    fn inst_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn inst_read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         // 单次对齐物理读原语：跨 XLEN 拆分由 CPU(IFU) 决定，总线不感知指令长度。
         self.route_read(addr, size, MemKind::Inst, sink)
     }
 
-    fn data_read(&mut self, addr: u32, size: AccessSize, sink: &mut dyn EventSink) -> Result<u32, BusError> {
+    fn data_read(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        sink: &mut dyn EventSink,
+    ) -> Result<u32, BusError> {
         self.route_read(addr, size, MemKind::DataRead, sink)
     }
 
-    fn data_write(&mut self, addr: u32, size: AccessSize, data: u32, sink: &mut dyn EventSink) -> Result<(), BusError> {
+    fn data_write(
+        &mut self,
+        addr: u32,
+        size: AccessSize,
+        data: u32,
+        sink: &mut dyn EventSink,
+    ) -> Result<(), BusError> {
         self.route_write(addr, size, data, MemKind::DataWrite, sink)
     }
 
@@ -183,7 +232,9 @@ impl Bus for BusRouter {
         let off = addr - region.range.start;
         let avail = region.range.end - region.range.start - off;
         if u64::from(data.len() as u32) > u64::from(avail) {
-            return Err(BusError::Unmapped { addr: region.range.end });
+            return Err(BusError::Unmapped {
+                addr: region.range.end,
+            });
         }
         region.device.write_bytes(addr, data)
     }
@@ -202,7 +253,11 @@ impl Bus for BusRouter {
 
     fn service_interrupts(&mut self) -> Vec<u32> {
         // 1) 收集各设备断言的 IRQ 源（level）；喂给中断控制器（PLIC）
-        let asserted: Vec<u32> = self.regions.iter().filter_map(|r| r.device.irq_line()).collect();
+        let asserted: Vec<u32> = self
+            .regions
+            .iter()
+            .filter_map(|r| r.device.irq_line())
+            .collect();
         if !asserted.is_empty() {
             for r in &mut self.regions {
                 for &src in &asserted {
@@ -218,4 +273,3 @@ impl Bus for BusRouter {
         causes
     }
 }
-
