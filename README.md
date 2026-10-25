@@ -9,17 +9,20 @@
 - [rremu-am](https://github.com/YorigamiChitose/rremu-am) — RISC-V 抽象机器层 / HAL
 - [rremu-test](https://github.com/YorigamiChitose/rremu-test) — 端到端固件级测试工程
 
-一个 **RV32IMAC_Zicsr（M/S/U 三级特权）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
+一个 **RV32IMAFDC_Zicsr（RV32GC + C，M/S/U 三级特权）单周期 RISC-V 模拟器与调试器**，用 Rust 写成。
 提供 GDB 风格 CLI 调试器与 ratatui TUI 两种前端，设备经 trait 可插拔。
 
 ## 特性
 
-- **ISA**：RV32I + M（乘除）+ A（原子 lr/sc + AMO）+ C（压缩指令）+ Zicsr；
-  **M/S/U 三级特权**，`mret`/`sret`、`sfence.vma`/`wfi`（按 NOP）；
+- **ISA**：RV32I + M（乘除）+ A（原子 lr/sc + AMO）+ F/D（单/双精度浮点）
+  + C（压缩指令）+ Zicsr/Zifencei；**M/S/U 三级特权**，`misa.F/D`、
+  `mret`/`sret`、`sfence.vma`/`wfi`（按 NOP）；
   `mstatus`（MPP/MPIE/MIE、SPP/SPIE/SIE）、`mepc/mcause/mtval`、`mie/mip`、
   `medeleg/mideleg` 陷阱委派、**PMP**（`pmpcfg/pmpaddr`，S/U 强制访问控制）、
   S-mode CSR（sstatus/sie/sip/stvec/sscratch/sepc/scause/stval/satp）；
   `fence.i` 按无缓存实现为 NOP
+- **浮点**：32×64-bit FPR（`.s` 使用 NaN boxing）、`fcsr/fflags/frm`、
+  `mstatus.FS/SD`；FP load/store、算术、FMA、min/max、比较/分类、`fcvt.*`
 - **执行模型**：单周期（一条指令 = 一个 cycle）
 - **前端**
   - CLI：rustyline 交互式 REPL，加载 ELF 后暂停在入口，`c` 开始运行
@@ -38,14 +41,14 @@
 
 已完成：
 
-- RV32IMAC + Zicsr，M/S/U 三级特权
+- RV32IMAFDC + Zicsr，M/S/U 三级特权
 - Sv32 页表、S 级中断、PMP 强制访问控制
 - OpenSBI v1.9 启动
 - Linux 6.12 RV32 + 内置 initramfs 启动
 - `/init` 用户态、UART 输出、syscon poweroff
-- rremu-test 端到端回归 54 个用例
+- rremu-test 端到端回归 72 个用例（含 15 个 FP）
 
-当前没有进行中的阶段规划或路线图。
+RV32GC（F/D）支持已落地，当前进行最终验收与文档收尾。
 
 ## 已知限制
 
@@ -68,6 +71,7 @@ bin (rremu)            clap 解析、配置解析、设备映射、前端选择�
 rremu-config           统一配置：默认值 + Overrides + resolve（唯一真相源，叶 crate）
 rremu-machine          Machine/快照/断点/监视点/事件环/dump
 ├── rremu-cpu          CPU 状态与执行循环、trap
+│   └── rremu-fp       IEEE-754 softfloat（零依赖、no_std）
 ├── rremu-devices      ram / uart / clint / framebuffer
 └── rremu-loader       ELF32 解析（零 IO）
 rremu-bus              BusDevice/Bus 路由、EmuEvent/EventSink
