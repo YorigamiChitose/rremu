@@ -153,6 +153,10 @@ pub fn decode32(word: Word, pc: Address) -> Result<Instruction, DecodeError> {
                 (0b0001001, rm) if valid_fp_rm(rm) => Ok(Instruction::FmulD { rd, rs1, rs2, rm }),
                 (0b0001101, rm) if valid_fp_rm(rm) => Ok(Instruction::FdivD { rd, rs1, rs2, rm }),
                 (0b0101101, rm) if rs2 == 0 && valid_fp_rm(rm) => Ok(Instruction::FsqrtD { rd, rs1, rm }),
+                (0b0010100, 0b000) => Ok(Instruction::FminS { rd, rs1, rs2 }),
+                (0b0010100, 0b001) => Ok(Instruction::FmaxS { rd, rs1, rs2 }),
+                (0b0010101, 0b000) => Ok(Instruction::FminD { rd, rs1, rs2 }),
+                (0b0010101, 0b001) => Ok(Instruction::FmaxD { rd, rs1, rs2 }),
                 (0b0010000, 0b000) => Ok(Instruction::FsgnjS { rd, rs1, rs2 }),
                 (0b0010000, 0b001) => Ok(Instruction::FsgnjnS { rd, rs1, rs2 }),
                 (0b0010000, 0b010) => Ok(Instruction::FsgnjxS { rd, rs1, rs2 }),
@@ -1092,6 +1096,33 @@ mod tests {
             decode32(fp_enc(3, 0, 1, 2, 0b0000010), PC),
             Err(DecodeError::Illegal { .. })
         ));
+    }
+
+    #[test]
+    fn decode_fp_minmax() {
+        assert_eq!(
+            decode32(fp_enc(3, 0, 1, 2, 0b0010100), PC),
+            Ok(Instruction::FminS { rd: 3, rs1: 1, rs2: 2 })
+        );
+        assert_eq!(
+            decode32(fp_enc(4, 1, 2, 3, 0b0010100), PC),
+            Ok(Instruction::FmaxS { rd: 4, rs1: 2, rs2: 3 })
+        );
+        assert_eq!(
+            decode32(fp_enc(5, 0, 3, 4, 0b0010101), PC),
+            Ok(Instruction::FminD { rd: 5, rs1: 3, rs2: 4 })
+        );
+        assert_eq!(
+            decode32(fp_enc(6, 1, 4, 5, 0b0010101), PC),
+            Ok(Instruction::FmaxD { rd: 6, rs1: 4, rs2: 5 })
+        );
+
+        for funct3 in [2, 3, 4, 7] {
+            assert!(matches!(
+                decode32(fp_enc(3, funct3, 1, 2, 0b0010100), PC),
+                Err(DecodeError::Illegal { .. })
+            ));
+        }
     }
 
     #[test]

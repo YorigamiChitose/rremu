@@ -106,6 +106,10 @@ pub enum Instruction {
     FmulD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
     FdivD { rd: u8, rs1: u8, rs2: u8, rm: u8 },
     FsqrtD { rd: u8, rs1: u8, rm: u8 },
+    FminS { rd: u8, rs1: u8, rs2: u8 },
+    FmaxS { rd: u8, rs1: u8, rs2: u8 },
+    FminD { rd: u8, rs1: u8, rs2: u8 },
+    FmaxD { rd: u8, rs1: u8, rs2: u8 },
     // ---- misc / system ----
     Fence,
     FenceI,
@@ -390,6 +394,18 @@ impl core::fmt::Display for Instruction {
             }
             Instruction::FsqrtD { rd, rs1, rm } => {
                 write!(f, "fsqrt.d {}, {}, {}", freg_name(rd), freg_name(rs1), fp_rm_name(rm))
+            }
+            Instruction::FminS { rd, rs1, rs2 } => {
+                write!(f, "fmin.s {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FmaxS { rd, rs1, rs2 } => {
+                write!(f, "fmax.s {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FminD { rd, rs1, rs2 } => {
+                write!(f, "fmin.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
+            }
+            Instruction::FmaxD { rd, rs1, rs2 } => {
+                write!(f, "fmax.d {}, {}, {}", freg_name(rd), freg_name(rs1), freg_name(rs2))
             }
             Instruction::Fence => write!(f, "fence"),
             Instruction::FenceI => write!(f, "fence.i"),

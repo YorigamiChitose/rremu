@@ -69,6 +69,18 @@ mod tests {
     }
 
     #[test]
+    fn display_fp_minmax() {
+        assert_eq!(
+            Instruction::FminS { rd: 10, rs1: 11, rs2: 12 }.to_string(),
+            "fmin.s fa0, fa1, fa2"
+        );
+        assert_eq!(
+            Instruction::FmaxD { rd: 10, rs1: 11, rs2: 12 }.to_string(),
+            "fmax.d fa0, fa1, fa2"
+        );
+    }
+
+    #[test]
     fn display_system() {
         assert_eq!(Instruction::Ecall.to_string(), "ecall");
         assert_eq!(Instruction::Ebreak.to_string(), "ebreak");

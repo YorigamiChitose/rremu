@@ -414,6 +414,83 @@ fn fp_dynamic_rounding_mode_and_reserved_modes() {
 }
 
 #[test]
+fn fp_minmax_s_zero_nan_and_flags() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_s(1, Fp32::from_bits(0x3f80_0000)); // 1.0
+    h.cpu.write_fpr_s(2, Fp32::from_bits(0x4000_0000)); // 2.0
+    h.cpu.write_fpr_s(3, Fp32::from_bits(0x8000_0000)); // -0
+    h.cpu.write_fpr_s(4, Fp32::from_bits(0x0000_0000)); // +0
+    h.cpu.write_fpr_s(5, Fp32::from_bits(0x7fc0_0000)); // qNaN
+    h.cpu.write_fpr_s(6, Fp32::from_bits(0x7f80_0001)); // sNaN
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 2, 0b0010100), // fmin.s 1,2
+            fp_r_enc(11, 1, 1, 2, 0b0010100), // fmax.s 1,2
+            fp_r_enc(12, 0, 3, 4, 0b0010100), // fmin.s -0,+0
+            fp_r_enc(13, 1, 3, 4, 0b0010100), // fmax.s -0,+0
+            fp_r_enc(14, 0, 5, 1, 0b0010100), // fmin.s qNaN,1
+            fp_r_enc(15, 0, 5, 5, 0b0010100), // fmin.s qNaN,qNaN
+            fp_r_enc(16, 1, 6, 1, 0b0010100), // fmax.s sNaN,1
+        ],
+    );
+
+    h.run(6);
+    assert_eq!(h.cpu.fpr_s(10).to_bits(), 0x3f80_0000);
+    assert_eq!(h.cpu.fpr_s(11).to_bits(), 0x4000_0000);
+    assert_eq!(h.cpu.fpr_s(12).to_bits(), 0x8000_0000);
+    assert_eq!(h.cpu.fpr_s(13).to_bits(), 0x0000_0000);
+    assert_eq!(h.cpu.fpr_s(14).to_bits(), 0x3f80_0000);
+    assert_eq!(h.cpu.fpr_s(15).to_bits(), 0x7fc0_0000);
+    assert_eq!(fflags(&h), 0);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+
+    h.step();
+    assert_eq!(h.cpu.fpr_s(16).to_bits(), 0x3f80_0000);
+    assert_eq!(fflags(&h), 0x10);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+}
+
+#[test]
+fn fp_minmax_d_zero_nan_and_flags() {
+    let mut h = Harness::new();
+    h.cpu.write_fpr_d(1, Fp64::from_bits(0x3ff0_0000_0000_0000)); // 1.0
+    h.cpu.write_fpr_d(2, Fp64::from_bits(0x4000_0000_0000_0000)); // 2.0
+    h.cpu.write_fpr_d(3, Fp64::from_bits(0x8000_0000_0000_0000)); // -0
+    h.cpu.write_fpr_d(4, Fp64::from_bits(0x0000_0000_0000_0000)); // +0
+    h.cpu.write_fpr_d(5, Fp64::from_bits(0x7ff8_0000_0000_0000)); // qNaN
+    h.cpu.write_fpr_d(6, Fp64::from_bits(0x7ff0_0000_0000_0001)); // sNaN
+    h.cpu.csr.fcsr = 0;
+    set_fs(&mut h, csr::MSTATUS_FS_CLEAN);
+    h.load(
+        BASE,
+        &[
+            fp_r_enc(10, 0, 1, 2, 0b0010101), // fmin.d 1,2
+            fp_r_enc(11, 1, 1, 2, 0b0010101), // fmax.d 1,2
+            fp_r_enc(12, 0, 3, 4, 0b0010101), // fmin.d -0,+0
+            fp_r_enc(13, 1, 3, 4, 0b0010101), // fmax.d -0,+0
+            fp_r_enc(14, 0, 5, 1, 0b0010101), // fmin.d qNaN,1
+            fp_r_enc(15, 1, 6, 1, 0b0010101), // fmax.d sNaN,1
+        ],
+    );
+
+    h.run(5);
+    assert_eq!(h.cpu.fpr_d(10).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(11).to_bits(), 0x4000_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(12).to_bits(), 0x8000_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(13).to_bits(), 0x0000_0000_0000_0000);
+    assert_eq!(h.cpu.fpr_d(14).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(fflags(&h), 0);
+
+    h.step();
+    assert_eq!(h.cpu.fpr_d(15).to_bits(), 0x3ff0_0000_0000_0000);
+    assert_eq!(fflags(&h), 0x10);
+    assert_eq!(fs(&h), csr::MSTATUS_FS_DIRTY);
+}
+
+#[test]
 fn fp_instructions_are_illegal_when_fs_off() {
     let instructions = [
         fp_load_enc(0b010, 1, 0, 0),
@@ -427,6 +504,8 @@ fn fp_instructions_are_illegal_when_fs_off() {
         fp_r_enc(1, 0b000, 2, 3, 0b0000000),
         fp_r_enc(1, 0b000, 2, 3, 0b0001100),
         fp_r_enc(1, 0b000, 2, 0, 0b0101100),
+        fp_r_enc(1, 0b000, 2, 3, 0b0010100),
+        fp_r_enc(1, 0b001, 2, 3, 0b0010101),
     ];
     for raw in instructions {
         let mut h = Harness::new();

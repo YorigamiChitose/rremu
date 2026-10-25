@@ -4,8 +4,8 @@ use core::cmp::Ordering;
 
 use rremu_bus::{AccessSize, Bus, EventSink};
 use rremu_fp::{
-    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, mul32, mul64, sqrt32, sqrt64,
-    sub32, sub64,
+    Flags, Fp32, Fp64, RoundingMode, add32, add64, div32, div64, max32, max64, min32, min64,
+    mul32, mul64, sqrt32, sqrt64, sub32, sub64,
 };
 use rremu_isa::{Instruction, cause, csr};
 
@@ -194,6 +194,26 @@ impl Cpu {
                 self.raise_fp_flags(flags);
                 self.write_fpr_d(rd, value);
             }
+            Instruction::FminS { rd, rs1, rs2 } => {
+                let (value, flags) = min32(self.fpr_s(rs1), self.fpr_s(rs2));
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FmaxS { rd, rs1, rs2 } => {
+                let (value, flags) = max32(self.fpr_s(rs1), self.fpr_s(rs2));
+                self.raise_fp_flags(flags);
+                self.write_fpr_s(rd, value);
+            }
+            Instruction::FminD { rd, rs1, rs2 } => {
+                let (value, flags) = min64(self.fpr_d(rs1), self.fpr_d(rs2));
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
+            Instruction::FmaxD { rd, rs1, rs2 } => {
+                let (value, flags) = max64(self.fpr_d(rs1), self.fpr_d(rs2));
+                self.raise_fp_flags(flags);
+                self.write_fpr_d(rd, value);
+            }
             Instruction::CFlw { rd, rs1, imm } => {
                 let addr = x(self, rs1).wrapping_add(imm as u32);
                 let bits = self.load(bus, sink, addr, AccessSize::Word)?;
@@ -356,6 +376,10 @@ fn is_fp_instruction(instr: Instruction) -> bool {
             | Instruction::FmulD { .. }
             | Instruction::FdivD { .. }
             | Instruction::FsqrtD { .. }
+            | Instruction::FminS { .. }
+            | Instruction::FmaxS { .. }
+            | Instruction::FminD { .. }
+            | Instruction::FmaxD { .. }
             | Instruction::CFlw { .. }
             | Instruction::CFsw { .. }
             | Instruction::CFld { .. }
